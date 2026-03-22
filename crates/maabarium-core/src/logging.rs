@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 pub fn default_log_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/maabarium.log")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/maabarium.log")
 }
 
 pub fn read_recent_log_lines(max_lines: usize) -> std::io::Result<Vec<String>> {

@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::error::LLMError;
-use crate::llm::{LLMProvider, CompletionRequest};
-use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
 use crate::blueprint::{AgentDef, MetricDef};
+use crate::error::LLMError;
+use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
+use crate::llm::{CompletionRequest, LLMProvider};
 
 const MAX_CONTEXT_FILES: usize = 3;
 const MAX_FILE_CHARS: usize = 4_000;
@@ -80,13 +80,7 @@ impl Agent {
         } else {
             file_contexts
                 .iter()
-                .map(|file| {
-                    format!(
-                        "<file path=\"{}\">\n{}\n</file>",
-                        file.path,
-                        file.content,
-                    )
-                })
+                .map(|file| format!("<file path=\"{}\">\n{}\n</file>", file.path, file.content,))
                 .collect::<Vec<_>>()
                 .join("\n\n")
         };
@@ -148,7 +142,10 @@ pub struct Council {
 
 impl Council {
     pub fn new(agents: Vec<Agent>, debate_rounds: u32) -> Self {
-        Self { agents, debate_rounds }
+        Self {
+            agents,
+            debate_rounds,
+        }
     }
 
     pub async fn run(
@@ -277,12 +274,13 @@ fn parse_proposal_payload(
             ))
         })?;
         let original_content = file_lookup.get(patch.path.as_str()).copied();
-        let result = apply_unified_diff(original_content, diff, patch.operation).map_err(|error| {
-            LLMError::InvalidResponse(format!(
-                "Unified diff validation failed for '{}': {error}",
-                patch.path
-            ))
-        })?;
+        let result =
+            apply_unified_diff(original_content, diff, patch.operation).map_err(|error| {
+                LLMError::InvalidResponse(format!(
+                    "Unified diff validation failed for '{}': {error}",
+                    patch.path
+                ))
+            })?;
         file_patches.push(FilePatch {
             path: patch.path.clone(),
             operation: patch.operation,
@@ -342,7 +340,10 @@ fn apply_unified_diff(
             if hunk_line.starts_with("@@") {
                 break;
             }
-            if hunk_line.starts_with("--- ") || hunk_line.starts_with("+++ ") || hunk_line.starts_with("diff --git") {
+            if hunk_line.starts_with("--- ")
+                || hunk_line.starts_with("+++ ")
+                || hunk_line.starts_with("diff --git")
+            {
                 break;
             }
             if hunk_line == "\\ No newline at end of file" {
@@ -370,9 +371,9 @@ fn apply_unified_diff(
             }
             match prefix {
                 " " => {
-                    let current = original_lines.get(source_index).ok_or_else(|| {
-                        "context line referenced beyond end of file".to_owned()
-                    })?;
+                    let current = original_lines
+                        .get(source_index)
+                        .ok_or_else(|| "context line referenced beyond end of file".to_owned())?;
                     if current != text {
                         return Err(format!(
                             "context mismatch: expected '{}', found '{}'",
@@ -385,9 +386,9 @@ fn apply_unified_diff(
                     consumed_new += 1;
                 }
                 "-" => {
-                    let current = original_lines.get(source_index).ok_or_else(|| {
-                        "removal line referenced beyond end of file".to_owned()
-                    })?;
+                    let current = original_lines
+                        .get(source_index)
+                        .ok_or_else(|| "removal line referenced beyond end of file".to_owned())?;
                     if current != text {
                         return Err(format!(
                             "removal mismatch: expected '{}', found '{}'",
@@ -511,8 +512,12 @@ fn parse_hunk_header(header: &str) -> Result<(usize, usize, usize), String> {
         .map(str::trim)
         .ok_or_else(|| format!("invalid hunk header '{}'", header))?;
     let mut parts = trimmed.split_whitespace();
-    let old_range = parts.next().ok_or_else(|| format!("missing old range in '{}'", header))?;
-    let new_range = parts.next().ok_or_else(|| format!("missing new range in '{}'", header))?;
+    let old_range = parts
+        .next()
+        .ok_or_else(|| format!("missing old range in '{}'", header))?;
+    let new_range = parts
+        .next()
+        .ok_or_else(|| format!("missing new range in '{}'", header))?;
     let (old_start, old_count) = parse_range(old_range, '-')?;
     let (_, new_count) = parse_range(new_range, '+')?;
     Ok((old_start, old_count, new_count))
@@ -524,12 +529,18 @@ fn parse_range(range: &str, prefix: char) -> Result<(usize, usize), String> {
         .ok_or_else(|| format!("range '{}' is missing prefix '{}'", range, prefix))?;
     if let Some((start, count)) = value.split_once(',') {
         Ok((
-            start.parse::<usize>().map_err(|error| format!("invalid start '{}': {error}", start))?,
-            count.parse::<usize>().map_err(|error| format!("invalid count '{}': {error}", count))?,
+            start
+                .parse::<usize>()
+                .map_err(|error| format!("invalid start '{}': {error}", start))?,
+            count
+                .parse::<usize>()
+                .map_err(|error| format!("invalid count '{}': {error}", count))?,
         ))
     } else {
         Ok((
-            value.parse::<usize>().map_err(|error| format!("invalid start '{}': {error}", value))?,
+            value
+                .parse::<usize>()
+                .map_err(|error| format!("invalid start '{}': {error}", value))?,
             1,
         ))
     }
@@ -564,7 +575,13 @@ fn collect_file_contexts(
 ) -> Result<Vec<FileContext>, LLMError> {
     let repo_root = resolve_repo_root(repo_path)?;
     let mut candidates = Vec::new();
-    collect_matching_files(&repo_root, &repo_root, target_files, language, &mut candidates)?;
+    collect_matching_files(
+        &repo_root,
+        &repo_root,
+        target_files,
+        language,
+        &mut candidates,
+    )?;
     candidates.sort();
     candidates.truncate(MAX_CONTEXT_FILES);
 
@@ -576,8 +593,9 @@ fn collect_file_contexts(
             .to_string_lossy()
             .replace('\\', "/");
 
-        let content = fs::read_to_string(&path)
-            .map_err(|error| LLMError::Provider(format!("Failed to read '{}': {error}", relative)))?;
+        let content = fs::read_to_string(&path).map_err(|error| {
+            LLMError::Provider(format!("Failed to read '{}': {error}", relative))
+        })?;
         let truncated = if content.chars().count() > MAX_FILE_CHARS {
             content.chars().take(MAX_FILE_CHARS).collect::<String>()
         } else {
@@ -603,7 +621,10 @@ fn resolve_repo_root(repo_path: &str) -> Result<PathBuf, LLMError> {
     };
 
     resolved.canonicalize().map_err(|error| {
-        LLMError::Provider(format!("Failed to resolve repository path '{}': {error}", repo_path))
+        LLMError::Provider(format!(
+            "Failed to resolve repository path '{}': {error}",
+            repo_path
+        ))
     })
 }
 
@@ -614,10 +635,14 @@ fn collect_matching_files(
     language: &str,
     output: &mut Vec<PathBuf>,
 ) -> Result<(), LLMError> {
-    for entry in fs::read_dir(current_dir)
-        .map_err(|error| LLMError::Provider(format!("Failed to read '{}': {error}", current_dir.display())))?
-    {
-        let entry = entry.map_err(|error| LLMError::Provider(format!("Failed to inspect dir entry: {error}")))?;
+    for entry in fs::read_dir(current_dir).map_err(|error| {
+        LLMError::Provider(format!(
+            "Failed to read '{}': {error}",
+            current_dir.display()
+        ))
+    })? {
+        let entry = entry
+            .map_err(|error| LLMError::Provider(format!("Failed to inspect dir entry: {error}")))?;
         let path = entry.path();
         let file_type = entry
             .file_type()
@@ -713,7 +738,8 @@ mod tests {
 
     #[tokio::test]
     async fn parses_structured_llm_patch_payload() {
-        let repo_root = std::env::temp_dir().join(format!("maabarium-agent-{}", uuid::Uuid::new_v4()));
+        let repo_root =
+            std::env::temp_dir().join(format!("maabarium-agent-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(repo_root.join("src")).expect("temp repo should be created");
         fs::write(repo_root.join("src/lib.rs"), "pub fn baseline() {}\n")
             .expect("source file should be written");
@@ -746,12 +772,17 @@ mod tests {
 
         assert_eq!(proposal.file_patches.len(), 1);
         assert_eq!(proposal.file_patches[0].path, "src/lib.rs");
-        assert_eq!(proposal.file_patches[0].operation, FilePatchOperation::Modify);
-        assert!(proposal.file_patches[0]
-            .content
-            .as_deref()
-            .expect("content should exist")
-            .contains("maabarium_improvement"));
+        assert_eq!(
+            proposal.file_patches[0].operation,
+            FilePatchOperation::Modify
+        );
+        assert!(
+            proposal.file_patches[0]
+                .content
+                .as_deref()
+                .expect("content should exist")
+                .contains("maabarium_improvement")
+        );
 
         let _ = fs::remove_dir_all(repo_root);
     }
@@ -801,7 +832,10 @@ mod tests {
         )
         .expect("multi-hunk diff should apply");
 
-        assert_eq!(updated.content.as_deref(), Some("line 1\nline two\nline three\nline 4"));
+        assert_eq!(
+            updated.content.as_deref(),
+            Some("line 1\nline two\nline three\nline 4")
+        );
         assert!(!updated.had_trailing_newline);
     }
 

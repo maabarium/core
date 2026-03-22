@@ -1,11 +1,11 @@
+use super::{Evaluator, ExperimentResult, MetricScore};
+use crate::blueprint::MetricDef;
+use crate::error::EvalError;
+use crate::git_manager::Proposal;
+use crate::llm::{CompletionRequest, LLMProvider};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::instrument;
-use crate::error::EvalError;
-use crate::llm::{LLMProvider, CompletionRequest};
-use crate::blueprint::MetricDef;
-use crate::git_manager::Proposal;
-use super::{Evaluator, ExperimentResult, MetricScore};
 
 pub struct PromptEvaluator {
     llm: Arc<dyn LLMProvider>,
@@ -25,7 +25,11 @@ impl Evaluator for PromptEvaluator {
         skip(self, proposal),
         fields(iteration = iteration, metrics = self.metrics.len())
     )]
-    async fn evaluate(&self, proposal: &Proposal, iteration: u64) -> Result<ExperimentResult, EvalError> {
+    async fn evaluate(
+        &self,
+        proposal: &Proposal,
+        iteration: u64,
+    ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let mut scores = Vec::new();
         for metric in &self.metrics {
@@ -66,6 +70,7 @@ impl Evaluator for PromptEvaluator {
             scores,
             weighted_total,
             duration_ms: start.elapsed().as_millis() as u64,
+            research: None,
         })
     }
 }

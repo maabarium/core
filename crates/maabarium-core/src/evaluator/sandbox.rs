@@ -2,9 +2,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use tracing::instrument;
 use uuid::Uuid;
 use wasmtime::{Engine, InstancePre, Linker, Module, Store};
-use tracing::instrument;
 
 use crate::error::EvalError;
 use crate::git_manager::{FilePatchOperation, Proposal};
@@ -42,7 +42,10 @@ fn cached_policy_runtime() -> Result<&'static WasmtimePolicyRuntime, EvalError> 
         let instance_pre = linker
             .instantiate_pre(&module)
             .map_err(|error| format!("failed to pre-instantiate wasmtime policy: {error}"))?;
-        Ok(WasmtimePolicyRuntime { engine, instance_pre })
+        Ok(WasmtimePolicyRuntime {
+            engine,
+            instance_pre,
+        })
     }) {
         Ok(runtime) => Ok(runtime),
         Err(error) => Err(EvalError::Sandbox(error.clone())),
@@ -121,18 +124,28 @@ impl SubprocessRunner {
             command.env(key, value);
         }
 
-        let child = command
-            .spawn()
-            .map_err(|error| EvalError::Sandbox(format!("failed to spawn subprocess '{}': {error}", self.program)))?;
+        let child = command.spawn().map_err(|error| {
+            EvalError::Sandbox(format!(
+                "failed to spawn subprocess '{}': {error}",
+                self.program
+            ))
+        })?;
 
         let output = tokio::time::timeout(self.timeout, child.wait_with_output())
             .await
-            .map_err(|_| EvalError::Sandbox(format!(
-                "subprocess '{}' timed out after {}s",
-                self.program,
-                self.timeout.as_secs()
-            )))?
-            .map_err(|error| EvalError::Sandbox(format!("failed to wait on subprocess '{}': {error}", self.program)))?;
+            .map_err(|_| {
+                EvalError::Sandbox(format!(
+                    "subprocess '{}' timed out after {}s",
+                    self.program,
+                    self.timeout.as_secs()
+                ))
+            })?
+            .map_err(|error| {
+                EvalError::Sandbox(format!(
+                    "failed to wait on subprocess '{}': {error}",
+                    self.program
+                ))
+            })?;
 
         Ok(SubprocessRunResult {
             status_code: output.status.code(),
@@ -194,7 +207,9 @@ impl SandboxWorkspace {
                     })?;
                     if let Some(parent) = file_path.parent() {
                         std::fs::create_dir_all(parent).map_err(|error| {
-                            EvalError::Sandbox(format!("failed to create sandbox subdirectory: {error}"))
+                            EvalError::Sandbox(format!(
+                                "failed to create sandbox subdirectory: {error}"
+                            ))
                         })?;
                     }
 
@@ -223,11 +238,17 @@ impl SandboxWorkspace {
     fn validate_with_wasmtime(&self, summary: &SandboxSummary) -> Result<(), EvalError> {
         let runtime = cached_policy_runtime()?;
         let mut store = Store::new(&runtime.engine, ());
-        let instance = runtime.instance_pre.instantiate(&mut store)
-            .map_err(|error| EvalError::Sandbox(format!("failed to instantiate wasmtime policy: {error}")))?;
+        let instance = runtime
+            .instance_pre
+            .instantiate(&mut store)
+            .map_err(|error| {
+                EvalError::Sandbox(format!("failed to instantiate wasmtime policy: {error}"))
+            })?;
         let validate = instance
             .get_typed_func::<(i32, i64, i32, i64), i32>(&mut store, "validate")
-            .map_err(|error| EvalError::Sandbox(format!("failed to bind wasmtime policy: {error}")))?;
+            .map_err(|error| {
+                EvalError::Sandbox(format!("failed to bind wasmtime policy: {error}"))
+            })?;
         let accepted = validate
             .call(
                 &mut store,
@@ -238,7 +259,9 @@ impl SandboxWorkspace {
                     self.policy.max_total_bytes as i64,
                 ),
             )
-            .map_err(|error| EvalError::Sandbox(format!("wasmtime policy execution failed: {error}")))?;
+            .map_err(|error| {
+                EvalError::Sandbox(format!("wasmtime policy execution failed: {error}"))
+            })?;
 
         if accepted == 1 {
             Ok(())
@@ -255,10 +278,12 @@ impl SandboxWorkspace {
 }
 
 fn copy_repo_snapshot(source_root: &Path, destination_root: &Path) -> Result<(), EvalError> {
-    for entry in std::fs::read_dir(source_root)
-        .map_err(|error| EvalError::Sandbox(format!("failed to read repo snapshot root: {error}")))?
-    {
-        let entry = entry.map_err(|error| EvalError::Sandbox(format!("failed to inspect snapshot entry: {error}")))?;
+    for entry in std::fs::read_dir(source_root).map_err(|error| {
+        EvalError::Sandbox(format!("failed to read repo snapshot root: {error}"))
+    })? {
+        let entry = entry.map_err(|error| {
+            EvalError::Sandbox(format!("failed to inspect snapshot entry: {error}"))
+        })?;
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -267,16 +292,21 @@ fn copy_repo_snapshot(source_root: &Path, destination_root: &Path) -> Result<(),
         }
 
         let destination = destination_root.join(entry.file_name());
-        let metadata = entry
-            .metadata()
-            .map_err(|error| EvalError::Sandbox(format!("failed to inspect snapshot metadata: {error}")))?;
+        let metadata = entry.metadata().map_err(|error| {
+            EvalError::Sandbox(format!("failed to inspect snapshot metadata: {error}"))
+        })?;
         if metadata.is_dir() {
-            std::fs::create_dir_all(&destination)
-                .map_err(|error| EvalError::Sandbox(format!("failed to create snapshot directory: {error}")))?;
+            std::fs::create_dir_all(&destination).map_err(|error| {
+                EvalError::Sandbox(format!("failed to create snapshot directory: {error}"))
+            })?;
             copy_repo_snapshot(&path, &destination)?;
         } else if metadata.is_file() {
-            std::fs::copy(&path, &destination)
-                .map_err(|error| EvalError::Sandbox(format!("failed to copy snapshot file '{}': {error}", path.display())))?;
+            std::fs::copy(&path, &destination).map_err(|error| {
+                EvalError::Sandbox(format!(
+                    "failed to copy snapshot file '{}': {error}",
+                    path.display()
+                ))
+            })?;
         }
     }
 
@@ -373,13 +403,18 @@ mod tests {
         let error = workspace
             .materialize(&proposal)
             .expect_err("wasmtime policy should reject oversized content");
-        assert!(error.to_string().contains("wasmtime isolation policy rejected"));
+        assert!(
+            error
+                .to_string()
+                .contains("wasmtime isolation policy rejected")
+        );
     }
 
     #[test]
     fn reuses_cached_wasmtime_runtime() {
         let first = cached_policy_runtime().expect("policy runtime should initialize") as *const _;
-        let second = cached_policy_runtime().expect("policy runtime should reuse cache") as *const _;
+        let second =
+            cached_policy_runtime().expect("policy runtime should reuse cache") as *const _;
 
         assert_eq!(first, second);
     }

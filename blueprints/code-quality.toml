@@ -1,0 +1,42 @@
+[blueprint]
+name = "code-quality"
+version = "1.0"
+description = "Improve correctness, readability, and maintainability across production codebases."
+
+[domain]
+repo_path = "."
+target_files = ["src/**/*", "crates/**/*", "apps/**/*", "packages/**/*"]
+language = "code"
+
+[constraints]
+max_iterations = 80
+timeout_seconds = 240
+require_tests_pass = true
+min_improvement = 0.01
+
+[metrics]
+metrics = [
+    { name = "correctness", weight = 0.4, direction = "maximize", description = "Changes should preserve behavior and reduce defect risk." },
+    { name = "readability", weight = 0.3, direction = "maximize", description = "Code should be easier to review, understand, and maintain." },
+    { name = "maintainability", weight = 0.2, direction = "maximize", description = "Design and structure should reduce future change cost." },
+    { name = "performance", weight = 0.1, direction = "maximize", description = "Performance wins are welcome when they do not compromise clarity or safety." },
+]
+
+[agents]
+council_size = 3
+debate_rounds = 2
+agents = [
+    { name = "architect", role = "Software Architect", system_prompt = "You focus on clean, maintainable, and scalable code design across languages.", model = "llama3" },
+    { name = "reviewer", role = "Code Reviewer", system_prompt = "You focus on correctness, testability, and regression prevention.", model = "llama3" },
+    { name = "implementer", role = "Implementation Engineer", system_prompt = "You turn council direction into concrete, safe, and reviewable code changes.", model = "llama3" },
+]
+
+[models]
+models = [
+    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.4, max_tokens = 2048 },
+]
+
+[library]
+kind = "template"
+setup_required = true
+template = "code_quality"

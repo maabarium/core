@@ -1,10 +1,10 @@
+use super::{CompletionRequest, CompletionResponse, LLMProvider};
+use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use crate::error::LLMError;
-use super::{CompletionRequest, CompletionResponse, LLMProvider};
 
 pub struct OpenAICompatProvider {
     client: Client,
@@ -70,8 +70,14 @@ impl LLMProvider for OpenAICompatProvider {
         let body = OpenAIRequest {
             model: self.model.clone(),
             messages: vec![
-                OpenAIMessage { role: "system".into(), content: request.system.clone() },
-                OpenAIMessage { role: "user".into(), content: request.prompt.clone() },
+                OpenAIMessage {
+                    role: "system".into(),
+                    content: request.system.clone(),
+                },
+                OpenAIMessage {
+                    role: "user".into(),
+                    content: request.prompt.clone(),
+                },
             ],
             temperature: request.temperature,
             max_tokens: request.max_tokens,

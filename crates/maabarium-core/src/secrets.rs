@@ -45,11 +45,7 @@ impl SecretStore {
 }
 
 impl ApiKeyStore for SecretStore {
-    fn set_api_key(
-        &self,
-        provider: &str,
-        api_key: SecretString,
-    ) -> Result<(), SecretError> {
+    fn set_api_key(&self, provider: &str, api_key: SecretString) -> Result<(), SecretError> {
         let provider = normalize_provider(provider)?;
         let entry = keyring::Entry::new(self.service_name, provider.as_str())?;
         entry.set_password(api_key.expose_secret())?;

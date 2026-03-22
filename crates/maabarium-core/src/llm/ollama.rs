@@ -1,9 +1,9 @@
+use super::{CompletionRequest, CompletionResponse, LLMProvider};
+use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use crate::error::LLMError;
-use super::{CompletionRequest, CompletionResponse, LLMProvider};
 
 pub struct OllamaProvider {
     client: Client,

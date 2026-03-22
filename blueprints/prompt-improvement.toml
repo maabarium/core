@@ -1,0 +1,42 @@
+[blueprint]
+name = "prompt-improvement"
+version = "1.0"
+description = "Improve prompt clarity, specificity, and usability across reusable prompt assets."
+
+[domain]
+repo_path = "."
+target_files = ["prompts/**/*.md", "docs/**/*.md", "**/*prompt*.md"]
+language = "markdown"
+
+[constraints]
+max_iterations = 60
+timeout_seconds = 120
+require_tests_pass = false
+min_improvement = 0.02
+
+[metrics]
+metrics = [
+    { name = "clarity", weight = 0.3, direction = "maximize", description = "Prompts should be easy to understand and follow." },
+    { name = "specificity", weight = 0.3, direction = "maximize", description = "Instructions should stay concrete, scoped, and precise." },
+    { name = "actionability", weight = 0.2, direction = "maximize", description = "Outputs should drive useful next actions instead of vague guidance." },
+    { name = "consistency", weight = 0.2, direction = "maximize", description = "Prompt sets should stay stylistically and structurally aligned." },
+]
+
+[agents]
+council_size = 3
+debate_rounds = 2
+agents = [
+    { name = "strategist", role = "Prompt Strategist", system_prompt = "You improve prompt clarity, structure, and task framing while preserving the author's intent.", model = "qwen" },
+    { name = "critic", role = "Prompt Critic", system_prompt = "You identify ambiguity, overreach, missing context, and weak constraints in prompts.", model = "qwen" },
+    { name = "editor", role = "Prompt Editor", system_prompt = "You turn council direction into concise, polished, and reusable prompt edits.", model = "qwen" },
+]
+
+[models]
+models = [
+    { name = "qwen", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.5, max_tokens = 1536 },
+]
+
+[library]
+kind = "template"
+setup_required = true
+template = "prompt_optimization"

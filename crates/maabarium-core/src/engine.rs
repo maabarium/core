@@ -1,15 +1,15 @@
-use std::sync::Arc;
-use std::time::Duration;
-use tokio_util::sync::CancellationToken;
-use tokio::time::timeout;
-use tracing::{error, info, info_span, instrument, warn};
 use crate::agent::{Agent, Council};
 use crate::blueprint::BlueprintFile;
+use crate::error::EngineError;
 use crate::evaluator::{Evaluator, ExperimentResult};
 use crate::git_manager::GitManager;
 use crate::llm::provider_from_models;
 use crate::persistence::Persistence;
-use crate::error::EngineError;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, info_span, instrument, warn};
 
 pub struct EngineConfig {
     pub blueprint: BlueprintFile,
@@ -66,7 +66,9 @@ impl Engine {
             .flatten()
             .unwrap_or(0.0);
 
-        info!("Engine starting: blueprint={bp_name}, max_iterations={max_iter}, baseline={baseline:.4}");
+        info!(
+            "Engine starting: blueprint={bp_name}, max_iterations={max_iter}, baseline={baseline:.4}"
+        );
 
         for iteration in 1..=max_iter {
             let iteration_span = info_span!(
@@ -107,7 +109,9 @@ impl Engine {
                 Ok(proposal) => proposal,
                 Err(e) => {
                     warn!("Council failed to produce a proposal for iteration {iteration}: {e}");
-                    let _ = self.persistence.log_failure(&bp_name, iteration, &e.to_string());
+                    let _ = self
+                        .persistence
+                        .log_failure(&bp_name, iteration, &e.to_string());
                     continue;
                 }
             };
@@ -116,40 +120,42 @@ impl Engine {
                 Ok(b) => b,
                 Err(e) => {
                     warn!("Failed to create branch for iteration {iteration}: {e}");
-                    let _ = self.persistence.log_failure(&bp_name, iteration, &e.to_string());
+                    let _ = self
+                        .persistence
+                        .log_failure(&bp_name, iteration, &e.to_string());
                     continue;
                 }
             };
 
             if let Err(e) = self.git.apply_proposal(&branch, &proposal).await {
                 warn!("Failed to apply proposal for iteration {iteration}: {e}");
-                let _ = self.persistence.log_failure(&bp_name, iteration, &e.to_string());
+                let _ = self
+                    .persistence
+                    .log_failure(&bp_name, iteration, &e.to_string());
                 let _ = self.git.delete_branch(&branch).await;
                 continue;
             }
 
             let eval_future = self.evaluator.evaluate(&proposal, iteration);
 
-            let result: ExperimentResult = match timeout(
-                Duration::from_secs(timeout_secs),
-                eval_future,
-            )
-            .await
-            {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    error!("Evaluation error at iteration {iteration}: {e}");
-                    let _ = self.persistence.log_failure(&bp_name, iteration, &e.to_string());
-                    let _ = self.git.delete_branch(&branch).await;
-                    continue;
-                }
-                Err(_) => {
-                    error!("Evaluation timed out at iteration {iteration}");
-                    let _ = self.persistence.log_failure(&bp_name, iteration, "timeout");
-                    let _ = self.git.delete_branch(&branch).await;
-                    continue;
-                }
-            };
+            let result: ExperimentResult =
+                match timeout(Duration::from_secs(timeout_secs), eval_future).await {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
+                        error!("Evaluation error at iteration {iteration}: {e}");
+                        let _ = self
+                            .persistence
+                            .log_failure(&bp_name, iteration, &e.to_string());
+                        let _ = self.git.delete_branch(&branch).await;
+                        continue;
+                    }
+                    Err(_) => {
+                        error!("Evaluation timed out at iteration {iteration}");
+                        let _ = self.persistence.log_failure(&bp_name, iteration, "timeout");
+                        let _ = self.git.delete_branch(&branch).await;
+                        continue;
+                    }
+                };
 
             info!(
                 "Iteration {iteration} score={:.4} baseline={baseline:.4}",
@@ -181,7 +187,12 @@ impl Engine {
 fn build_council(blueprint: &BlueprintFile) -> Result<Council, EngineError> {
     let mut agents = Vec::new();
 
-    for agent_def in blueprint.agents.agents.iter().take(blueprint.agents.council_size as usize) {
+    for agent_def in blueprint
+        .agents
+        .agents
+        .iter()
+        .take(blueprint.agents.council_size as usize)
+    {
         let provider = provider_from_models(&blueprint.models, Some(&agent_def.model))?;
         agents.push(Agent::new(agent_def.clone(), provider));
     }

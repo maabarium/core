@@ -1,8 +1,8 @@
+use crate::error::GitError;
+use git2::{BranchType, Repository};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
-use git2::{Repository, BranchType};
-use serde::{Deserialize, Serialize};
-use crate::error::GitError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposal {
@@ -69,9 +69,11 @@ impl GitManager {
             let repo = Repository::open(&path)?;
             let branch_ref = repo.find_branch(&branch, BranchType::Local)?;
             let branch_commit = branch_ref.get().peel_to_commit()?;
-            let mut main = repo.find_branch("main", BranchType::Local)
+            let mut main = repo
+                .find_branch("main", BranchType::Local)
                 .or_else(|_| repo.find_branch("master", BranchType::Local))?;
-            main.get_mut().set_target(branch_commit.id(), &format!("Promote {branch}"))?;
+            main.get_mut()
+                .set_target(branch_commit.id(), &format!("Promote {branch}"))?;
             Ok(())
         })
         .await
@@ -103,7 +105,16 @@ impl GitManager {
             ));
             std::fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
 
-            run_git(&path, ["worktree", "add", "--detach", temp_dir.to_str().unwrap_or_default(), &branch])?;
+            run_git(
+                &path,
+                [
+                    "worktree",
+                    "add",
+                    "--detach",
+                    temp_dir.to_str().unwrap_or_default(),
+                    &branch,
+                ],
+            )?;
 
             for patch in &proposal.file_patches {
                 let file_path = temp_dir.join(&patch.path);
@@ -139,7 +150,15 @@ impl GitManager {
                     "Maabarium <maabarium@bot>",
                 ],
             );
-            let cleanup_result = run_git(&path, ["worktree", "remove", "--force", temp_dir.to_str().unwrap_or_default()]);
+            let cleanup_result = run_git(
+                &path,
+                [
+                    "worktree",
+                    "remove",
+                    "--force",
+                    temp_dir.to_str().unwrap_or_default(),
+                ],
+            );
             let _ = std::fs::remove_dir_all(&temp_dir);
 
             add_result?;

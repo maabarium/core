@@ -1,8 +1,8 @@
 use maabarium_core::{
     blueprint::BlueprintFile,
     engine::{Engine, EngineConfig},
-    evaluator::{Evaluator, ExperimentResult, MetricScore},
     error::EvalError,
+    evaluator::{Evaluator, ExperimentResult, MetricScore},
     git_manager::Proposal,
 };
 use std::fs;
@@ -31,6 +31,7 @@ impl Evaluator for MockEvaluator {
             }],
             weighted_total: self.score,
             duration_ms: 1,
+            research: None,
         })
     }
 }

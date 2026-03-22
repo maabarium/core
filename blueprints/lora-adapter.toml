@@ -1,11 +1,11 @@
 [blueprint]
 name = "lora-adapter"
 version = "1.0"
-description = "Package and evaluate LoRA adapter artifacts with metadata in a sandbox."
+description = "Validate externally produced LoRA adapter artifacts and reproducibility metadata in a sandbox."
 
 [domain]
 repo_path = "."
-target_files = ["adapters/**/*.safetensors", "adapters/**/*.json", "README.md"]
+target_files = ["adapters/**/*.safetensors", "adapters/**/*.json", "README.md", "maabarium-lora-run.json"]
 language = "lora"
 
 [constraints]
@@ -25,11 +25,16 @@ metrics = [
 council_size = 2
 debate_rounds = 1
 agents = [
-    { name = "adapter-builder", role = "LoRA Engineer", system_prompt = "You package LoRA adapters for reproducible delivery.", model = "llama3" },
-    { name = "adapter-auditor", role = "Artifact Auditor", system_prompt = "You inspect adapters for missing files and metadata.", model = "llama3" },
+    { name = "adapter-builder", role = "LoRA Engineer", system_prompt = "You package externally trained LoRA adapters for reproducible delivery, including a maabarium-lora-run.json manifest.", model = "llama3" },
+    { name = "adapter-auditor", role = "Artifact Auditor", system_prompt = "You inspect adapters for missing files, reproducibility metadata, and evaluation commands.", model = "llama3" },
 ]
 
 [models]
 models = [
     { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.3, max_tokens = 1024 },
 ]
+
+[library]
+kind = "template"
+setup_required = true
+template = "lora_validation"

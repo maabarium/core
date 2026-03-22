@@ -6,11 +6,14 @@ A **blueprint** is a TOML file that fully describes one experiment domain for Ma
 
 Place blueprints in the `blueprints/` directory at the workspace root:
 
-```
+```text
 blueprints/
 ├── example.toml
-├── creator-buddy-prompts.toml
-└── rust-code-quality.toml
+├── prompt-improvement.toml
+├── lora-adapter.toml
+├── code-quality.toml
+├── product-builder.toml
+└── general-research.toml
 ```
 
 ## Complete Reference
@@ -192,13 +195,86 @@ The engine validates a blueprint at load time and refuses to start if:
 3. Metric weights do not sum to 1.0 (±0.01 tolerance)
 4. Any metric `direction` is not `"maximize"` or `"minimize"`
 
+## Built-In Evaluator Selection
+
+Maabarium selects one built-in evaluator per blueprint:
+
+- `code`: the default path for code and application work
+- `prompt`: used for prompt or markdown optimization blueprints
+- `lora`: used for LoRA artifact validation blueprints
+- `research`: used for research-oriented blueprints
+
+The research evaluator activates when a blueprint clearly targets research work, for example:
+
+- `language = "research"`
+- a blueprint name containing `research`
+- research-oriented metric names such as `citation_coverage`, `source_quality`, `factual_grounding`, or `synthesis_quality`
+
+## Research Evaluator
+
+The built-in research evaluator enforces cited research output instead of relying on prompt wording alone.
+
+It does two things that the generic prompt path does not:
+
+1. it requires at least one external citation URL in the proposed content, and
+2. it verifies cited sources over HTTP and persists source metadata alongside the experiment row.
+
+### Citation Requirements
+
+Research proposals must include at least one citation in the proposed file contents. The evaluator recognizes:
+
+- markdown links such as `[SQLite docs](https://sqlite.org/index.html)`
+- bare URLs such as `https://www.rust-lang.org/`
+
+If no external citation URL is present in the proposal content, evaluation fails for that iteration.
+
+### Persisted Research Metadata
+
+For successful research evaluations, Maabarium stores:
+
+- Per-source records: original URL, final URL after redirects when available, host name, optional label, optional HTML title, citation count, verification status, HTTP status code when available, and fetch error when verification failed.
+- Per-citation records: file path, source URL, optional label, line number, and captured snippet.
+
+This metadata is persisted in SQLite and included in JSON and CSV exports through the experiment record.
+
 ## Example Blueprints
+
+### LoRA Artifact Validation
+
+The built-in LoRA path is intentionally narrow. Maabarium does not run first-class MLX training inside the engine today. The supported workflow is:
+
+1. train or export adapter artifacts outside the engine,
+2. include those artifacts plus metadata in a proposal,
+3. evaluate packaging completeness and reproducibility through the built-in LoRA evaluator.
+
+The evaluator recognizes `language = "lora"` blueprints and expects the proposal to include a `maabarium-lora-run.json` manifest when reproducibility scoring matters.
+
+Minimal manifest example:
+
+```json
+{
+  "trainer": "mlx_lm",
+  "base_model": "mlx-community/Llama-3.2-3B-Instruct",
+  "dataset": "fixtures/dataset.jsonl",
+  "adapter_path": "adapters/run-001/adapter_model.safetensors",
+  "output_dir": "adapters/run-001",
+  "eval_command": "python -m mlx_lm.evaluate --adapter-path adapters/run-001",
+  "epochs": 2,
+  "learning_rate": 0.0002
+}
+```
+
+This lets the evaluator score three things without overclaiming native training support:
+
+- adapter artifact completeness,
+- metadata hygiene,
+- reproducibility of the external training or evaluation run.
 
 ### Prompt Optimization
 
 ```toml
 [blueprint]
-name = "creator-buddy-prompts"
+name = "prompt-improvement"
 version = "1.0"
 description = "Continuously improve system prompts for the Creator Buddy app."
 
@@ -239,6 +315,49 @@ assignment = "explicit"
 models = [
     { name = "qwen", provider = "ollama", endpoint = "http://localhost:11434",
     temperature = 0.7, max_tokens = 1024, requests_per_minute = 60 },
+]
+```
+
+### General Research
+
+```toml
+[blueprint]
+name = "general-research"
+version = "1.0"
+description = "Research any topic with grounded synthesis, source tracking, and explicit citations for major claims."
+
+[domain]
+repo_path = "."
+target_files = ["docs/**/*.md", "research/**/*.md", "notes/**/*.md", "reports/**/*.md"]
+language = "research"
+
+[constraints]
+max_iterations = 40
+timeout_seconds = 240
+require_tests_pass = false
+min_improvement = 0.02
+
+[metrics]
+metrics = [
+    { name = "factual_grounding", weight = 0.3, direction = "maximize", description = "Claims should remain grounded in verifiable evidence." },
+    { name = "citation_coverage", weight = 0.25, direction = "maximize", description = "Major claims should include explicit citations and source references." },
+    { name = "source_quality", weight = 0.25, direction = "maximize", description = "The work should prefer credible, diverse, and recent sources." },
+    { name = "synthesis_quality", weight = 0.2, direction = "maximize", description = "The final brief should synthesize findings clearly." },
+]
+
+[agents]
+council_size = 3
+debate_rounds = 2
+agents = [
+    { name = "researcher", role = "Lead Researcher", system_prompt = "Gather the best available evidence, perform internet lookups when tool access exists, and keep an explicit source list.", model = "llama3" },
+    { name = "verifier", role = "Source Verifier", system_prompt = "Reject unsupported claims, require citations, and call out when live source access is unavailable.", model = "llama3" },
+    { name = "synthesizer", role = "Research Synthesizer", system_prompt = "Produce a concise research brief with citations for every major claim and explicit uncertainty where evidence is weak.", model = "llama3" },
+]
+
+[models]
+assignment = "explicit"
+models = [
+    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.35, max_tokens = 3072, requests_per_minute = 30 },
 ]
 ```
 

@@ -50,7 +50,8 @@ pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, Sec
         ))),
         "openai" | "openai-compat" => {
             let secret_store = SecretStore::new();
-            let api_key = secret_store.resolve_api_key(&provider_name, model.api_key_env.as_deref())?;
+            let api_key =
+                secret_store.resolve_api_key(&provider_name, model.api_key_env.as_deref())?;
             Ok(Arc::new(OpenAICompatProvider::new(
                 model.endpoint.clone(),
                 model.name.clone(),
@@ -68,7 +69,12 @@ pub fn provider_from_models(
     match models.assignment {
         ModelAssignment::Explicit => {
             let model = preferred_model
-                .and_then(|name| models.models.iter().find(|candidate| candidate.name == name))
+                .and_then(|name| {
+                    models
+                        .models
+                        .iter()
+                        .find(|candidate| candidate.name == name)
+                })
                 .or_else(|| models.models.first())
                 .ok_or_else(|| SecretError::InvalidInput("No models configured".to_owned()))?;
             Ok(Arc::new(ModelPool::new(vec![PoolMember::new(
@@ -90,6 +96,9 @@ pub fn provider_from_models(
     }
 }
 
-pub fn provider_secret(provider: &str, env_var: Option<&str>) -> Result<Option<SecretString>, SecretError> {
+pub fn provider_secret(
+    provider: &str,
+    env_var: Option<&str>,
+) -> Result<Option<SecretString>, SecretError> {
     SecretStore::new().resolve_api_key(provider, env_var)
 }

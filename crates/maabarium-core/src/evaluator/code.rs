@@ -62,7 +62,11 @@ impl CodeEvaluator {
         resolve_workspace_root(&self.repo_path).unwrap_or_else(|| self.repo_path.clone())
     }
 
-    fn execution_dir(&self, evaluation_root: &std::path::Path, sandbox_root: &std::path::Path) -> PathBuf {
+    fn execution_dir(
+        &self,
+        evaluation_root: &std::path::Path,
+        sandbox_root: &std::path::Path,
+    ) -> PathBuf {
         resolve_execution_subdir(&self.repo_path, evaluation_root)
             .map(|relative| sandbox_root.join(relative))
             .unwrap_or_else(|| sandbox_root.to_path_buf())
@@ -153,9 +157,7 @@ impl Evaluator for CodeEvaluator {
             if output.status_code != Some(0) {
                 return Err(EvalError::Sandbox(format!(
                     "sandbox subprocess failed: status={:?} stderr={} stdout={}",
-                    output.status_code,
-                    output.stderr,
-                    output.stdout,
+                    output.status_code, output.stderr, output.stdout,
                 )));
             }
         }
@@ -178,6 +180,7 @@ impl Evaluator for CodeEvaluator {
             scores,
             weighted_total,
             duration_ms: start.elapsed().as_millis() as u64,
+            research: None,
         })
     }
 }
@@ -203,13 +206,19 @@ fn resolve_workspace_root(repo_path: &std::path::Path) -> Option<PathBuf> {
     Some(current)
 }
 
-fn resolve_execution_subdir(repo_path: &std::path::Path, evaluation_root: &std::path::Path) -> Option<PathBuf> {
+fn resolve_execution_subdir(
+    repo_path: &std::path::Path,
+    evaluation_root: &std::path::Path,
+) -> Option<PathBuf> {
     let mut current = repo_path.canonicalize().ok()?;
     if current.is_file() {
         current = current.parent()?.parent()?.to_path_buf();
     }
 
-    current.strip_prefix(evaluation_root).ok().map(PathBuf::from)
+    current
+        .strip_prefix(evaluation_root)
+        .ok()
+        .map(PathBuf::from)
 }
 
 fn target_pattern_matches(pattern: &str, path: &str) -> bool {
@@ -242,8 +251,8 @@ mod tests {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .canonicalize()
             .expect("manifest dir should canonicalize");
-        let workspace_root = resolve_workspace_root(&manifest_dir)
-            .expect("workspace root should resolve");
+        let workspace_root =
+            resolve_workspace_root(&manifest_dir).expect("workspace root should resolve");
         let execution_subdir = resolve_execution_subdir(&manifest_dir, &workspace_root)
             .expect("package execution subdir should resolve");
 

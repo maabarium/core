@@ -1,6 +1,6 @@
+use crate::error::BlueprintError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use crate::error::BlueprintError;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -8,6 +8,35 @@ pub enum ModelAssignment {
     #[default]
     Explicit,
     RoundRobin,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BlueprintLibraryKind {
+    #[default]
+    Workflow,
+    Template,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BlueprintTemplateKind {
+    CodeQuality,
+    PromptOptimization,
+    ProductBuilder,
+    GeneralResearch,
+    LoraValidation,
+    Custom,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct BlueprintLibraryMeta {
+    #[serde(default)]
+    pub kind: BlueprintLibraryKind,
+    #[serde(default)]
+    pub setup_required: bool,
+    #[serde(default)]
+    pub template: Option<BlueprintTemplateKind>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -87,6 +116,8 @@ pub struct BlueprintFile {
     pub metrics: MetricsConfig,
     pub agents: AgentsConfig,
     pub models: ModelsConfig,
+    #[serde(default)]
+    pub library: Option<BlueprintLibraryMeta>,
 }
 
 impl BlueprintFile {
@@ -99,22 +130,27 @@ impl BlueprintFile {
 
     pub fn validate(&self) -> Result<(), BlueprintError> {
         if self.blueprint.name.is_empty() {
-            return Err(BlueprintError::Validation("Blueprint name cannot be empty".into()));
+            return Err(BlueprintError::Validation(
+                "Blueprint name cannot be empty".into(),
+            ));
         }
         if self.constraints.max_iterations == 0 {
-            return Err(BlueprintError::Validation("max_iterations must be > 0".into()));
+            return Err(BlueprintError::Validation(
+                "max_iterations must be > 0".into(),
+            ));
         }
         let weight_sum: f64 = self.metrics.metrics.iter().map(|m| m.weight).sum();
         if (weight_sum - 1.0).abs() > 0.01 {
-            return Err(BlueprintError::Validation(
-                format!("Metric weights must sum to 1.0, got {weight_sum}")
-            ));
+            return Err(BlueprintError::Validation(format!(
+                "Metric weights must sum to 1.0, got {weight_sum}"
+            )));
         }
         for m in &self.metrics.metrics {
             if m.direction != "maximize" && m.direction != "minimize" {
-                return Err(BlueprintError::Validation(
-                    format!("Metric '{}' direction must be 'maximize' or 'minimize'", m.name)
-                ));
+                return Err(BlueprintError::Validation(format!(
+                    "Metric '{}' direction must be 'maximize' or 'minimize'",
+                    m.name
+                )));
             }
         }
         if self.models.models.is_empty() {
@@ -133,5 +169,21 @@ impl BlueprintFile {
             }
         }
         Ok(())
+    }
+
+    pub fn library_kind(&self) -> BlueprintLibraryKind {
+        self.library
+            .as_ref()
+            .map(|library| library.kind)
+            .unwrap_or(BlueprintLibraryKind::Workflow)
+    }
+
+    pub fn requires_setup(&self) -> bool {
+        self.library
+            .as_ref()
+            .map(|library| {
+                library.setup_required || library.kind == BlueprintLibraryKind::Template
+            })
+            .unwrap_or(false)
     }
 }

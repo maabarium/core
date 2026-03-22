@@ -1,9 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::{
-    default_db_path, default_log_path, ApiKeyStore, BlueprintFile, CodeEvaluator, Engine, EngineConfig,
-    ExportFormat, LoraEvaluator, Persistence, PromptEvaluator, SecretStore,
+    ApiKeyStore, BlueprintFile, Engine, EngineConfig, EvaluatorRegistry, ExportFormat, Persistence,
+    SecretStore, default_db_path, default_log_path,
 };
-use maabarium_core::llm::provider_from_models;
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -64,9 +63,7 @@ enum KeysAction {
         reveal: bool,
     },
     /// Delete an API key for a provider
-    Delete {
-        provider: String,
-    },
+    Delete { provider: String },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -149,7 +146,10 @@ async fn main() -> anyhow::Result<()> {
             }
             KeysAction::Get { provider, reveal } => {
                 let secret_store = SecretStore::new();
-                println!("{}", render_get_key_message(&secret_store, &provider, reveal)?);
+                println!(
+                    "{}",
+                    render_get_key_message(&secret_store, &provider, reveal)?
+                );
             }
             KeysAction::Delete { provider } => {
                 let secret_store = SecretStore::new();
@@ -177,8 +177,8 @@ fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard>
 
     let file_appender = tracing_appender::rolling::never(log_directory, log_file_name);
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
-    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive("maabarium=info".parse()?);
+    let env_filter =
+        tracing_subscriber::EnvFilter::from_default_env().add_directive("maabarium=info".parse()?);
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -202,22 +202,7 @@ fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard>
 fn select_evaluator(
     blueprint: &BlueprintFile,
 ) -> anyhow::Result<Arc<dyn maabarium_core::evaluator::Evaluator>> {
-    if is_lora_blueprint(blueprint) {
-        Ok(Arc::new(LoraEvaluator::new(blueprint.metrics.metrics.clone())))
-    } else if is_prompt_blueprint(blueprint) {
-        let provider = provider_from_models(&blueprint.models, None)?;
-        Ok(Arc::new(PromptEvaluator::new(
-            provider,
-            blueprint.metrics.metrics.clone(),
-        )))
-    } else {
-        Ok(Arc::new(CodeEvaluator::new(
-            blueprint.metrics.metrics.clone(),
-            blueprint.domain.target_files.clone(),
-            blueprint.constraints.require_tests_pass,
-            blueprint.domain.repo_path.clone(),
-        )))
-    }
+    EvaluatorRegistry::build_builtin(blueprint).map_err(Into::into)
 }
 
 fn normalize_db_path(db: &str) -> String {
@@ -226,35 +211,6 @@ fn normalize_db_path(db: &str) -> String {
     } else {
         db.to_owned()
     }
-}
-
-fn is_prompt_blueprint(blueprint: &BlueprintFile) -> bool {
-    blueprint.domain.language.eq_ignore_ascii_case("markdown")
-        || blueprint.domain.language.eq_ignore_ascii_case("prompt")
-        || blueprint
-            .blueprint
-            .name
-            .to_ascii_lowercase()
-            .contains("prompt")
-        || blueprint
-            .domain
-            .target_files
-            .iter()
-            .any(|pattern| pattern.ends_with(".md") || pattern.contains(".md"))
-}
-
-fn is_lora_blueprint(blueprint: &BlueprintFile) -> bool {
-    blueprint
-        .blueprint
-        .name
-        .to_ascii_lowercase()
-        .contains("lora")
-        || blueprint.domain.language.eq_ignore_ascii_case("lora")
-        || blueprint
-            .domain
-            .target_files
-            .iter()
-            .any(|pattern| pattern.ends_with(".safetensors") || pattern.contains("adapter"))
 }
 
 fn prompt_for_api_key(provider: &str) -> anyhow::Result<String> {
@@ -270,7 +226,14 @@ fn prompt_for_api_key(provider: &str) -> anyhow::Result<String> {
 }
 
 fn mask_secret(value: &str) -> String {
-    let visible = value.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<String>();
+    let visible = value
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
     if visible.is_empty() {
         return "[empty]".to_owned();
     }
@@ -342,7 +305,8 @@ mod tests {
             .set_api_key("openai", SecretString::from("secret-1234".to_owned()))
             .expect("secret should be stored");
 
-        let rendered = render_get_key_message(&store, "openai", false).expect("message should render");
+        let rendered =
+            render_get_key_message(&store, "openai", false).expect("message should render");
         assert_eq!(rendered, "****1234");
     }
 

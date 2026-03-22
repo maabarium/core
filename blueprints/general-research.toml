@@ -1,0 +1,43 @@
+[blueprint]
+name = "general-research"
+version = "1.0"
+description = "Research any topic with grounded synthesis, source tracking, and explicit citations for major claims."
+
+[domain]
+repo_path = "."
+target_files = ["docs/**/*.md", "research/**/*.md", "notes/**/*.md", "reports/**/*.md"]
+language = "research"
+
+[constraints]
+max_iterations = 40
+timeout_seconds = 240
+require_tests_pass = false
+min_improvement = 0.02
+
+[metrics]
+metrics = [
+    { name = "factual_grounding", weight = 0.3, direction = "maximize", description = "Claims should remain grounded in verifiable evidence." },
+    { name = "citation_coverage", weight = 0.25, direction = "maximize", description = "Major claims should include explicit sources and citations." },
+    { name = "source_quality", weight = 0.25, direction = "maximize", description = "The research should prefer credible, diverse, and recent sources when possible." },
+    { name = "synthesis_quality", weight = 0.2, direction = "maximize", description = "The final research output should synthesize findings clearly instead of listing disconnected facts." },
+]
+
+[agents]
+council_size = 3
+debate_rounds = 2
+agents = [
+    { name = "researcher", role = "Lead Researcher", system_prompt = "You gather the best available evidence on the topic, prefer primary or high-quality sources, and keep a running list of citations.", model = "llama3" },
+    { name = "verifier", role = "Source Verifier", system_prompt = "You challenge unsupported claims, demand source attribution, and call out when live internet lookup is unavailable or insufficient.", model = "llama3" },
+    { name = "synthesizer", role = "Research Synthesizer", system_prompt = "You turn sourced findings into a clear brief with citations for every major claim and explicit uncertainty where evidence is weak.", model = "llama3" },
+]
+
+[models]
+assignment = "explicit"
+models = [
+    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.35, max_tokens = 3072, requests_per_minute = 30 },
+]
+
+[library]
+kind = "template"
+setup_required = true
+template = "general_research"

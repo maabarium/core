@@ -5,8 +5,8 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant, sleep};
 use tracing::instrument;
 
+use super::{CompletionRequest, CompletionResponse, LLMProvider};
 use crate::error::LLMError;
-use super::{LLMProvider, CompletionRequest, CompletionResponse};
 
 pub struct PoolMember {
     provider: Arc<dyn LLMProvider>,
@@ -80,7 +80,10 @@ impl ModelPool {
     }
 
     #[instrument(name = "model_pool_complete", skip(self, request), fields(pool = %self.model_name()))]
-    pub async fn complete(&self, request: &CompletionRequest) -> Result<CompletionResponse, LLMError> {
+    pub async fn complete(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<CompletionResponse, LLMError> {
         let provider_index = self
             .next_provider_index()
             .ok_or_else(|| LLMError::Provider("No providers in pool".into()))?;
@@ -139,7 +142,10 @@ mod tests {
 
     #[async_trait]
     impl LLMProvider for TestProvider {
-        async fn complete(&self, _request: &CompletionRequest) -> Result<CompletionResponse, LLMError> {
+        async fn complete(
+            &self,
+            _request: &CompletionRequest,
+        ) -> Result<CompletionResponse, LLMError> {
             self.calls.lock().expect("calls lock").push(self.name);
             Ok(CompletionResponse {
                 content: self.name.to_owned(),

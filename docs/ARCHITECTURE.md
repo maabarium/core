@@ -10,24 +10,24 @@ Maabarium is a Rust-native, local-first continuous improvement engine inspired b
 2. **Pure Rust control plane** — Tokio async runtime, no Python in the orchestration layer
 3. **Autoresearch keep-winner loop** — propose → apply → evaluate → keep/revert
 4. **Generalized domains** — pluggable Evaluator trait, not ML-only
-5. **Beautiful desktop UX** — native `eframe` / `egui` console with live dashboards (Phase 3)
-6. **Future-proof** — MIT license, plugin architecture
+5. **Beautiful desktop UX** — Tauri desktop console with live dashboards
+6. **Future-proof** — explicit extension points, documented trade-offs, and OSS-ready structure
 
 ## Crate Structure
 
-```
+```text
 maabarium/
 ├── crates/
 │   ├── maabarium-core/    # Engine, agents, git, LLM, evaluator, persistence
 │   ├── maabarium-cli/     # Terminal CLI binary (Phase 1)
-│   └── maabarium-app/     # Native egui desktop console (Phase 3)
+│   └── maabarium-desktop/ # Tauri desktop console
 ```
 
-The workspace is split so that `maabarium-core` can be built and tested independently of the native desktop shell.
+The workspace is split so that `maabarium-core` can be built and tested independently of the Tauri desktop shell.
 
 ## Core Loop (`engine.rs`)
 
-```
+```text
 for iteration in 1..=max_iterations {
     branch = git.create_experiment_branch(iteration)
     proposal = council.propose(context, metrics)
@@ -116,26 +116,92 @@ The default database and log paths are:
 - `data/maabarium.db`
 - `data/maabarium.log`
 
-The egui console reads both sources to render live score, duration, and token-usage cards.
+The Tauri desktop console reads both sources to render live score, duration, and token-usage cards.
 
 ## Security Model
 
 | Threat                          | Mitigation                                                                            |
 | ------------------------------- | ------------------------------------------------------------------------------------- |
-| Agent writes to arbitrary paths | Evaluator sandboxing in Phase 4 (wasmtime WASI or temp dir with bind mounts)          |
+| Agent writes to arbitrary paths | Sandbox repo snapshots plus path sanitization and Wasmtime-backed policy validation   |
+| Untrusted code execution        | Subprocess-based evaluator execution inside copied sandbox roots                      |
 | API key leakage                 | `keyring` crate → OS keychain. Never logged, never serialized to disk                 |
 | Runaway resource usage          | Per-experiment timeout via `tokio::time::timeout` + `max_iterations` cap in blueprint |
 | Supply chain attacks            | `deny.toml` for `cargo-deny`: audit CVEs, licenses, duplicate crates                  |
-| Git history pollution           | Experiment branches under `experiment/` prefix; auto-cleanup planned                  |
+| Git history pollution           | Experiment branches under `experiment/` prefix; auto-cleanup still planned            |
 | SQL injection                   | All queries use `rusqlite::params![]` parameterised binding                           |
 
-## Phased Roadmap
+## Current Status
 
-| Phase | Goal        | Key deliverables                                          |
-| ----- | ----------- | --------------------------------------------------------- |
-| 0     | Foundation  | Workspace, SQLite schema, error types, tracing            |
-| 1     | The Loop    | Blueprint parsing, git manager, LLM provider, engine, CLI |
-| 2     | Multi-agent | Council debate, multi-LLM pool, rate limiting, keyring    |
-| 3     | Desktop app | egui console shell, live metrics, shared log tail         |
-| 4     | Sandboxing  | wasmtime WASI, code evaluator, LoRA evaluator             |
-| 5     | OSS launch  | README, cargo-deny CI, blueprint gallery, export          |
+The original phase model is now mostly complete through the working core runtime and Tauri desktop console.
+
+Implemented in the current repository:
+
+- workspace split across `maabarium-core`, `maabarium-cli`, and `maabarium-desktop`
+- council-driven proposal generation and engine loop orchestration
+- git-backed experiment isolation and branch promotion/revert flow
+- SQLite persistence and export
+- live Tauri desktop cards, history, diff, and logs backed by persisted runtime data
+- blueprint-driven multi-model routing with per-model pacing
+- tracing spans on engine, pool, evaluator, and sandbox hot paths
+- Wasmtime-backed sandbox policy validation and subprocess-based code evaluation
+
+## Closure Status
+
+The historical closure items are now explicitly resolved in code and docs:
+
+1. Desktop packaging/distribution is documented for the Tauri desktop app
+2. Evaluator selection is routed through an internal built-in registry
+3. OSS launch artifacts exist and match the repository
+4. The LoRA path is explicitly scoped to external artifact validation with reproducibility manifests
+
+The remaining implementation tracker at [../.dev/implementation-remaining-items.md](../.dev/implementation-remaining-items.md) is now a closure record rather than an open feature queue.
+
+## Desktop Packaging and Distribution
+
+The supported desktop distribution path is the Tauri app bundle built from the workspace.
+
+Current packaging expectation:
+
+- build with `cd crates/maabarium-desktop && pnpm tauri build`
+- distribute the generated platform bundle from the Tauri output directory
+- keep runtime data outside the app binary at `data/maabarium.db` and `data/maabarium.log`
+
+The desktop stack is Tauri-based. A manual signing/notarization process is documented, but not yet automated.
+
+The detailed packaging/release expectations are documented in [DESKTOP_PACKAGING.md](DESKTOP_PACKAGING.md).
+
+## Explicitly Deferred
+
+The following are not active implementation commitments in the current roadmap:
+
+- No second desktop shell is planned; the supported desktop shell is the Tauri app.
+- No runtime shared-library evaluator plugin ABI is promised; external plugins remain deferred behind the built-in evaluator registry because ABI stability and supply-chain trust are not solved yet.
+- No native Rust MLX-first path is promised; the supported LoRA path validates externally produced artifacts and reproducibility metadata instead of claiming in-engine training.
+- No CI-backed signing/notarization automation is promised yet.
+- No return to the old broad phase-table format is planned for active docs.
+
+## Evaluator Selection
+
+Evaluator choice is now resolved through `EvaluatorRegistry` in `maabarium-core`.
+
+- `prompt` workflows map to `PromptEvaluator`
+- `lora` workflows map to `LoraEvaluator`
+- everything else maps to `CodeEvaluator`
+
+This keeps evaluator selection deterministic and typed without exposing a dynamic shared-library plugin surface.
+
+## LoRA Execution Model
+
+The supported LoRA workflow is intentionally narrow:
+
+- training or fine-tuning happens outside the engine,
+- proposals carry adapter artifacts plus `maabarium-lora-run.json`,
+- `LoraEvaluator` scores artifact completeness, metadata hygiene, and reproducibility hints from that manifest.
+
+This closes the roadmap item without overstating native MLX support.
+
+## Superseded Historical Assumptions
+
+- The live desktop app is Tauri-based and lives in `crates/maabarium-desktop`.
+- The runtime does not use a pure WASI-only execution model for evaluator execution; it uses a hybrid sandboxing approach.
+- The historical `.dev/maabarium-revised.md` document is background context, not the authoritative implementation plan.

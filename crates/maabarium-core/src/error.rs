@@ -28,6 +28,8 @@ pub enum LLMError {
 pub enum EvalError {
     #[error("LLM error: {0}")]
     Llm(#[from] LLMError),
+    #[error("Secret error: {0}")]
+    Secret(#[from] SecretError),
     #[error("Parse error: {0}")]
     Parse(String),
     #[error("Sandbox error: {0}")]

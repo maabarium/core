@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/*"]
+members = [
+	"crates/maabarium-cli",
+	"crates/maabarium-core",
+	"crates/maabarium-desktop",
+]
 resolver = "2"
 
 [workspace.dependencies]

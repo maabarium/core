@@ -6,7 +6,9 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::error::PersistError;
-use crate::evaluator::{ExperimentResult, MetricScore};
+use crate::evaluator::{
+    ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation, ResearchSource,
+};
 use crate::git_manager::FilePatch;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +22,7 @@ pub struct PersistedExperiment {
     pub error: Option<String>,
     pub created_at: String,
     pub metrics: Vec<MetricScore>,
+    pub research: Option<ResearchArtifacts>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,8 +45,7 @@ pub struct Persistence {
 }
 
 pub fn default_db_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/maabarium.db")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/maabarium.db")
 }
 
 impl Persistence {
@@ -75,6 +77,30 @@ impl Persistence {
                 summary TEXT NOT NULL,
                 file_patches_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
+                FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+            );
+            CREATE TABLE IF NOT EXISTS research_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                final_url TEXT,
+                host TEXT,
+                label TEXT,
+                title TEXT,
+                citation_count INTEGER NOT NULL,
+                verified INTEGER NOT NULL,
+                status_code INTEGER,
+                fetch_error TEXT,
+                FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+            );
+            CREATE TABLE IF NOT EXISTS research_citations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id INTEGER NOT NULL,
+                file_path TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                label TEXT,
+                line_number INTEGER NOT NULL,
+                snippet TEXT NOT NULL,
                 FOREIGN KEY (experiment_id) REFERENCES experiments(id)
             );",
         )?;
@@ -115,6 +141,9 @@ impl Persistence {
             "INSERT INTO proposals (experiment_id, summary, file_patches_json, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![exp_id, result.proposal.summary, file_patches_json, now],
         )?;
+        if let Some(research) = &result.research {
+            self.log_research_artifacts(exp_id, research)?;
+        }
         Ok(exp_id)
     }
 
@@ -194,6 +223,7 @@ impl Persistence {
                 error,
                 created_at,
                 metrics,
+                research: self.load_research_artifacts(id)?,
             });
         }
 
@@ -221,8 +251,8 @@ impl Persistence {
         let mut proposals = Vec::new();
         for row in rows {
             let (id, experiment_id, summary, file_patches_json, created_at) = row?;
-            let file_patches = serde_json::from_str::<Vec<FilePatch>>(&file_patches_json)
-                .unwrap_or_default();
+            let file_patches =
+                serde_json::from_str::<Vec<FilePatch>>(&file_patches_json).unwrap_or_default();
             proposals.push(PersistedProposal {
                 id,
                 experiment_id,
@@ -291,6 +321,7 @@ impl Persistence {
                 error,
                 created_at,
                 metrics: self.load_metrics(id)?,
+                research: self.load_research_artifacts(id)?,
             };
             if !first {
                 writer.write_all(b",\n")?;
@@ -334,6 +365,7 @@ impl Persistence {
                 created_at,
             ) = row?;
             let metrics_json = serde_json::to_string(&self.load_metrics(id)?)?;
+            let research_json = serde_json::to_string(&self.load_research_artifacts(id)?)?;
             writer.serialize((
                 iteration as u64,
                 blueprint_name,
@@ -343,6 +375,7 @@ impl Persistence {
                 error.unwrap_or_default(),
                 created_at,
                 metrics_json,
+                research_json,
             ))?;
         }
         writer.flush()?;
@@ -366,6 +399,105 @@ impl Persistence {
             metrics.push(row?);
         }
         Ok(metrics)
+    }
+
+    fn log_research_artifacts(
+        &self,
+        experiment_id: i64,
+        research: &ResearchArtifacts,
+    ) -> Result<(), PersistError> {
+        for source in &research.sources {
+            self.conn.execute(
+                "INSERT INTO research_sources (experiment_id, url, final_url, host, label, title, citation_count, verified, status_code, fetch_error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    experiment_id,
+                    source.url,
+                    source.final_url,
+                    source.host,
+                    source.label,
+                    source.title,
+                    source.citation_count as i64,
+                    if source.verified { 1_i64 } else { 0_i64 },
+                    source.status_code.map(i64::from),
+                    source.fetch_error,
+                ],
+            )?;
+        }
+
+        for citation in &research.citations {
+            self.conn.execute(
+                "INSERT INTO research_citations (experiment_id, file_path, source_url, label, line_number, snippet)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    experiment_id,
+                    citation.file_path,
+                    citation.source_url,
+                    citation.label,
+                    citation.line_number as i64,
+                    citation.snippet,
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn load_research_artifacts(
+        &self,
+        experiment_id: i64,
+    ) -> Result<Option<ResearchArtifacts>, PersistError> {
+        let mut source_stmt = self.conn.prepare(
+            "SELECT url, final_url, host, label, title, citation_count, verified, status_code, fetch_error
+             FROM research_sources
+             WHERE experiment_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let source_rows = source_stmt.query_map(params![experiment_id], |row| {
+            Ok(ResearchSource {
+                url: row.get(0)?,
+                final_url: row.get(1)?,
+                host: row.get(2)?,
+                label: row.get(3)?,
+                title: row.get(4)?,
+                citation_count: row.get::<_, i64>(5)? as u32,
+                verified: row.get::<_, i64>(6)? != 0,
+                status_code: row.get::<_, Option<i64>>(7)?.map(|value| value as u16),
+                fetch_error: row.get(8)?,
+            })
+        })?;
+
+        let mut sources = Vec::new();
+        for row in source_rows {
+            sources.push(row?);
+        }
+
+        let mut citation_stmt = self.conn.prepare(
+            "SELECT file_path, source_url, label, line_number, snippet
+             FROM research_citations
+             WHERE experiment_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let citation_rows = citation_stmt.query_map(params![experiment_id], |row| {
+            Ok(ResearchCitation {
+                file_path: row.get(0)?,
+                source_url: row.get(1)?,
+                label: row.get(2)?,
+                line_number: row.get::<_, i64>(3)? as u32,
+                snippet: row.get(4)?,
+            })
+        })?;
+
+        let mut citations = Vec::new();
+        for row in citation_rows {
+            citations.push(row?);
+        }
+
+        if sources.is_empty() && citations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(ResearchArtifacts { sources, citations }))
+        }
     }
 }
 
@@ -392,6 +524,26 @@ mod tests {
             }],
             weighted_total: 0.8,
             duration_ms: 12,
+            research: Some(ResearchArtifacts {
+                sources: vec![ResearchSource {
+                    url: "https://sqlite.org/index.html".into(),
+                    final_url: Some("https://sqlite.org/index.html".into()),
+                    host: Some("sqlite.org".into()),
+                    label: Some("SQLite docs".into()),
+                    title: Some("SQLite Home Page".into()),
+                    citation_count: 1,
+                    verified: true,
+                    status_code: Some(200),
+                    fetch_error: None,
+                }],
+                citations: vec![ResearchCitation {
+                    file_path: "docs/research.md".into(),
+                    source_url: "https://sqlite.org/index.html".into(),
+                    label: Some("SQLite docs".into()),
+                    line_number: 3,
+                    snippet: "See [SQLite docs](https://sqlite.org/index.html).".into(),
+                }],
+            }),
         }
     }
 
@@ -422,12 +574,26 @@ mod tests {
         let csv = std::fs::read_to_string(&csv_path).expect("csv export should exist");
 
         assert!(json.contains("\"blueprint_name\": \"example\""));
+        assert!(json.contains("sqlite.org"));
         assert!(csv.contains("example"));
+        assert!(csv.contains("sqlite.org"));
 
-        let proposals = persistence.recent_proposals(1).expect("proposals should load");
+        let proposals = persistence
+            .recent_proposals(1)
+            .expect("proposals should load");
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].file_patches.len(), 1);
         assert_eq!(proposals[0].file_patches[0].path, "src/lib.rs");
+
+        let experiments = persistence
+            .recent_experiments(1)
+            .expect("experiments should load");
+        let research = experiments[0]
+            .research
+            .as_ref()
+            .expect("research metadata should persist");
+        assert_eq!(research.sources.len(), 1);
+        assert_eq!(research.citations.len(), 1);
 
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(json_path);

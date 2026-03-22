@@ -1,0 +1,45 @@
+[blueprint]
+name = "product-builder"
+version = "1.0"
+description = "Build and evolve an entire software application with product strategy, implementation, and verification working as one loop."
+
+[domain]
+repo_path = "."
+target_files = ["src/**/*", "crates/**/*", "apps/**/*", "packages/**/*", "web/src/**/*", "docs/**/*"]
+language = "application"
+
+[constraints]
+max_iterations = 80
+timeout_seconds = 600
+require_tests_pass = true
+min_improvement = 0.015
+
+[metrics]
+metrics = [
+    { name = "correctness", weight = 0.3, direction = "maximize", description = "Changes should work correctly and avoid regressions." },
+    { name = "product_coherence", weight = 0.2, direction = "maximize", description = "Features should align with the intended product flow and user goals." },
+    { name = "maintainability", weight = 0.2, direction = "maximize", description = "The resulting system should stay understandable and easy to change." },
+    { name = "ux_quality", weight = 0.15, direction = "maximize", description = "The user experience should feel intentional, usable, and polished." },
+    { name = "shipping_readiness", weight = 0.15, direction = "maximize", description = "The work should move the application closer to a shippable state." },
+]
+
+[agents]
+council_size = 4
+debate_rounds = 3
+agents = [
+    { name = "product_strategist", role = "Product Strategist", system_prompt = "You define product scope, user value, workflow clarity, and delivery priorities for the application as a whole.", model = "llama3" },
+    { name = "systems_architect", role = "Systems Architect", system_prompt = "You shape architecture, module boundaries, and long-term technical coherence for the product.", model = "llama3" },
+    { name = "implementer", role = "Implementer", system_prompt = "You turn the council plan into safe, concrete changes across frontend, backend, and supporting assets.", model = "llama3" },
+    { name = "reviewer", role = "Release Reviewer", system_prompt = "You challenge regressions, unfinished edges, missing tests, and weak product decisions before changes are accepted.", model = "llama3" },
+]
+
+[models]
+assignment = "explicit"
+models = [
+    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.55, max_tokens = 3072, requests_per_minute = 45 },
+]
+
+[library]
+kind = "template"
+setup_required = true
+template = "product_builder"

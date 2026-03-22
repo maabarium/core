@@ -13,20 +13,52 @@ The current implementation includes:
 - a council-driven engine loop that generates proposals through configured LLM providers
 - git worktree application before evaluation and promotion
 - keychain-backed API key storage
-- a native `eframe` / `egui` console that tails shared tracing logs and reads live experiment metrics from SQLite
+- a Tauri desktop console that tails shared tracing logs and reads live experiment metrics from SQLite
 - blueprint-driven model routing with `explicit` and `round_robin` assignment modes
 
 ## Workspace
 
 - `crates/maabarium-core` — engine, evaluators, git manager, persistence, export
 - `crates/maabarium-cli` — command-line interface for running, inspecting, and exporting experiments
-- `crates/maabarium-app` — native Phase 3 console built with `eframe` / `egui`
+- `crates/maabarium-desktop` — Tauri desktop console with the web UI and native shell
 
-## Current Phases
+## Current Status
 
-- **Phase 3** — desktop console shell
-- **Phase 4** — sandbox scaffolding with code and LoRA evaluators
-- **Phase 5** — OSS launch basics: README, CI, blueprint gallery, export
+The repository has a working core runtime and Tauri desktop console.
+
+Implemented today:
+
+- council-driven proposal generation and keep-winner engine loop
+- git-backed application, evaluation, persistence, and promotion/revert flow
+- keychain-backed provider secret storage
+- Tauri desktop console with live score, history, diff, and log views
+- blueprint-driven model routing with `explicit` and `round_robin` assignment modes
+- Wasmtime-backed sandbox policy validation and subprocess-based code evaluation
+
+Remaining closure work is tracked in [`.dev/implementation-remaining-items.md`](.dev/implementation-remaining-items.md).
+
+## Desktop Packaging
+
+The desktop application is the Tauri project in `crates/maabarium-desktop`.
+
+Current supported packaging/distribution path:
+
+```bash
+cd crates/maabarium-desktop && pnpm tauri build
+```
+
+Expected macOS bundle output:
+
+```text
+target/release/bundle/macos
+```
+
+Runtime data remains external to the binary and is expected at:
+
+- `data/maabarium.db`
+- `data/maabarium.log`
+
+See [`docs/DESKTOP_PACKAGING.md`](docs/DESKTOP_PACKAGING.md) for the current release expectations and deferred packaging work.
 
 ## Quick Start
 
@@ -66,21 +98,26 @@ cargo run -p maabarium-cli -- keys delete openai
 ## Blueprint Gallery
 
 - `blueprints/example.toml` — basic optimizer example
-- `blueprints/creator-buddy-prompts.toml` — prompt optimization workflow
-- `blueprints/rust-code-quality.toml` — Rust code quality loop
-- `blueprints/lora-adapter.toml` — LoRA adapter packaging / evaluation workflow
+- `blueprints/prompt-improvement.toml` — generic prompt improvement workflow
+- `blueprints/code-quality.toml` — generic code quality loop
+- `blueprints/lora-adapter.toml` — external LoRA adapter artifact validation workflow with a reproducibility manifest
 
 See:
 
 - [`docs/BLUEPRINT_SPEC.md`](docs/BLUEPRINT_SPEC.md)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/DESKTOP_PACKAGING.md`](docs/DESKTOP_PACKAGING.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [`SECURITY.md`](SECURITY.md)
+- [`.dev/implementation-parity.md`](.dev/implementation-parity.md)
+- [`.dev/implementation-remaining-items.md`](.dev/implementation-remaining-items.md)
 
 ## Validation
 
 Targeted validation commands used in this repository:
 
 ```bash
-cargo test -p maabarium-app
 cargo build
 cargo test -p maabarium-core --test engine_loop
+cd crates/maabarium-desktop && pnpm build
 ```
