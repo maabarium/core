@@ -83,6 +83,7 @@ agents = [
 # ─── Models ──────────────────────────────────────────────────────────────────
 
 [models]
+assignment = "explicit"          # "explicit" | "round_robin"
 models = [
     {
         name        = "llama3",
@@ -90,6 +91,7 @@ models = [
         endpoint    = "http://localhost:11434",
         temperature = 0.7,
         max_tokens  = 2048,
+        requests_per_minute = 60,
         # api_key_env = "OPENAI_API_KEY"           # optional; env var name for key
     },
     # Add more models for multi-LLM round-robin:
@@ -102,77 +104,84 @@ models = [
 
 ### `[blueprint]`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | ✓ | Unique identifier; used as the key in the database |
-| `version` | string | ✓ | Semver string (informational only) |
-| `description` | string | ✓ | Human-readable description |
+| Field         | Type   | Required | Description                                        |
+| ------------- | ------ | -------- | -------------------------------------------------- |
+| `name`        | string | ✓        | Unique identifier; used as the key in the database |
+| `version`     | string | ✓        | Semver string (informational only)                 |
+| `description` | string | ✓        | Human-readable description                         |
 
 ### `[domain]`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `repo_path` | string | ✓ | Path to the git repository being optimized. `"."` = current directory |
-| `target_files` | array of strings | ✓ | Glob patterns for files the agent may modify |
-| `language` | string | ✓ | Programming language hint (used by evaluators) |
+| Field          | Type             | Required | Description                                                           |
+| -------------- | ---------------- | -------- | --------------------------------------------------------------------- |
+| `repo_path`    | string           | ✓        | Path to the git repository being optimized. `"."` = current directory |
+| `target_files` | array of strings | ✓        | Glob patterns for files the agent may modify                          |
+| `language`     | string           | ✓        | Programming language hint (used by evaluators)                        |
 
 ### `[constraints]`
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `max_iterations` | integer | ✓ | — | Hard cap on experiment count. Must be > 0 |
-| `timeout_seconds` | integer | ✓ | — | Per-experiment timeout in seconds |
-| `require_tests_pass` | bool | ✓ | — | Evaluator should check that tests pass |
-| `min_improvement` | float | ✓ | — | Minimum weighted score delta to promote a branch (0–1) |
+| Field                | Type    | Required | Default | Description                                            |
+| -------------------- | ------- | -------- | ------- | ------------------------------------------------------ |
+| `max_iterations`     | integer | ✓        | —       | Hard cap on experiment count. Must be > 0              |
+| `timeout_seconds`    | integer | ✓        | —       | Per-experiment timeout in seconds                      |
+| `require_tests_pass` | bool    | ✓        | —       | Evaluator should check that tests pass                 |
+| `min_improvement`    | float   | ✓        | —       | Minimum weighted score delta to promote a branch (0–1) |
 
 ### `[metrics]`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `metrics` | array of MetricDef | ✓ | Metric definitions. Weights must sum to 1.0 |
+| Field     | Type               | Required | Description                                 |
+| --------- | ------------------ | -------- | ------------------------------------------- |
+| `metrics` | array of MetricDef | ✓        | Metric definitions. Weights must sum to 1.0 |
 
 **MetricDef fields:**
 
-| Field | Type | Values | Description |
-|-------|------|--------|-------------|
-| `name` | string | any | Metric identifier |
-| `weight` | float | 0–1 | Contribution to `weighted_total` |
-| `direction` | string | `"maximize"` \| `"minimize"` | Whether higher or lower is better |
-| `description` | string | any | Prompt text sent to the LLM evaluator |
+| Field         | Type   | Values                       | Description                           |
+| ------------- | ------ | ---------------------------- | ------------------------------------- |
+| `name`        | string | any                          | Metric identifier                     |
+| `weight`      | float  | 0–1                          | Contribution to `weighted_total`      |
+| `direction`   | string | `"maximize"` \| `"minimize"` | Whether higher or lower is better     |
+| `description` | string | any                          | Prompt text sent to the LLM evaluator |
 
 ### `[agents]`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `council_size` | integer | ✓ | Number of agents that will propose simultaneously |
-| `debate_rounds` | integer | ✓ | Cross-critique rounds between proposals |
-| `agents` | array of AgentDef | ✓ | Agent definitions |
+| Field           | Type              | Required | Description                                       |
+| --------------- | ----------------- | -------- | ------------------------------------------------- |
+| `council_size`  | integer           | ✓        | Number of agents that will propose simultaneously |
+| `debate_rounds` | integer           | ✓        | Cross-critique rounds between proposals           |
+| `agents`        | array of AgentDef | ✓        | Agent definitions                                 |
 
 **AgentDef fields:**
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | ✓ | Display name |
-| `role` | string | ✓ | Short role label |
-| `system_prompt` | string | ✓ | Injected as the system message for every LLM call |
-| `model` | string | ✓ | References a model `name` in `[models].models` |
+| Field           | Type   | Required | Description                                       |
+| --------------- | ------ | -------- | ------------------------------------------------- |
+| `name`          | string | ✓        | Display name                                      |
+| `role`          | string | ✓        | Short role label                                  |
+| `system_prompt` | string | ✓        | Injected as the system message for every LLM call |
+| `model`         | string | ✓        | References a model `name` in `[models].models`    |
 
 ### `[models]`
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `models` | array of ModelDef | ✓ | LLM model definitions |
+| Field        | Type              | Required | Description                                   |
+| ------------ | ----------------- | -------- | --------------------------------------------- |
+| `assignment` | string            | —        | Routing mode: `"explicit"` or `"round_robin"` |
+| `models`     | array of ModelDef | ✓        | LLM model definitions                         |
 
 **ModelDef fields:**
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | ✓ | Reference name used by agents |
-| `provider` | string | ✓ | `"ollama"` or `"openai"` (OpenAI-compatible) |
-| `endpoint` | string | ✓ | Base URL of the LLM API |
-| `temperature` | float | ✓ | Sampling temperature (0.0–1.0) |
-| `max_tokens` | integer | ✓ | Maximum tokens per completion |
-| `api_key_env` | string | — | Environment variable name holding the API key |
+| Field                 | Type    | Required | Description                                      |
+| --------------------- | ------- | -------- | ------------------------------------------------ |
+| `name`                | string  | ✓        | Reference name used by agents                    |
+| `provider`            | string  | ✓        | `"ollama"` or `"openai"` (OpenAI-compatible)     |
+| `endpoint`            | string  | ✓        | Base URL of the LLM API                          |
+| `temperature`         | float   | ✓        | Sampling temperature (0.0–1.0)                   |
+| `max_tokens`          | integer | ✓        | Maximum tokens per completion                    |
+| `api_key_env`         | string  | —        | Environment variable name holding the API key    |
+| `requests_per_minute` | integer | —        | Optional per-model pacing limit used by the pool |
+
+### Model Routing
+
+- `assignment = "explicit"`: each agent uses the model named in its `model` field.
+- `assignment = "round_robin"`: the runtime rotates requests across the configured model list through `ModelPool`.
 
 ## Validation Rules
 
@@ -226,9 +235,10 @@ agents = [
 ]
 
 [models]
+assignment = "explicit"
 models = [
     { name = "qwen", provider = "ollama", endpoint = "http://localhost:11434",
-      temperature = 0.7, max_tokens = 1024 },
+    temperature = 0.7, max_tokens = 1024, requests_per_minute = 60 },
 ]
 ```
 

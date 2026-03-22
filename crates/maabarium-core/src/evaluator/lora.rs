@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use tracing::instrument;
 
 use crate::blueprint::MetricDef;
 use crate::error::EvalError;
@@ -71,6 +72,11 @@ impl LoraEvaluator {
 
 #[async_trait]
 impl Evaluator for LoraEvaluator {
+    #[instrument(
+        name = "lora_evaluator_evaluate",
+        skip(self, proposal),
+        fields(iteration = iteration, patch_count = proposal.file_patches.len())
+    )]
     async fn evaluate(
         &self,
         proposal: &Proposal,
@@ -112,7 +118,7 @@ impl Evaluator for LoraEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_manager::{FilePatch, Proposal};
+    use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
 
     #[tokio::test]
     async fn rewards_adapter_metadata_presence() {
@@ -130,15 +136,18 @@ mod tests {
                     file_patches: vec![
                         FilePatch {
                             path: "adapter/model.safetensors".into(),
-                            content: "weights".into(),
+                            operation: FilePatchOperation::Create,
+                            content: Some("weights".into()),
                         },
                         FilePatch {
                             path: "adapter/adapter_config.json".into(),
-                            content: "{}".into(),
+                            operation: FilePatchOperation::Create,
+                            content: Some("{}".into()),
                         },
                         FilePatch {
                             path: "README.md".into(),
-                            content: "# Adapter".into(),
+                            operation: FilePatchOperation::Create,
+                            content: Some("# Adapter".into()),
                         },
                     ],
                 },

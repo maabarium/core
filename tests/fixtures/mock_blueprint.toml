@@ -28,5 +28,5 @@ agents = [
 
 [models]
 models = [
-    { name = "mock", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.5, max_tokens = 128 },
+    { name = "mock", provider = "mock", endpoint = "http://localhost:11434", temperature = 0.5, max_tokens = 128 },
 ]

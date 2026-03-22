@@ -10,7 +10,7 @@ Maabarium is a Rust-native, local-first continuous improvement engine inspired b
 2. **Pure Rust control plane** — Tokio async runtime, no Python in the orchestration layer
 3. **Autoresearch keep-winner loop** — propose → apply → evaluate → keep/revert
 4. **Generalized domains** — pluggable Evaluator trait, not ML-only
-5. **Beautiful desktop UX** — Tauri native app with live dashboards (Phase 3)
+5. **Beautiful desktop UX** — native `eframe` / `egui` console with live dashboards (Phase 3)
 6. **Future-proof** — MIT license, plugin architecture
 
 ## Crate Structure
@@ -20,10 +20,10 @@ maabarium/
 ├── crates/
 │   ├── maabarium-core/    # Engine, agents, git, LLM, evaluator, persistence
 │   ├── maabarium-cli/     # Terminal CLI binary (Phase 1)
-│   └── maabarium-app/     # Tauri desktop app (Phase 3 — placeholder)
+│   └── maabarium-app/     # Native egui desktop console (Phase 3)
 ```
 
-The workspace is split so that `maabarium-core` can be built and tested without pulling in the heavy Tauri/WebView dependencies.
+The workspace is split so that `maabarium-core` can be built and tested independently of the native desktop shell.
 
 ## Core Loop (`engine.rs`)
 
@@ -43,6 +43,7 @@ for iteration in 1..=max_iterations {
 ```
 
 Key design decisions:
+
 - `CancellationToken` (from `tokio-util`) drives graceful shutdown on Ctrl-C
 - Every fallible step uses `continue` with a `tracing::warn!` — no panics in production paths
 - `tokio::time::timeout` enforces per-experiment wall-clock limits
@@ -50,17 +51,17 @@ Key design decisions:
 
 ## Module Guide
 
-| Module | Responsibility |
-|--------|---------------|
-| `blueprint` | TOML config parsing + validation |
-| `engine` | Keep-winner loop orchestration |
-| `agent` | Single Agent + Council (multi-agent debate) |
-| `git_manager` | git2 operations, all wrapped in `spawn_blocking` |
-| `llm/` | LLMProvider trait, Ollama backend, OpenAI-compat backend, ModelPool |
-| `evaluator/` | Evaluator trait, ExperimentResult, PromptEvaluator |
-| `metrics` | Weighted scoring, improvement detection, normalization |
-| `persistence` | SQLite read/write (WAL mode, parameterised queries) |
-| `error` | Typed error enums via `thiserror` |
+| Module        | Responsibility                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| `blueprint`   | TOML config parsing + validation                                                                 |
+| `engine`      | Keep-winner loop orchestration                                                                   |
+| `agent`       | Single Agent + Council (multi-agent debate)                                                      |
+| `git_manager` | git2 operations, all wrapped in `spawn_blocking`                                                 |
+| `llm/`        | LLMProvider trait, Ollama backend, OpenAI-compat backend, ModelPool with routing + rate limiting |
+| `evaluator/`  | Evaluator trait, ExperimentResult, PromptEvaluator                                               |
+| `metrics`     | Weighted scoring, improvement detection, normalization                                           |
+| `persistence` | SQLite read/write (WAL mode, parameterised queries)                                              |
+| `error`       | Typed error enums via `thiserror`                                                                |
 
 ## git2 / Async Mismatch
 
@@ -80,11 +81,14 @@ pub trait LLMProvider: Send + Sync {
 ```
 
 Implementations:
+
 - `OllamaProvider` — calls Ollama REST API (`POST /api/generate`) via `reqwest`
 - `OpenAICompatProvider` — generic OpenAI-compatible endpoint (OpenAI, Groq, Anthropic)
-- `ModelPool` — round-robin across multiple providers
+- `ModelPool` — wraps one or more providers, enforces per-model request pacing, and supports `explicit` or `round_robin` blueprint assignment
 
 No external `ollama-rs` crate is used; the Ollama REST API is called directly.
+
+When blueprints use `assignment = "explicit"`, each agent receives a pool containing just its configured model. When they use `assignment = "round_robin"`, the pool rotates across the entire configured model list.
 
 ## Evaluator Trait
 
@@ -100,30 +104,38 @@ pub trait Evaluator: Send + Sync {
 ## Persistence (SQLite)
 
 Three tables:
+
 - `experiments` — one row per experiment run
 - `metrics` — one row per metric dimension per experiment
 - `proposals` — proposal metadata
 
 SQLite runs in WAL mode for concurrent reads from a future dashboard while the engine writes.
 
+The default database and log paths are:
+
+- `data/maabarium.db`
+- `data/maabarium.log`
+
+The egui console reads both sources to render live score, duration, and token-usage cards.
+
 ## Security Model
 
-| Threat | Mitigation |
-|--------|-----------|
-| Agent writes to arbitrary paths | Evaluator sandboxing in Phase 4 (wasmtime WASI or temp dir with bind mounts) |
-| API key leakage | `keyring` crate → OS keychain. Never logged, never serialized to disk |
-| Runaway resource usage | Per-experiment timeout via `tokio::time::timeout` + `max_iterations` cap in blueprint |
-| Supply chain attacks | `deny.toml` for `cargo-deny`: audit CVEs, licenses, duplicate crates |
-| Git history pollution | Experiment branches under `experiment/` prefix; auto-cleanup planned |
-| SQL injection | All queries use `rusqlite::params![]` parameterised binding |
+| Threat                          | Mitigation                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| Agent writes to arbitrary paths | Evaluator sandboxing in Phase 4 (wasmtime WASI or temp dir with bind mounts)          |
+| API key leakage                 | `keyring` crate → OS keychain. Never logged, never serialized to disk                 |
+| Runaway resource usage          | Per-experiment timeout via `tokio::time::timeout` + `max_iterations` cap in blueprint |
+| Supply chain attacks            | `deny.toml` for `cargo-deny`: audit CVEs, licenses, duplicate crates                  |
+| Git history pollution           | Experiment branches under `experiment/` prefix; auto-cleanup planned                  |
+| SQL injection                   | All queries use `rusqlite::params![]` parameterised binding                           |
 
 ## Phased Roadmap
 
-| Phase | Goal | Key deliverables |
-|-------|------|-----------------|
-| 0 | Foundation | Workspace, SQLite schema, error types, tracing |
-| 1 | The Loop | Blueprint parsing, git manager, LLM provider, engine, CLI |
-| 2 | Multi-agent | Council debate, multi-LLM pool, rate limiting, keyring |
-| 3 | Desktop app | Tauri dashboard, Blueprint Wizard, live metrics |
-| 4 | Sandboxing | wasmtime WASI, code evaluator, LoRA evaluator |
-| 5 | OSS launch | README, cargo-deny CI, blueprint gallery, export |
+| Phase | Goal        | Key deliverables                                          |
+| ----- | ----------- | --------------------------------------------------------- |
+| 0     | Foundation  | Workspace, SQLite schema, error types, tracing            |
+| 1     | The Loop    | Blueprint parsing, git manager, LLM provider, engine, CLI |
+| 2     | Multi-agent | Council debate, multi-LLM pool, rate limiting, keyring    |
+| 3     | Desktop app | egui console shell, live metrics, shared log tail         |
+| 4     | Sandboxing  | wasmtime WASI, code evaluator, LoRA evaluator             |
+| 5     | OSS launch  | README, cargo-deny CI, blueprint gallery, export          |

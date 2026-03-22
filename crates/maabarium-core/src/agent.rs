@@ -1,8 +1,42 @@
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+
+use serde::Deserialize;
+
 use crate::error::LLMError;
 use crate::llm::{LLMProvider, CompletionRequest};
-use crate::git_manager::Proposal;
+use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
 use crate::blueprint::{AgentDef, MetricDef};
+
+const MAX_CONTEXT_FILES: usize = 3;
+const MAX_FILE_CHARS: usize = 4_000;
+
+#[derive(Debug, Clone)]
+struct FileContext {
+    path: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProposalPayload {
+    summary: String,
+    file_patches: Vec<DiffPatchPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiffPatchPayload {
+    path: String,
+    operation: FilePatchOperation,
+    unified_diff: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffApplyResult {
+    content: Option<String>,
+    had_trailing_newline: bool,
+}
 
 pub struct Agent {
     def: AgentDef,
@@ -17,6 +51,9 @@ impl Agent {
     pub async fn propose(
         &self,
         context: &str,
+        repo_path: &str,
+        target_files: &[String],
+        language: &str,
         metrics: &[MetricDef],
     ) -> Result<Proposal, LLMError> {
         let metrics_desc = metrics
@@ -24,9 +61,45 @@ impl Agent {
             .map(|m| format!("- {} ({}): {}", m.name, m.direction, m.description))
             .collect::<Vec<_>>()
             .join("\n");
+        let targets_desc = if target_files.is_empty() {
+            "- no explicit targets".to_owned()
+        } else {
+            target_files
+                .iter()
+                .map(|target| format!("- {target}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let file_contexts = collect_file_contexts(repo_path, target_files, language)?;
+        let allowed_paths = file_contexts
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<HashSet<_>>();
+        let files_desc = if file_contexts.is_empty() {
+            "No existing target files were found. Return an empty file_patches array and explain why in summary.".to_owned()
+        } else {
+            file_contexts
+                .iter()
+                .map(|file| {
+                    format!(
+                        "<file path=\"{}\">\n{}\n</file>",
+                        file.path,
+                        file.content,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
         let prompt = format!(
-            "Context:\n{context}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
-             Propose a specific, actionable improvement. Describe the change concisely."
+            "Context:\n{context}\n\nTarget files:\n{targets_desc}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
+             Existing file contents:\n{files_desc}\n\n\
+             Return valid JSON with this exact shape and no markdown fences:\n\
+              {{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{ \"path\": \"relative/path\", \"operation\": \"modify\", \"unified_diff\": \"@@ -1,1 +1,2 @@\\n old line\\n+new line\" }}\n  ]\n}}\n\n\
+              Use operation=create for new files, modify for existing files, delete for removals.\n\
+              For create/delete, still provide a unified diff against the empty or prior file.\n\
+              Each patch must target exactly one safe relative path.\n\
+              Do not return full-file replacements. Do not invent paths outside the target patterns.\n\
+               Keep changes narrow and preserve valid {language} syntax."
         );
         let req = CompletionRequest {
             system: self.def.system_prompt.clone(),
@@ -35,10 +108,7 @@ impl Agent {
             max_tokens: 512,
         };
         let resp = self.llm.complete(&req).await?;
-        Ok(Proposal {
-            summary: resp.content.trim().to_owned(),
-            file_patches: vec![],
-        })
+        parse_proposal_payload(&resp.content, &file_contexts, &allowed_paths, target_files)
     }
 
     pub async fn debate(
@@ -84,6 +154,9 @@ impl Council {
     pub async fn run(
         &self,
         context: &str,
+        repo_path: &str,
+        target_files: &[String],
+        language: &str,
         metrics: &[MetricDef],
     ) -> Result<Proposal, LLMError> {
         if self.agents.is_empty() {
@@ -92,7 +165,10 @@ impl Council {
 
         let mut proposals = Vec::new();
         for agent in &self.agents {
-            match agent.propose(context, metrics).await {
+            match agent
+                .propose(context, repo_path, target_files, language, metrics)
+                .await
+            {
                 Ok(p) => proposals.push(p),
                 Err(e) => {
                     tracing::warn!("Agent '{}' failed to propose: {e}", agent.name());
@@ -129,5 +205,615 @@ impl Council {
         }
 
         Ok(proposals.remove(0))
+    }
+}
+
+fn parse_proposal_payload(
+    raw_response: &str,
+    file_contexts: &[FileContext],
+    allowed_paths: &HashSet<String>,
+    target_files: &[String],
+) -> Result<Proposal, LLMError> {
+    let json = extract_json_object(raw_response)?;
+    let payload: ProposalPayload = serde_json::from_str(&json)
+        .map_err(|error| LLMError::InvalidResponse(format!("Invalid proposal JSON: {error}")))?;
+    let file_lookup = file_contexts
+        .iter()
+        .map(|file| (file.path.as_str(), file.content.as_str()))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    if payload.summary.trim().is_empty() {
+        return Err(LLMError::InvalidResponse(
+            "Proposal summary cannot be empty".to_owned(),
+        ));
+    }
+
+    let mut file_patches = Vec::with_capacity(payload.file_patches.len());
+    for patch in &payload.file_patches {
+        if patch.path.trim().is_empty() {
+            return Err(LLMError::InvalidResponse(
+                "Proposal patch path cannot be empty".to_owned(),
+            ));
+        }
+        let patch_path = Path::new(&patch.path);
+        if patch_path.is_absolute()
+            || patch_path
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(LLMError::InvalidResponse(format!(
+                "Proposal patch path '{}' is not safe",
+                patch.path
+            )));
+        }
+
+        let file_exists = allowed_paths.contains(&patch.path);
+        match patch.operation {
+            FilePatchOperation::Modify | FilePatchOperation::Delete if !file_exists => {
+                return Err(LLMError::InvalidResponse(format!(
+                    "Proposal patch path '{}' must already exist for {:?} operations",
+                    patch.path, patch.operation
+                )));
+            }
+            FilePatchOperation::Create if file_exists => {
+                return Err(LLMError::InvalidResponse(format!(
+                    "Proposal patch path '{}' already exists and cannot be created again",
+                    patch.path
+                )));
+            }
+            FilePatchOperation::Create if !path_matches_targets(target_files, &patch.path) => {
+                return Err(LLMError::InvalidResponse(format!(
+                    "Proposal patch path '{}' is outside the configured target patterns",
+                    patch.path
+                )));
+            }
+            _ => {}
+        }
+
+        let diff = patch.unified_diff.as_deref().ok_or_else(|| {
+            LLMError::InvalidResponse(format!(
+                "Proposal patch '{}' is missing unified_diff",
+                patch.path
+            ))
+        })?;
+        let original_content = file_lookup.get(patch.path.as_str()).copied();
+        let result = apply_unified_diff(original_content, diff, patch.operation).map_err(|error| {
+            LLMError::InvalidResponse(format!(
+                "Unified diff validation failed for '{}': {error}",
+                patch.path
+            ))
+        })?;
+        file_patches.push(FilePatch {
+            path: patch.path.clone(),
+            operation: patch.operation,
+            content: result.content,
+        });
+    }
+
+    Ok(Proposal {
+        summary: payload.summary.trim().to_owned(),
+        file_patches,
+    })
+}
+
+fn apply_unified_diff(
+    original: Option<&str>,
+    diff: &str,
+    operation: FilePatchOperation,
+) -> Result<DiffApplyResult, String> {
+    let had_original = original.is_some();
+    let original = original.unwrap_or("");
+    let (original_lines, original_has_trailing_newline) = split_preserving_eof(original);
+    let diff_lines = diff.lines().collect::<Vec<_>>();
+    let mut output = Vec::new();
+    let mut source_index = 0usize;
+    let mut line_index = 0usize;
+    let mut saw_hunk = false;
+    let mut result_has_trailing_newline = original_has_trailing_newline;
+
+    while line_index < diff_lines.len() {
+        let line = diff_lines[line_index];
+        if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("diff --git") {
+            line_index += 1;
+            continue;
+        }
+        if !line.starts_with("@@") {
+            return Err(format!("unexpected diff line '{}'", line));
+        }
+        saw_hunk = true;
+
+        let (old_start, expected_old, expected_new) = parse_hunk_header(line)?;
+        let target_index = if old_start == 0 { 0 } else { old_start - 1 };
+        if target_index < source_index {
+            return Err("diff hunks overlap or go backwards".to_owned());
+        }
+        while source_index < target_index {
+            output.push(original_lines[source_index].clone());
+            source_index += 1;
+        }
+
+        line_index += 1;
+        let mut consumed_old = 0usize;
+        let mut consumed_new = 0usize;
+        let mut last_line_had_no_newline = false;
+        let mut last_prefix = None;
+        while line_index < diff_lines.len() {
+            let hunk_line = diff_lines[line_index];
+            if hunk_line.starts_with("@@") {
+                break;
+            }
+            if hunk_line.starts_with("--- ") || hunk_line.starts_with("+++ ") || hunk_line.starts_with("diff --git") {
+                break;
+            }
+            if hunk_line == "\\ No newline at end of file" {
+                if last_prefix.is_none() {
+                    return Err("newline marker must follow a diff line".to_owned());
+                }
+                last_line_had_no_newline = true;
+                line_index += 1;
+                continue;
+            }
+
+            let (prefix, text) = hunk_line.split_at(1);
+            if last_line_had_no_newline {
+                match last_prefix {
+                    Some(' ') => {
+                        result_has_trailing_newline = false;
+                    }
+                    Some('-') => {}
+                    Some('+') => {
+                        result_has_trailing_newline = false;
+                    }
+                    _ => {}
+                }
+                last_line_had_no_newline = false;
+            }
+            match prefix {
+                " " => {
+                    let current = original_lines.get(source_index).ok_or_else(|| {
+                        "context line referenced beyond end of file".to_owned()
+                    })?;
+                    if current != text {
+                        return Err(format!(
+                            "context mismatch: expected '{}', found '{}'",
+                            text, current
+                        ));
+                    }
+                    output.push(current.clone());
+                    source_index += 1;
+                    consumed_old += 1;
+                    consumed_new += 1;
+                }
+                "-" => {
+                    let current = original_lines.get(source_index).ok_or_else(|| {
+                        "removal line referenced beyond end of file".to_owned()
+                    })?;
+                    if current != text {
+                        return Err(format!(
+                            "removal mismatch: expected '{}', found '{}'",
+                            text, current
+                        ));
+                    }
+                    source_index += 1;
+                    consumed_old += 1;
+                }
+                "+" => {
+                    output.push(text.to_owned());
+                    consumed_new += 1;
+                }
+                _ => return Err(format!("unsupported unified diff prefix '{}'", prefix)),
+            }
+            last_prefix = prefix.chars().next();
+            if matches!(last_prefix, Some('+')) {
+                result_has_trailing_newline = true;
+            }
+            line_index += 1;
+        }
+
+        if last_line_had_no_newline {
+            match last_prefix {
+                Some(' ') => {
+                    result_has_trailing_newline = false;
+                }
+                Some('-') => {
+                    result_has_trailing_newline = expected_new == 0;
+                }
+                Some('+') => {
+                    result_has_trailing_newline = false;
+                }
+                _ => {}
+            }
+        }
+
+        if consumed_old != expected_old {
+            return Err(format!(
+                "old-line count mismatch: expected {}, got {}",
+                expected_old, consumed_old
+            ));
+        }
+        if consumed_new != expected_new {
+            return Err(format!(
+                "new-line count mismatch: expected {}, got {}",
+                expected_new, consumed_new
+            ));
+        }
+    }
+
+    if !saw_hunk {
+        return Err("unified diff did not contain any hunks".to_owned());
+    }
+
+    while source_index < original_lines.len() {
+        output.push(original_lines[source_index].clone());
+        source_index += 1;
+    }
+
+    let content = if operation == FilePatchOperation::Delete {
+        if !output.is_empty() {
+            return Err("delete patch must remove the full file content".to_owned());
+        }
+        None
+    } else {
+        let mut result = output.join("\n");
+        if result_has_trailing_newline {
+            result.push('\n');
+        }
+        Some(result)
+    };
+
+    match operation {
+        FilePatchOperation::Create if had_original => {
+            return Err("create patch expected an empty original file".to_owned());
+        }
+        FilePatchOperation::Create if content.as_deref().is_some_and(str::is_empty) => {
+            return Err("create patch must add file content".to_owned());
+        }
+        FilePatchOperation::Modify if content.is_none() => {
+            return Err("modify patch cannot delete the file".to_owned());
+        }
+        FilePatchOperation::Delete if !had_original => {
+            return Err("delete patch expected an existing file".to_owned());
+        }
+        _ => {}
+    }
+
+    Ok(DiffApplyResult {
+        content,
+        had_trailing_newline: result_has_trailing_newline,
+    })
+}
+
+fn split_preserving_eof(content: &str) -> (Vec<String>, bool) {
+    if content.is_empty() {
+        return (Vec::new(), false);
+    }
+
+    let has_trailing_newline = content.ends_with('\n');
+    let trimmed = if has_trailing_newline {
+        &content[..content.len() - 1]
+    } else {
+        content
+    };
+
+    let lines = if trimmed.is_empty() {
+        Vec::new()
+    } else {
+        trimmed.split('\n').map(ToOwned::to_owned).collect()
+    };
+
+    (lines, has_trailing_newline)
+}
+
+fn parse_hunk_header(header: &str) -> Result<(usize, usize, usize), String> {
+    let trimmed = header
+        .strip_prefix("@@")
+        .and_then(|value| value.split("@@").next())
+        .map(str::trim)
+        .ok_or_else(|| format!("invalid hunk header '{}'", header))?;
+    let mut parts = trimmed.split_whitespace();
+    let old_range = parts.next().ok_or_else(|| format!("missing old range in '{}'", header))?;
+    let new_range = parts.next().ok_or_else(|| format!("missing new range in '{}'", header))?;
+    let (old_start, old_count) = parse_range(old_range, '-')?;
+    let (_, new_count) = parse_range(new_range, '+')?;
+    Ok((old_start, old_count, new_count))
+}
+
+fn parse_range(range: &str, prefix: char) -> Result<(usize, usize), String> {
+    let value = range
+        .strip_prefix(prefix)
+        .ok_or_else(|| format!("range '{}' is missing prefix '{}'", range, prefix))?;
+    if let Some((start, count)) = value.split_once(',') {
+        Ok((
+            start.parse::<usize>().map_err(|error| format!("invalid start '{}': {error}", start))?,
+            count.parse::<usize>().map_err(|error| format!("invalid count '{}': {error}", count))?,
+        ))
+    } else {
+        Ok((
+            value.parse::<usize>().map_err(|error| format!("invalid start '{}': {error}", value))?,
+            1,
+        ))
+    }
+}
+
+fn extract_json_object(raw_response: &str) -> Result<String, LLMError> {
+    let trimmed = raw_response.trim();
+    let cleaned = if trimmed.starts_with("```") {
+        trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+    } else {
+        trimmed
+    };
+
+    let start = cleaned.find('{').ok_or_else(|| {
+        LLMError::InvalidResponse("Model response did not include a JSON object".to_owned())
+    })?;
+    let end = cleaned.rfind('}').ok_or_else(|| {
+        LLMError::InvalidResponse("Model response did not include a closing JSON brace".to_owned())
+    })?;
+
+    Ok(cleaned[start..=end].to_owned())
+}
+
+fn collect_file_contexts(
+    repo_path: &str,
+    target_files: &[String],
+    language: &str,
+) -> Result<Vec<FileContext>, LLMError> {
+    let repo_root = resolve_repo_root(repo_path)?;
+    let mut candidates = Vec::new();
+    collect_matching_files(&repo_root, &repo_root, target_files, language, &mut candidates)?;
+    candidates.sort();
+    candidates.truncate(MAX_CONTEXT_FILES);
+
+    let mut contexts = Vec::new();
+    for path in candidates {
+        let relative = path
+            .strip_prefix(&repo_root)
+            .map_err(|error| LLMError::Provider(format!("Failed to strip repo prefix: {error}")))?
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let content = fs::read_to_string(&path)
+            .map_err(|error| LLMError::Provider(format!("Failed to read '{}': {error}", relative)))?;
+        let truncated = if content.chars().count() > MAX_FILE_CHARS {
+            content.chars().take(MAX_FILE_CHARS).collect::<String>()
+        } else {
+            content
+        };
+        contexts.push(FileContext {
+            path: relative,
+            content: truncated,
+        });
+    }
+
+    Ok(contexts)
+}
+
+fn resolve_repo_root(repo_path: &str) -> Result<PathBuf, LLMError> {
+    let path = PathBuf::from(repo_path);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|error| LLMError::Provider(format!("Failed to read current dir: {error}")))?
+            .join(path)
+    };
+
+    resolved.canonicalize().map_err(|error| {
+        LLMError::Provider(format!("Failed to resolve repository path '{}': {error}", repo_path))
+    })
+}
+
+fn collect_matching_files(
+    repo_root: &Path,
+    current_dir: &Path,
+    target_files: &[String],
+    language: &str,
+    output: &mut Vec<PathBuf>,
+) -> Result<(), LLMError> {
+    for entry in fs::read_dir(current_dir)
+        .map_err(|error| LLMError::Provider(format!("Failed to read '{}': {error}", current_dir.display())))?
+    {
+        let entry = entry.map_err(|error| LLMError::Provider(format!("Failed to inspect dir entry: {error}")))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| LLMError::Provider(format!("Failed to inspect file type: {error}")))?;
+
+        if file_type.is_dir() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(name.as_ref(), ".git" | "target" | ".idea") {
+                continue;
+            }
+            collect_matching_files(repo_root, &path, target_files, language, output)?;
+            continue;
+        }
+
+        let relative = match path.strip_prefix(repo_root) {
+            Ok(value) => value.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+
+        if !target_files.is_empty() {
+            if !target_files
+                .iter()
+                .any(|pattern| target_pattern_matches(pattern, &relative))
+            {
+                continue;
+            }
+        } else if !is_text_path(&relative, language) {
+            continue;
+        }
+
+        if !is_text_path(&relative, language) {
+            continue;
+        }
+
+        output.push(path);
+    }
+
+    Ok(())
+}
+
+fn target_pattern_matches(pattern: &str, path: &str) -> bool {
+    if pattern == path {
+        return true;
+    }
+
+    if let Some((prefix, suffix)) = pattern.split_once("**") {
+        let suffix = suffix.trim_start_matches('/');
+        let prefix = prefix.trim_end_matches('/');
+        return (prefix.is_empty() || path.starts_with(prefix))
+            && (suffix.is_empty() || path.ends_with(suffix.trim_start_matches('*')));
+    }
+
+    if let Some(extension) = pattern
+        .rsplit('.')
+        .next()
+        .filter(|segment| *segment != pattern)
+    {
+        let prefix = pattern.split('*').next().unwrap_or("");
+        return path.ends_with(&format!(".{extension}"))
+            && (prefix.is_empty() || path.starts_with(prefix));
+    }
+
+    pattern
+        .split('*')
+        .next()
+        .map(|prefix| !prefix.is_empty() && path.starts_with(prefix))
+        .unwrap_or(false)
+}
+
+fn path_matches_targets(target_files: &[String], path: &str) -> bool {
+    if target_files.is_empty() {
+        return false;
+    }
+
+    target_files
+        .iter()
+        .any(|pattern| target_pattern_matches(pattern, path))
+}
+
+fn is_text_path(path: &str, language: &str) -> bool {
+    match language.to_ascii_lowercase().as_str() {
+        "markdown" | "prompt" => path.ends_with(".md"),
+        "lora" => path.ends_with(".json") || path.ends_with("README.md"),
+        _ => path.ends_with(".rs") || path.ends_with(".md") || path.ends_with(".toml"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::MockProvider;
+
+    #[tokio::test]
+    async fn parses_structured_llm_patch_payload() {
+        let repo_root = std::env::temp_dir().join(format!("maabarium-agent-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(repo_root.join("src")).expect("temp repo should be created");
+        fs::write(repo_root.join("src/lib.rs"), "pub fn baseline() {}\n")
+            .expect("source file should be written");
+
+        let agent = Agent::new(
+            AgentDef {
+                name: "engineer".into(),
+                role: "engineer".into(),
+                system_prompt: "Return valid patch payloads".into(),
+                model: "mock".into(),
+            },
+            Arc::new(MockProvider::new("mock")),
+        );
+
+        let proposal = agent
+            .propose(
+                "Improve the baseline function",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["src/**/*.rs".into()],
+                "rust",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            )
+            .await
+            .expect("proposal should parse");
+
+        assert_eq!(proposal.file_patches.len(), 1);
+        assert_eq!(proposal.file_patches[0].path, "src/lib.rs");
+        assert_eq!(proposal.file_patches[0].operation, FilePatchOperation::Modify);
+        assert!(proposal.file_patches[0]
+            .content
+            .as_deref()
+            .expect("content should exist")
+            .contains("maabarium_improvement"));
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn applies_unified_diff_with_validation() {
+        let updated = apply_unified_diff(
+            Some("fn main() {\n    println!(\"old\");\n}\n"),
+            "@@ -1,3 +1,3 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }",
+            FilePatchOperation::Modify,
+        )
+        .expect("diff should apply");
+
+        assert_eq!(
+            updated.content.as_deref(),
+            Some("fn main() {\n    println!(\"new\");\n}\n")
+        );
+        assert!(updated.had_trailing_newline);
+    }
+
+    #[test]
+    fn creates_and_deletes_files_explicitly() {
+        let created = apply_unified_diff(
+            None,
+            "@@ -0,0 +1,2 @@\n+pub fn created() {\n+}\n\\ No newline at end of file",
+            FilePatchOperation::Create,
+        )
+        .expect("create diff should apply");
+        assert_eq!(created.content.as_deref(), Some("pub fn created() {\n}"));
+        assert!(!created.had_trailing_newline);
+
+        let deleted = apply_unified_diff(
+            Some("pub fn old() {}\n"),
+            "@@ -1,1 +0,0 @@\n-pub fn old() {}",
+            FilePatchOperation::Delete,
+        )
+        .expect("delete diff should apply");
+        assert!(deleted.content.is_none());
+    }
+
+    #[test]
+    fn applies_multi_hunk_diffs_and_validates_newline_markers() {
+        let updated = apply_unified_diff(
+            Some("line one\nline two\nline three\nline four\n"),
+            "@@ -1,2 +1,2 @@\n-line one\n+line 1\n line two\n@@ -3,2 +3,2 @@\n line three\n-line four\n+line 4\n\\ No newline at end of file",
+            FilePatchOperation::Modify,
+        )
+        .expect("multi-hunk diff should apply");
+
+        assert_eq!(updated.content.as_deref(), Some("line 1\nline two\nline three\nline 4"));
+        assert!(!updated.had_trailing_newline);
+    }
+
+    #[test]
+    fn rejects_invalid_newline_markers() {
+        let error = apply_unified_diff(
+            Some("hello\n"),
+            "@@ -1,1 +1,1 @@\n\\ No newline at end of file\n-hello\n+hello",
+            FilePatchOperation::Modify,
+        )
+        .expect_err("dangling newline marker should fail");
+
+        assert!(error.contains("newline marker must follow a diff line"));
     }
 }

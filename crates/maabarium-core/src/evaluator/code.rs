@@ -1,16 +1,20 @@
 use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Duration;
+use tracing::instrument;
 
 use crate::blueprint::MetricDef;
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
 
-use super::sandbox::{SandboxSummary, SandboxWorkspace};
+use super::sandbox::{SandboxSummary, SandboxWorkspace, SubprocessRunner};
 use super::{Evaluator, ExperimentResult, MetricScore};
 
 pub struct CodeEvaluator {
     metrics: Vec<MetricDef>,
     target_files: Vec<String>,
     require_tests_pass: bool,
+    repo_path: PathBuf,
 }
 
 impl CodeEvaluator {
@@ -18,12 +22,50 @@ impl CodeEvaluator {
         metrics: Vec<MetricDef>,
         target_files: Vec<String>,
         require_tests_pass: bool,
+        repo_path: impl Into<PathBuf>,
     ) -> Self {
         Self {
             metrics,
             target_files,
             require_tests_pass,
+            repo_path: repo_path.into(),
         }
+    }
+
+    fn test_runner(
+        &self,
+        sandbox_root: &std::path::Path,
+        evaluation_root: &std::path::Path,
+    ) -> Option<SubprocessRunner> {
+        if !self.require_tests_pass {
+            return None;
+        }
+
+        if sandbox_root.join("Cargo.toml").exists() {
+            let mut runner = SubprocessRunner::new(
+                "cargo",
+                vec!["test".into(), "--quiet".into()],
+                Duration::from_secs(180),
+            )
+            .with_env("MAABARIUM_SANDBOX_SUBPROCESS", "1");
+            let target_dir = evaluation_root.join("target");
+            if target_dir.exists() {
+                runner = runner.with_env("CARGO_TARGET_DIR", target_dir.display().to_string());
+            }
+            Some(runner)
+        } else {
+            None
+        }
+    }
+
+    fn evaluation_root(&self) -> PathBuf {
+        resolve_workspace_root(&self.repo_path).unwrap_or_else(|| self.repo_path.clone())
+    }
+
+    fn execution_dir(&self, evaluation_root: &std::path::Path, sandbox_root: &std::path::Path) -> PathBuf {
+        resolve_execution_subdir(&self.repo_path, evaluation_root)
+            .map(|relative| sandbox_root.join(relative))
+            .unwrap_or_else(|| sandbox_root.to_path_buf())
     }
 
     fn target_alignment(&self, proposal: &Proposal) -> f64 {
@@ -87,14 +129,36 @@ impl CodeEvaluator {
 
 #[async_trait]
 impl Evaluator for CodeEvaluator {
+    #[instrument(
+        name = "code_evaluator_evaluate",
+        skip(self, proposal),
+        fields(iteration = iteration, patch_count = proposal.file_patches.len())
+    )]
     async fn evaluate(
         &self,
         proposal: &Proposal,
         iteration: u64,
     ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
-        let sandbox = SandboxWorkspace::new()?;
+        let evaluation_root = self.evaluation_root();
+        let sandbox = if evaluation_root.exists() {
+            SandboxWorkspace::from_repo(&evaluation_root)?
+        } else {
+            SandboxWorkspace::new()?
+        };
         let sandbox_summary = sandbox.materialize(proposal)?;
+        let execution_dir = self.execution_dir(&evaluation_root, sandbox.root());
+        if let Some(runner) = self.test_runner(&execution_dir, &evaluation_root) {
+            let output = runner.run(&execution_dir).await?;
+            if output.status_code != Some(0) {
+                return Err(EvalError::Sandbox(format!(
+                    "sandbox subprocess failed: status={:?} stderr={} stdout={}",
+                    output.status_code,
+                    output.stderr,
+                    output.stdout,
+                )));
+            }
+        }
         let alignment = self.target_alignment(proposal);
 
         let scores = self
@@ -116,6 +180,36 @@ impl Evaluator for CodeEvaluator {
             duration_ms: start.elapsed().as_millis() as u64,
         })
     }
+}
+
+fn resolve_workspace_root(repo_path: &std::path::Path) -> Option<PathBuf> {
+    let mut current = repo_path.canonicalize().ok()?;
+    if current.is_file() {
+        current = current.parent()?.to_path_buf();
+    }
+
+    let mut cursor = Some(current.as_path());
+    while let Some(path) = cursor {
+        let cargo_toml = path.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let contents = std::fs::read_to_string(&cargo_toml).ok()?;
+            if contents.contains("[workspace]") {
+                return Some(path.to_path_buf());
+            }
+        }
+        cursor = path.parent();
+    }
+
+    Some(current)
+}
+
+fn resolve_execution_subdir(repo_path: &std::path::Path, evaluation_root: &std::path::Path) -> Option<PathBuf> {
+    let mut current = repo_path.canonicalize().ok()?;
+    if current.is_file() {
+        current = current.parent()?.parent()?.to_path_buf();
+    }
+
+    current.strip_prefix(evaluation_root).ok().map(PathBuf::from)
 }
 
 fn target_pattern_matches(pattern: &str, path: &str) -> bool {
@@ -141,10 +235,51 @@ fn target_pattern_matches(pattern: &str, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_manager::{FilePatch, Proposal};
+    use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
+
+    #[test]
+    fn resolves_workspace_root_and_package_execution_subdir() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .canonicalize()
+            .expect("manifest dir should canonicalize");
+        let workspace_root = resolve_workspace_root(&manifest_dir)
+            .expect("workspace root should resolve");
+        let execution_subdir = resolve_execution_subdir(&manifest_dir, &workspace_root)
+            .expect("package execution subdir should resolve");
+
+        assert!(workspace_root.join("Cargo.toml").exists());
+        assert_eq!(workspace_root.join(&execution_subdir), manifest_dir);
+        assert_eq!(execution_subdir, PathBuf::from("crates/maabarium-core"));
+    }
+
+    #[test]
+    fn resolves_workspace_root_and_package_execution_subdir_from_file_path() {
+        let source_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs")
+            .canonicalize()
+            .expect("source file should canonicalize");
+        let manifest_dir = source_file
+            .parent()
+            .and_then(|src_dir| src_dir.parent())
+            .expect("crate root should exist")
+            .to_path_buf();
+        let workspace_root = resolve_workspace_root(&source_file)
+            .expect("workspace root should resolve from file path");
+        let execution_subdir = resolve_execution_subdir(&source_file, &workspace_root)
+            .expect("package execution subdir should resolve from file path");
+
+        assert!(workspace_root.join("Cargo.toml").exists());
+        assert_eq!(workspace_root.join(&execution_subdir), manifest_dir);
+        assert_eq!(execution_subdir, PathBuf::from("crates/maabarium-core"));
+    }
 
     #[tokio::test]
     async fn scores_code_proposals_in_range() {
+        if std::env::var_os("MAABARIUM_SANDBOX_SUBPROCESS").is_some() {
+            return;
+        }
+
         let evaluator = CodeEvaluator::new(
             vec![MetricDef {
                 name: "quality".into(),
@@ -154,6 +289,7 @@ mod tests {
             }],
             vec!["src/**/*.rs".into()],
             true,
+            env!("CARGO_MANIFEST_DIR"),
         );
 
         let result = evaluator
@@ -162,7 +298,8 @@ mod tests {
                     summary: "Improve evaluator handling for sandboxed rust files".into(),
                     file_patches: vec![FilePatch {
                         path: "src/lib.rs".into(),
-                        content: "pub fn hello() {}".into(),
+                        operation: FilePatchOperation::Create,
+                        content: Some("pub fn hello() {}".into()),
                     }],
                 },
                 1,

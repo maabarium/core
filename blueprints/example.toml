@@ -1,11 +1,11 @@
 [blueprint]
-name = "example-optimizer"
+name = "example-prompt-lab"
 version = "0.1.0"
-description = "Example blueprint for optimizing code quality"
+description = "Example blueprint for optimizing the Maabarium prompt and council loop"
 
 [domain]
 repo_path = "."
-target_files = ["src/**/*.rs"]
+target_files = ["crates/**/*.rs", "docs/**/*.md"]
 language = "rust"
 
 [constraints]
@@ -25,12 +25,13 @@ metrics = [
 council_size = 3
 debate_rounds = 2
 agents = [
-    { name = "architect", role = "software architect", system_prompt = "You are a senior software architect focused on clean, maintainable code.", model = "llama3" },
-    { name = "optimizer", role = "performance engineer", system_prompt = "You are a performance engineer focused on runtime efficiency.", model = "llama3" },
-    { name = "reviewer", role = "code reviewer", system_prompt = "You are a thorough code reviewer focused on correctness and best practices.", model = "llama3" },
+    { name = "strategist", role = "strategist", system_prompt = "You are a senior software strategist focused on high-signal improvements with measurable upside.", model = "llama3" },
+    { name = "critic", role = "critic", system_prompt = "You are an adversarial reviewer focused on regressions, cost, and failure modes.", model = "llama3" },
+    { name = "engineer", role = "engineer", system_prompt = "You are a pragmatic engineer who turns council direction into concrete, safe file updates.", model = "llama3" },
 ]
 
 [models]
+assignment = "explicit"
 models = [
-    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.7, max_tokens = 2048 },
+    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.7, max_tokens = 2048, requests_per_minute = 60 },
 ]

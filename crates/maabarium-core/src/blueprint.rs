@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use crate::error::BlueprintError;
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelAssignment {
+    #[default]
+    Explicit,
+    RoundRobin,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlueprintMeta {
     pub name: String,
@@ -60,10 +68,14 @@ pub struct ModelDef {
     pub api_key_env: Option<String>,
     pub temperature: f32,
     pub max_tokens: u32,
+    #[serde(default)]
+    pub requests_per_minute: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelsConfig {
+    #[serde(default)]
+    pub assignment: ModelAssignment,
     pub models: Vec<ModelDef>,
 }
 
@@ -103,6 +115,21 @@ impl BlueprintFile {
                 return Err(BlueprintError::Validation(
                     format!("Metric '{}' direction must be 'maximize' or 'minimize'", m.name)
                 ));
+            }
+        }
+        if self.models.models.is_empty() {
+            return Err(BlueprintError::Validation(
+                "At least one model must be defined".into(),
+            ));
+        }
+        for model in &self.models.models {
+            if let Some(limit) = model.requests_per_minute {
+                if limit == 0 {
+                    return Err(BlueprintError::Validation(format!(
+                        "Model '{}' requests_per_minute must be > 0",
+                        model.name
+                    )));
+                }
             }
         }
         Ok(())

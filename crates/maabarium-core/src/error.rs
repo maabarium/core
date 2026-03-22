@@ -59,6 +59,14 @@ pub enum PersistError {
 }
 
 #[derive(Debug, Error)]
+pub enum SecretError {
+    #[error("Keyring error: {0}")]
+    Keyring(#[from] keyring::Error),
+    #[error("Invalid secret input: {0}")]
+    InvalidInput(String),
+}
+
+#[derive(Debug, Error)]
 pub enum EngineError {
     #[error("Blueprint error: {0}")]
     Blueprint(#[from] BlueprintError),
@@ -70,6 +78,8 @@ pub enum EngineError {
     Eval(#[from] EvalError),
     #[error("Persist error: {0}")]
     Persist(#[from] PersistError),
+    #[error("Secret error: {0}")]
+    Secret(#[from] SecretError),
     #[error("Cancelled")]
     Cancelled,
 }
@@ -82,4 +92,6 @@ pub enum CoreError {
     Blueprint(#[from] BlueprintError),
     #[error("Persist error: {0}")]
     Persist(#[from] PersistError),
+    #[error("Secret error: {0}")]
+    Secret(#[from] SecretError),
 }

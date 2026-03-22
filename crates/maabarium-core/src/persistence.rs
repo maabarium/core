@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use rusqlite::{Connection, params};
@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::PersistError;
 use crate::evaluator::{ExperimentResult, MetricScore};
+use crate::git_manager::FilePatch;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedExperiment {
+    pub id: i64,
     pub iteration: u64,
     pub blueprint_name: String,
     pub proposal_summary: String,
@@ -20,6 +22,15 @@ pub struct PersistedExperiment {
     pub metrics: Vec<MetricScore>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedProposal {
+    pub id: i64,
+    pub experiment_id: i64,
+    pub summary: String,
+    pub created_at: String,
+    pub file_patches: Vec<FilePatch>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ExportFormat {
     Json,
@@ -28,6 +39,11 @@ pub enum ExportFormat {
 
 pub struct Persistence {
     conn: Connection,
+}
+
+pub fn default_db_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/maabarium.db")
 }
 
 impl Persistence {
@@ -57,10 +73,15 @@ impl Persistence {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 experiment_id INTEGER NOT NULL,
                 summary TEXT NOT NULL,
+                file_patches_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (experiment_id) REFERENCES experiments(id)
             );",
         )?;
+        let _ = conn.execute(
+            "ALTER TABLE proposals ADD COLUMN file_patches_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -89,6 +110,11 @@ impl Persistence {
                 params![exp_id, score.name, score.value, score.weight],
             )?;
         }
+        let file_patches_json = serde_json::to_string(&result.proposal.file_patches)?;
+        self.conn.execute(
+            "INSERT INTO proposals (experiment_id, summary, file_patches_json, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![exp_id, result.proposal.summary, file_patches_json, now],
+        )?;
         Ok(exp_id)
     }
 
@@ -159,6 +185,7 @@ impl Persistence {
             ) = row?;
             let metrics = self.load_metrics(id)?;
             experiments.push(PersistedExperiment {
+                id,
                 iteration: iteration as u64,
                 blueprint_name,
                 proposal_summary,
@@ -171,6 +198,41 @@ impl Persistence {
         }
 
         Ok(experiments)
+    }
+
+    pub fn recent_proposals(&self, limit: usize) -> Result<Vec<PersistedProposal>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, experiment_id, summary, file_patches_json, created_at
+             FROM proposals
+             ORDER BY id DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut proposals = Vec::new();
+        for row in rows {
+            let (id, experiment_id, summary, file_patches_json, created_at) = row?;
+            let file_patches = serde_json::from_str::<Vec<FilePatch>>(&file_patches_json)
+                .unwrap_or_default();
+            proposals.push(PersistedProposal {
+                id,
+                experiment_id,
+                summary,
+                created_at,
+                file_patches,
+            });
+        }
+
+        Ok(proposals)
     }
 
     pub fn export(
@@ -220,6 +282,7 @@ impl Persistence {
                 created_at,
             ) = row?;
             let record = PersistedExperiment {
+                id,
                 iteration: iteration as u64,
                 blueprint_name,
                 proposal_summary,
@@ -309,14 +372,18 @@ impl Persistence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git_manager::Proposal;
+    use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
 
     fn sample_result() -> ExperimentResult {
         ExperimentResult {
             iteration: 1,
             proposal: Proposal {
                 summary: "Improve export coverage".into(),
-                file_patches: vec![],
+                file_patches: vec![FilePatch {
+                    path: "src/lib.rs".into(),
+                    operation: FilePatchOperation::Modify,
+                    content: Some("pub fn improved() {}".into()),
+                }],
             },
             scores: vec![MetricScore {
                 name: "quality".into(),
@@ -356,6 +423,11 @@ mod tests {
 
         assert!(json.contains("\"blueprint_name\": \"example\""));
         assert!(csv.contains("example"));
+
+        let proposals = persistence.recent_proposals(1).expect("proposals should load");
+        assert_eq!(proposals.len(), 1);
+        assert_eq!(proposals[0].file_patches.len(), 1);
+        assert_eq!(proposals[0].file_patches[0].path, "src/lib.rs");
 
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(json_path);

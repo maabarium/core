@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use git2::{Repository, BranchType, Signature};
+use std::process::Command;
+use git2::{Repository, BranchType};
 use serde::{Deserialize, Serialize};
 use crate::error::GitError;
 
@@ -9,10 +10,19 @@ pub struct Proposal {
     pub file_patches: Vec<FilePatch>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FilePatchOperation {
+    Create,
+    Modify,
+    Delete,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilePatch {
     pub path: String,
-    pub content: String,
+    pub operation: FilePatchOperation,
+    pub content: Option<String>,
 }
 
 pub struct GitManager {
@@ -86,33 +96,75 @@ impl GitManager {
         let branch = branch.to_owned();
         let proposal = proposal.clone();
         tokio::task::spawn_blocking(move || -> Result<(), GitError> {
-            let repo = Repository::open(&path)?;
-            let branch_ref = repo.find_branch(&branch, BranchType::Local)?;
-            let branch_commit = branch_ref.get().peel_to_commit()?;
-            let mut index = repo.index()?;
+            let temp_dir = std::env::temp_dir().join(format!(
+                "maabarium-{}-{}",
+                branch.replace('/', "-"),
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
+
+            run_git(&path, ["worktree", "add", "--detach", temp_dir.to_str().unwrap_or_default(), &branch])?;
+
             for patch in &proposal.file_patches {
-                let file_path = path.join(&patch.path);
-                if let Some(parent) = file_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(GitError::Io)?;
+                let file_path = temp_dir.join(&patch.path);
+                match patch.operation {
+                    FilePatchOperation::Delete => {
+                        if file_path.exists() {
+                            std::fs::remove_file(&file_path).map_err(GitError::Io)?;
+                        }
+                    }
+                    FilePatchOperation::Create | FilePatchOperation::Modify => {
+                        let content = patch.content.as_ref().ok_or_else(|| {
+                            GitError::Io(std::io::Error::other(format!(
+                                "patch '{}' is missing file content",
+                                patch.path
+                            )))
+                        })?;
+                        if let Some(parent) = file_path.parent() {
+                            std::fs::create_dir_all(parent).map_err(GitError::Io)?;
+                        }
+                        std::fs::write(&file_path, content).map_err(GitError::Io)?;
+                    }
                 }
-                std::fs::write(&file_path, &patch.content).map_err(GitError::Io)?;
-                index.add_path(std::path::Path::new(&patch.path))?;
             }
-            index.write()?;
-            let tree_id = index.write_tree()?;
-            let tree = repo.find_tree(tree_id)?;
-            let sig = Signature::now("Maabarium", "maabarium@bot")?;
-            repo.commit(
-                Some(&format!("refs/heads/{branch}")),
-                &sig,
-                &sig,
-                &format!("experiment: {}", proposal.summary),
-                &tree,
-                &[&branch_commit],
-            )?;
+
+            let add_result = run_git(&temp_dir, ["add", "--all"]);
+            let commit_result = run_git(
+                &temp_dir,
+                [
+                    "commit",
+                    "-m",
+                    &format!("experiment: {}", proposal.summary),
+                    "--author",
+                    "Maabarium <maabarium@bot>",
+                ],
+            );
+            let cleanup_result = run_git(&path, ["worktree", "remove", "--force", temp_dir.to_str().unwrap_or_default()]);
+            let _ = std::fs::remove_dir_all(&temp_dir);
+
+            add_result?;
+            commit_result?;
+            cleanup_result?;
             Ok(())
         })
         .await
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
     }
+}
+
+fn run_git<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Result<(), GitError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(args)
+        .output()
+        .map_err(GitError::Io)?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(GitError::Io(std::io::Error::other(
+        String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    )))
 }

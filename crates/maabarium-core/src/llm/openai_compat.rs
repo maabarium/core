@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use crate::error::LLMError;
@@ -9,14 +10,14 @@ pub struct OpenAICompatProvider {
     client: Client,
     endpoint: String,
     model: String,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
 }
 
 impl OpenAICompatProvider {
     pub fn new(
         endpoint: impl Into<String>,
         model: impl Into<String>,
-        api_key: Option<String>,
+        api_key: Option<SecretString>,
     ) -> Self {
         Self {
             client: Client::new(),
@@ -77,7 +78,7 @@ impl LLMProvider for OpenAICompatProvider {
         };
         let mut req = self.client.post(&url).json(&body);
         if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
+            req = req.bearer_auth(key.expose_secret());
         }
         let start = Instant::now();
         let resp = req.send().await?;

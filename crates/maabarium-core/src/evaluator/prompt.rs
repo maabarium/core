@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
+use tracing::instrument;
 use crate::error::EvalError;
 use crate::llm::{LLMProvider, CompletionRequest};
 use crate::blueprint::MetricDef;
@@ -19,6 +20,11 @@ impl PromptEvaluator {
 
 #[async_trait]
 impl Evaluator for PromptEvaluator {
+    #[instrument(
+        name = "prompt_evaluator_evaluate",
+        skip(self, proposal),
+        fields(iteration = iteration, metrics = self.metrics.len())
+    )]
     async fn evaluate(&self, proposal: &Proposal, iteration: u64) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let mut scores = Vec::new();
