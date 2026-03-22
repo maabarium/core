@@ -1,0 +1,35 @@
+[blueprint]
+name = "lora-adapter"
+version = "1.0"
+description = "Package and evaluate LoRA adapter artifacts with metadata in a sandbox."
+
+[domain]
+repo_path = "."
+target_files = ["adapters/**/*.safetensors", "adapters/**/*.json", "README.md"]
+language = "lora"
+
+[constraints]
+max_iterations = 50
+timeout_seconds = 180
+require_tests_pass = false
+min_improvement = 0.02
+
+[metrics]
+metrics = [
+    { name = "lora_quality", weight = 0.5, direction = "maximize", description = "Quality and completeness of adapter packaging." },
+    { name = "performance", weight = 0.3, direction = "maximize", description = "Adapter compactness and deployment readiness." },
+    { name = "safety", weight = 0.2, direction = "maximize", description = "Safety and metadata hygiene." },
+]
+
+[agents]
+council_size = 2
+debate_rounds = 1
+agents = [
+    { name = "adapter-builder", role = "LoRA Engineer", system_prompt = "You package LoRA adapters for reproducible delivery.", model = "llama3" },
+    { name = "adapter-auditor", role = "Artifact Auditor", system_prompt = "You inspect adapters for missing files and metadata.", model = "llama3" },
+]
+
+[models]
+models = [
+    { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.3, max_tokens = 1024 },
+]

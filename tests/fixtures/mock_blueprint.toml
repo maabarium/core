@@ -1,0 +1,32 @@
+[blueprint]
+name = "mock-test"
+version = "0.1.0"
+description = "Mock blueprint for testing"
+
+[domain]
+repo_path = "."
+target_files = ["src/**/*.rs"]
+language = "rust"
+
+[constraints]
+max_iterations = 2
+timeout_seconds = 30
+require_tests_pass = false
+min_improvement = 0.01
+
+[metrics]
+metrics = [
+    { name = "quality", weight = 1.0, direction = "maximize", description = "Quality score" },
+]
+
+[agents]
+council_size = 1
+debate_rounds = 0
+agents = [
+    { name = "test-agent", role = "tester", system_prompt = "You are a test agent.", model = "mock" },
+]
+
+[models]
+models = [
+    { name = "mock", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.5, max_tokens = 128 },
+]

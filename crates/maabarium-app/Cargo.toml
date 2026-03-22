@@ -1,0 +1,8 @@
+[package]
+name = "maabarium-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.33.3", default-features = true, features = ["default_fonts", "glow", "wayland"] }
+maabarium-core = { path = "../maabarium-core" }

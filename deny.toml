@@ -1,0 +1,54 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# CI: cargo deny check bans licenses sources advisories
+
+[advisories]
+# Deny crates with known security vulnerabilities
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+ignore = []
+
+[licenses]
+# Only allow permissive/copyleft-compatible licenses
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-DFS-2016",
+    "OpenSSL",
+    "Zlib",
+    "CC0-1.0",
+]
+copyleft = "warn"
+allow-osi-fsf-free = "neither"
+default = "deny"
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+version = "*"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Deny multiple versions of the same crate (with exceptions)
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
