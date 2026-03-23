@@ -108,6 +108,25 @@ pub struct ModelsConfig {
     pub models: Vec<ModelDef>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluatorKind {
+    #[default]
+    Auto,
+    Builtin,
+    Process,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct EvaluatorConfig {
+    #[serde(default)]
+    pub kind: EvaluatorKind,
+    #[serde(default)]
+    pub manifest_path: Option<String>,
+    #[serde(default)]
+    pub plugin_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlueprintFile {
     pub blueprint: BlueprintMeta,
@@ -116,6 +135,8 @@ pub struct BlueprintFile {
     pub metrics: MetricsConfig,
     pub agents: AgentsConfig,
     pub models: ModelsConfig,
+    #[serde(default)]
+    pub evaluator: Option<EvaluatorConfig>,
     #[serde(default)]
     pub library: Option<BlueprintLibraryMeta>,
 }
@@ -167,6 +188,21 @@ impl BlueprintFile {
                     )));
                 }
             }
+        }
+        if self
+            .evaluator
+            .as_ref()
+            .is_some_and(|config| config.kind == EvaluatorKind::Process)
+            && self
+                .evaluator
+                .as_ref()
+                .and_then(|config| config.manifest_path.as_deref())
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+        {
+            return Err(BlueprintError::Validation(
+                "Process evaluator blueprints must define evaluator.manifest_path".into(),
+            ));
         }
         Ok(())
     }

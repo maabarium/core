@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::PersistError;
 use crate::evaluator::{
-    ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation, ResearchSource,
+    ExperimentResult, LoraArtifacts, MetricScore, ResearchArtifacts, ResearchCitation,
+    ResearchQueryTrace, ResearchSource,
 };
 use crate::git_manager::FilePatch;
 
@@ -23,6 +24,7 @@ pub struct PersistedExperiment {
     pub created_at: String,
     pub metrics: Vec<MetricScore>,
     pub research: Option<ResearchArtifacts>,
+    pub lora: Option<LoraArtifacts>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +104,23 @@ impl Persistence {
                 line_number INTEGER NOT NULL,
                 snippet TEXT NOT NULL,
                 FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+            );
+            CREATE TABLE IF NOT EXISTS research_query_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                query_text TEXT NOT NULL,
+                result_count INTEGER NOT NULL,
+                top_urls_json TEXT NOT NULL DEFAULT '[]',
+                latency_ms INTEGER NOT NULL,
+                executed_at TEXT NOT NULL,
+                error TEXT,
+                FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+            );
+            CREATE TABLE IF NOT EXISTS lora_artifacts (
+                experiment_id INTEGER PRIMARY KEY,
+                metadata_json TEXT NOT NULL,
+                FOREIGN KEY (experiment_id) REFERENCES experiments(id)
             );",
         )?;
         let _ = conn.execute(
@@ -143,6 +162,9 @@ impl Persistence {
         )?;
         if let Some(research) = &result.research {
             self.log_research_artifacts(exp_id, research)?;
+        }
+        if let Some(lora) = &result.lora {
+            self.log_lora_artifacts(exp_id, lora)?;
         }
         Ok(exp_id)
     }
@@ -224,6 +246,7 @@ impl Persistence {
                 created_at,
                 metrics,
                 research: self.load_research_artifacts(id)?,
+                lora: self.load_lora_artifacts(id)?,
             });
         }
 
@@ -322,6 +345,7 @@ impl Persistence {
                 created_at,
                 metrics: self.load_metrics(id)?,
                 research: self.load_research_artifacts(id)?,
+                lora: self.load_lora_artifacts(id)?,
             };
             if !first {
                 writer.write_all(b",\n")?;
@@ -366,6 +390,7 @@ impl Persistence {
             ) = row?;
             let metrics_json = serde_json::to_string(&self.load_metrics(id)?)?;
             let research_json = serde_json::to_string(&self.load_research_artifacts(id)?)?;
+            let lora_json = serde_json::to_string(&self.load_lora_artifacts(id)?)?;
             writer.serialize((
                 iteration as u64,
                 blueprint_name,
@@ -376,6 +401,7 @@ impl Persistence {
                 created_at,
                 metrics_json,
                 research_json,
+                lora_json,
             ))?;
         }
         writer.flush()?;
@@ -440,6 +466,24 @@ impl Persistence {
             )?;
         }
 
+        for query_trace in &research.query_traces {
+            let top_urls_json = serde_json::to_string(&query_trace.top_urls)?;
+            self.conn.execute(
+                "INSERT INTO research_query_traces (experiment_id, provider, query_text, result_count, top_urls_json, latency_ms, executed_at, error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    experiment_id,
+                    query_trace.provider,
+                    query_trace.query_text,
+                    query_trace.result_count as i64,
+                    top_urls_json,
+                    query_trace.latency_ms as i64,
+                    query_trace.executed_at,
+                    query_trace.error,
+                ],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -493,10 +537,67 @@ impl Persistence {
             citations.push(row?);
         }
 
-        if sources.is_empty() && citations.is_empty() {
+        let mut trace_stmt = self.conn.prepare(
+            "SELECT provider, query_text, result_count, top_urls_json, latency_ms, executed_at, error
+             FROM research_query_traces
+             WHERE experiment_id = ?1
+             ORDER BY id ASC",
+        )?;
+        let trace_rows = trace_stmt.query_map(params![experiment_id], |row| {
+            let top_urls_json = row.get::<_, String>(3)?;
+            Ok(ResearchQueryTrace {
+                provider: row.get(0)?,
+                query_text: row.get(1)?,
+                result_count: row.get::<_, i64>(2)? as u32,
+                top_urls: serde_json::from_str(&top_urls_json).unwrap_or_default(),
+                latency_ms: row.get::<_, i64>(4)? as u64,
+                executed_at: row.get(5)?,
+                error: row.get(6)?,
+            })
+        })?;
+
+        let mut query_traces = Vec::new();
+        for row in trace_rows {
+            query_traces.push(row?);
+        }
+
+        if sources.is_empty() && citations.is_empty() && query_traces.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(ResearchArtifacts { sources, citations }))
+            Ok(Some(ResearchArtifacts {
+                sources,
+                citations,
+                query_traces,
+            }))
+        }
+    }
+
+    fn log_lora_artifacts(
+        &self,
+        experiment_id: i64,
+        lora: &LoraArtifacts,
+    ) -> Result<(), PersistError> {
+        let metadata_json = serde_json::to_string(lora)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO lora_artifacts (experiment_id, metadata_json)
+             VALUES (?1, ?2)",
+            params![experiment_id, metadata_json],
+        )?;
+        Ok(())
+    }
+
+    fn load_lora_artifacts(
+        &self,
+        experiment_id: i64,
+    ) -> Result<Option<LoraArtifacts>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT metadata_json FROM lora_artifacts WHERE experiment_id = ?1",
+        )?;
+        let result = stmt.query_row(params![experiment_id], |row| row.get::<_, String>(0));
+        match result {
+            Ok(metadata_json) => Ok(Some(serde_json::from_str(&metadata_json)?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(PersistError::Sqlite(error)),
         }
     }
 }
@@ -542,6 +643,41 @@ mod tests {
                     label: Some("SQLite docs".into()),
                     line_number: 3,
                     snippet: "See [SQLite docs](https://sqlite.org/index.html).".into(),
+                }],
+                query_traces: vec![ResearchQueryTrace {
+                    provider: "brave".into(),
+                    query_text: "sqlite documentation".into(),
+                    result_count: 1,
+                    top_urls: vec!["https://sqlite.org/index.html".into()],
+                    latency_ms: 42,
+                    executed_at: Utc::now().to_rfc3339(),
+                    error: None,
+                }],
+            }),
+            lora: Some(LoraArtifacts {
+                trainer: "mlx_lm".into(),
+                base_model: "mlx-community/Llama-3".into(),
+                dataset: "fixtures/dataset.jsonl".into(),
+                adapter_path: "adapter/model.safetensors".into(),
+                output_dir: Some("adapter".into()),
+                eval_command: Some("python -m mlx_lm.evaluate".into()),
+                epochs: Some(2),
+                learning_rate: Some(0.0002),
+                adapter_ratio: 0.8,
+                metadata_ratio: 1.0,
+                reproducibility_ratio: 0.9,
+                trainer_signal: 1.0,
+                execution_signal: 0.95,
+                sandbox_file_count: 4,
+                sandbox_total_bytes: 128,
+                stages: vec![crate::evaluator::LoraStageArtifact {
+                    name: "train".into(),
+                    command: "sh".into(),
+                    args: vec!["-c".into(), "printf trained > adapter/train.log".into()],
+                    working_dir: "/tmp/maabarium-sandbox".into(),
+                    timeout_seconds: 5,
+                    expected_artifacts: vec!["adapter/train.log".into()],
+                    verified_artifacts: vec!["adapter/train.log".into()],
                 }],
             }),
         }
@@ -594,6 +730,12 @@ mod tests {
             .expect("research metadata should persist");
         assert_eq!(research.sources.len(), 1);
         assert_eq!(research.citations.len(), 1);
+        let lora = experiments[0]
+            .lora
+            .as_ref()
+            .expect("lora metadata should persist");
+        assert_eq!(lora.trainer, "mlx_lm");
+        assert_eq!(lora.stages.len(), 1);
 
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(json_path);

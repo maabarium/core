@@ -3,7 +3,10 @@ import type {
   BlueprintWizardForm,
   ConsoleState,
   CouncilEntry,
+  DesktopSetupState,
   ModelDef,
+  OllamaStatus,
+  RemoteProviderSetup,
   WizardAgentForm,
   WizardMetricForm,
   WizardModelForm,
@@ -329,6 +332,89 @@ function wizardTemplateModels(): WizardModelForm[] {
   ];
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim() ?? "")
+        .filter((value) => value.length > 0),
+    ),
+  );
+}
+
+function buildLocalWizardModels(
+  setup: DesktopSetupState | undefined,
+  ollama: OllamaStatus | undefined,
+): WizardModelForm[] {
+  const localModelNames = uniqueStrings([
+    ...(setup?.selectedLocalModels ?? []),
+    ...(ollama?.models.map((model) => model.name) ?? []),
+    ...(ollama?.recommendedModels ?? []),
+  ]);
+
+  return localModelNames.map((name) => ({
+    name,
+    provider: "ollama",
+    endpoint: "http://localhost:11434",
+    apiKeyEnv: "",
+    temperature: 0.7,
+    maxTokens: 2048,
+    requestsPerMinute: "60",
+  }));
+}
+
+function buildRemoteWizardModels(
+  remoteProviders: RemoteProviderSetup[] | undefined,
+): WizardModelForm[] {
+  return (remoteProviders ?? [])
+    .filter(
+      (provider) =>
+        provider.configured &&
+        Boolean(provider.endpoint?.trim()) &&
+        Boolean(provider.modelName?.trim()),
+    )
+    .map((provider) => ({
+      name: provider.modelName?.trim() ?? provider.label,
+      provider: provider.providerId,
+      endpoint: provider.endpoint?.trim() ?? "",
+      apiKeyEnv: "",
+      temperature: 0.7,
+      maxTokens: 4096,
+      requestsPerMinute: "",
+    }));
+}
+
+export function buildSuggestedWizardModels(
+  state: ConsoleState | null,
+): WizardModelForm[] {
+  const setup = state?.desktopSetup;
+  const runtimeStrategy = setup?.runtimeStrategy;
+  const localModels = buildLocalWizardModels(setup, state?.ollama);
+  const remoteModels = buildRemoteWizardModels(setup?.remoteProviders);
+
+  if (runtimeStrategy === "local") {
+    return localModels.length > 0 ? localModels : wizardTemplateModels();
+  }
+
+  if (runtimeStrategy === "remote") {
+    return remoteModels.length > 0 ? remoteModels : wizardTemplateModels();
+  }
+
+  if (runtimeStrategy === "mixed") {
+    const mixedModels = [...localModels, ...remoteModels];
+    return mixedModels.length > 0 ? mixedModels : wizardTemplateModels();
+  }
+
+  const suggestedModels = [...localModels, ...remoteModels];
+  return suggestedModels.length > 0 ? suggestedModels : wizardTemplateModels();
+}
+
+export function buildSuggestedWizardModel(
+  state: ConsoleState | null,
+): WizardModelForm {
+  return buildSuggestedWizardModels(state)[0] ?? wizardTemplateModels()[0];
+}
+
 function wizardTemplateCouncilSize(template: WizardTemplate): number {
   switch (template) {
     case "product_builder":
@@ -505,18 +591,23 @@ export function buildWizardForm(
 ): BlueprintWizardForm {
   const defaults = wizardTemplateDefaults(template);
   const activeBlueprint = state?.blueprint;
+  const suggestedModels = buildSuggestedWizardModels(state);
   const models = activeBlueprint?.models?.models?.length
     ? activeBlueprint.models.models.map(buildWizardModelForm)
-    : wizardTemplateModels();
+    : suggestedModels;
   const primaryModelName = models[0]?.name || "llama3";
   const agents = wizardTemplateAgents(template, primaryModelName);
+  const suggestedWorkspacePath =
+    state?.desktopSetup.workspacePath?.trim() ||
+    activeBlueprint?.domain.repo_path ||
+    ".";
 
   return {
     name: "",
     description: defaults.description,
     version: "1.0.0",
     template,
-    repoPath: activeBlueprint?.domain.repo_path || ".",
+    repoPath: suggestedWorkspacePath,
     language: activeBlueprint?.domain.language || defaults.language,
     targetFilesText: defaults.targetFiles.join("\n"),
     maxIterations: 25,
@@ -537,7 +628,7 @@ export function applyWizardTemplate(
   template: WizardTemplate,
 ): BlueprintWizardForm {
   const defaults = wizardTemplateDefaults(template);
-  const models = wizardTemplateModels();
+  const models = form.models.length > 0 ? form.models : wizardTemplateModels();
   const primaryModelName = models[0]?.name || "llama3";
   const agents = wizardTemplateAgents(template, primaryModelName);
 

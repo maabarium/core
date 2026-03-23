@@ -1,8 +1,12 @@
 import type {
   BlueprintFile,
   ConsoleState,
+  DesktopSetupState,
   HardwareSensor,
   HardwareTelemetry,
+  LoraArtifacts,
+  OllamaStatus,
+  ReadinessItem,
   ResearchArtifacts,
 } from "../types/console";
 
@@ -107,6 +111,81 @@ function normalizeResearchArtifacts(
           snippet: citation.snippet ?? "",
         }))
       : [],
+    queryTraces: Array.isArray(research.queryTraces)
+      ? research.queryTraces.map((trace) => ({
+          provider: trace.provider ?? "unknown",
+          queryText: trace.queryText ?? "",
+          resultCount:
+            typeof trace.resultCount === "number" ? trace.resultCount : 0,
+          topUrls: Array.isArray(trace.topUrls)
+            ? trace.topUrls.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+          latencyMs: typeof trace.latencyMs === "number" ? trace.latencyMs : 0,
+          executedAt: trace.executedAt ?? "",
+          error: trace.error ?? null,
+        }))
+      : [],
+  };
+}
+
+function normalizeLoraArtifacts(
+  lora: LoraArtifacts | null | undefined,
+): LoraArtifacts | null {
+  if (!lora) {
+    return null;
+  }
+
+  return {
+    trainer: lora.trainer ?? "",
+    baseModel: lora.baseModel ?? "",
+    dataset: lora.dataset ?? "",
+    adapterPath: lora.adapterPath ?? "",
+    outputDir: lora.outputDir ?? null,
+    evalCommand: lora.evalCommand ?? null,
+    epochs: typeof lora.epochs === "number" ? lora.epochs : null,
+    learningRate:
+      typeof lora.learningRate === "number" ? lora.learningRate : null,
+    adapterRatio: typeof lora.adapterRatio === "number" ? lora.adapterRatio : 0,
+    metadataRatio:
+      typeof lora.metadataRatio === "number" ? lora.metadataRatio : 0,
+    reproducibilityRatio:
+      typeof lora.reproducibilityRatio === "number"
+        ? lora.reproducibilityRatio
+        : 0,
+    trainerSignal:
+      typeof lora.trainerSignal === "number" ? lora.trainerSignal : 0,
+    executionSignal:
+      typeof lora.executionSignal === "number" ? lora.executionSignal : 0,
+    sandboxFileCount:
+      typeof lora.sandboxFileCount === "number" ? lora.sandboxFileCount : 0,
+    sandboxTotalBytes:
+      typeof lora.sandboxTotalBytes === "number" ? lora.sandboxTotalBytes : 0,
+    stages: Array.isArray(lora.stages)
+      ? lora.stages.map((stage) => ({
+          name: stage.name ?? "",
+          command: stage.command ?? "",
+          args: Array.isArray(stage.args)
+            ? stage.args.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+          workingDir: stage.workingDir ?? "",
+          timeoutSeconds:
+            typeof stage.timeoutSeconds === "number" ? stage.timeoutSeconds : 0,
+          expectedArtifacts: Array.isArray(stage.expectedArtifacts)
+            ? stage.expectedArtifacts.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+          verifiedArtifacts: Array.isArray(stage.verifiedArtifacts)
+            ? stage.verifiedArtifacts.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+        }))
+      : [],
   };
 }
 
@@ -154,6 +233,90 @@ function normalizeHardwareTelemetry(
   };
 }
 
+function normalizeDesktopSetup(
+  setup: DesktopSetupState | null | undefined,
+): DesktopSetupState {
+  return {
+    guidedMode: Boolean(setup?.guidedMode ?? true),
+    onboardingCompleted: Boolean(setup?.onboardingCompleted),
+    runtimeStrategy:
+      setup?.runtimeStrategy === "local" ||
+      setup?.runtimeStrategy === "remote" ||
+      setup?.runtimeStrategy === "mixed"
+        ? setup.runtimeStrategy
+        : null,
+    workspacePath: setup?.workspacePath ?? null,
+    selectedLocalModels: Array.isArray(setup?.selectedLocalModels)
+      ? setup.selectedLocalModels.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [],
+    remoteProviders: Array.isArray(setup?.remoteProviders)
+      ? setup.remoteProviders.map((provider) => ({
+          providerId: provider.providerId ?? "",
+          label: provider.label ?? provider.providerId ?? "Provider",
+          endpoint: provider.endpoint ?? null,
+          modelName: provider.modelName ?? null,
+          fallbackOnly: Boolean(provider.fallbackOnly),
+          configured: Boolean(provider.configured),
+        }))
+      : [],
+    preferredUpdateChannel: setup?.preferredUpdateChannel ?? null,
+    remindLaterUntil: setup?.remindLaterUntil ?? null,
+    remindLaterVersion: setup?.remindLaterVersion ?? null,
+    lastSetupCompletedAt: setup?.lastSetupCompletedAt ?? null,
+  };
+}
+
+function normalizeReadinessItems(
+  items: ReadinessItem[] | null | undefined,
+): ReadinessItem[] {
+  return Array.isArray(items)
+    ? items.map((item) => ({
+        id: item.id ?? "",
+        title: item.title ?? "Readiness",
+        status:
+          item.status === "ready" ||
+          item.status === "needs_attention" ||
+          item.status === "optional"
+            ? item.status
+            : "needs_attention",
+        summary: item.summary ?? "",
+        actionLabel: item.actionLabel ?? "Review",
+        lastCheckedAtEpochMs:
+          typeof item.lastCheckedAtEpochMs === "number"
+            ? item.lastCheckedAtEpochMs
+            : 0,
+      }))
+    : [];
+}
+
+function normalizeOllamaStatus(
+  ollama: OllamaStatus | null | undefined,
+): OllamaStatus {
+  return {
+    installed: Boolean(ollama?.installed),
+    running: Boolean(ollama?.running),
+    commandAvailable: Boolean(ollama?.commandAvailable),
+    launchAtLoginSupported: Boolean(ollama?.launchAtLoginSupported),
+    installCommand: ollama?.installCommand ?? null,
+    startCommand: ollama?.startCommand ?? null,
+    statusDetail: ollama?.statusDetail ?? "Ollama is unavailable.",
+    models: Array.isArray(ollama?.models)
+      ? ollama.models.map((model) => ({
+          name: model.name ?? "",
+          sizeLabel: model.sizeLabel ?? null,
+          modifiedAt: model.modifiedAt ?? null,
+        }))
+      : [],
+    recommendedModels: Array.isArray(ollama?.recommendedModels)
+      ? ollama.recommendedModels.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [],
+  };
+}
+
 export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
   return {
     engineRunning: Boolean(snapshot.engineRunning),
@@ -164,6 +327,32 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
     blueprint: normalizeBlueprintFile(snapshot.blueprint),
     blueprintError: snapshot.blueprintError ?? null,
     evaluatorKind: snapshot.evaluatorKind ?? null,
+    pluginRuntime: snapshot.pluginRuntime
+      ? {
+          pluginId: snapshot.pluginRuntime.pluginId ?? "process-plugin",
+          displayName: snapshot.pluginRuntime.displayName ?? null,
+          manifestPath: snapshot.pluginRuntime.manifestPath ?? "",
+          command: snapshot.pluginRuntime.command ?? null,
+          args: Array.isArray(snapshot.pluginRuntime.args)
+            ? snapshot.pluginRuntime.args.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+          workingDir: snapshot.pluginRuntime.workingDir ?? null,
+          timeoutSeconds: snapshot.pluginRuntime.timeoutSeconds ?? null,
+          environmentKeys: Array.isArray(snapshot.pluginRuntime.environmentKeys)
+            ? snapshot.pluginRuntime.environmentKeys.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
+          status:
+            snapshot.pluginRuntime.status === "ready"
+              ? "ready"
+              : "needs_attention",
+          summary: snapshot.pluginRuntime.summary ?? "",
+          error: snapshot.pluginRuntime.error ?? null,
+        }
+      : null,
     availableBlueprints: Array.isArray(snapshot.availableBlueprints)
       ? snapshot.availableBlueprints.map((blueprint) => ({
           path: blueprint.path ?? "",
@@ -223,11 +412,15 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
       endpoint: snapshot.updater?.endpoint ?? null,
       configured: Boolean(snapshot.updater?.configured),
     },
+    desktopSetup: normalizeDesktopSetup(snapshot.desktopSetup),
+    readinessItems: normalizeReadinessItems(snapshot.readinessItems),
+    ollama: normalizeOllamaStatus(snapshot.ollama),
     experiments: Array.isArray(snapshot.experiments)
       ? snapshot.experiments.map((experiment) => ({
           ...experiment,
           metrics: Array.isArray(experiment.metrics) ? experiment.metrics : [],
           research: normalizeResearchArtifacts(experiment.research),
+          lora: normalizeLoraArtifacts(experiment.lora),
         }))
       : [],
     proposals: Array.isArray(snapshot.proposals) ? snapshot.proposals : [],

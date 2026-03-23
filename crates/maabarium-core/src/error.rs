@@ -61,6 +61,24 @@ pub enum PersistError {
 }
 
 #[derive(Debug, Error)]
+pub enum UpdaterError {
+    #[error("HTTP request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("Serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Invalid release manifest: {0}")]
+    InvalidManifest(String),
+    #[error("Unsupported platform: {0}")]
+    UnsupportedPlatform(String),
+    #[error("CLI update is not supported on this platform while the binary is running")]
+    UnsupportedInPlaceUpdate,
+    #[error("Checksum verification failed for {artifact}")]
+    ChecksumMismatch { artifact: String },
+}
+
+#[derive(Debug, Error)]
 pub enum SecretError {
     #[error("Keyring error: {0}")]
     Keyring(#[from] keyring::Error),
@@ -96,4 +114,6 @@ pub enum CoreError {
     Persist(#[from] PersistError),
     #[error("Secret error: {0}")]
     Secret(#[from] SecretError),
+    #[error("Updater error: {0}")]
+    Updater(#[from] UpdaterError),
 }

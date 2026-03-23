@@ -1,5 +1,8 @@
 use async_trait::async_trait;
+use chrono::Utc;
 use reqwest::{Client, Url};
+use secrecy::ExposeSecret;
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use tracing::instrument;
@@ -7,21 +10,108 @@ use tracing::instrument;
 use crate::blueprint::MetricDef;
 use crate::error::EvalError;
 use crate::git_manager::{FilePatchOperation, Proposal};
+use crate::secrets::SecretStore;
 
 use super::{
-    Evaluator, ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation, ResearchSource,
+    Evaluator, ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation,
+    ResearchQueryTrace, ResearchSource,
 };
 
 pub struct ResearchEvaluator {
     client: Client,
     metrics: Vec<MetricDef>,
+    discovery_provider: Option<BraveSearchProvider>,
+}
+
+struct BraveSearchProvider {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BraveSearchResponse {
+    #[serde(default)]
+    web: Option<BraveWebResults>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BraveWebResults {
+    #[serde(default)]
+    results: Vec<BraveWebResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BraveWebResult {
+    url: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 impl ResearchEvaluator {
     pub fn new(metrics: Vec<MetricDef>) -> Self {
+        let discovery_provider = SecretStore::new()
+            .resolve_api_key("brave", Some("BRAVE_SEARCH_API_KEY"))
+            .ok()
+            .flatten()
+            .map(|api_key| BraveSearchProvider {
+                client: Client::new(),
+                api_key: api_key.expose_secret().to_owned(),
+            });
+
         Self {
             client: Client::new(),
             metrics,
+            discovery_provider,
+        }
+    }
+
+    fn build_discovery_query(&self, proposal: &Proposal) -> Option<String> {
+        let summary = proposal.summary.trim();
+        if !summary.is_empty() {
+            return Some(summary.to_owned());
+        }
+
+        let patch_paths = proposal
+            .file_patches
+            .iter()
+            .map(|patch| patch.path.as_str())
+            .take(3)
+            .collect::<Vec<_>>();
+        if patch_paths.is_empty() {
+            None
+        } else {
+            Some(format!("research context for {}", patch_paths.join(", ")))
+        }
+    }
+
+    async fn discover_sources(
+        &self,
+        proposal: &Proposal,
+    ) -> (Vec<ResearchSource>, Vec<ResearchQueryTrace>) {
+        let Some(provider) = &self.discovery_provider else {
+            return (Vec::new(), Vec::new());
+        };
+
+        let Some(query) = self.build_discovery_query(proposal) else {
+            return (Vec::new(), Vec::new());
+        };
+
+        match provider.discover(&query).await {
+            Ok((sources, trace)) => (sources, vec![trace]),
+            Err(message) => (
+                Vec::new(),
+                vec![ResearchQueryTrace {
+                    provider: "brave".to_owned(),
+                    query_text: query,
+                    result_count: 0,
+                    top_urls: Vec::new(),
+                    latency_ms: 0,
+                    executed_at: Utc::now().to_rfc3339(),
+                    error: Some(message),
+                }],
+            ),
         }
     }
 
@@ -77,6 +167,25 @@ impl ResearchEvaluator {
         }
 
         sources
+    }
+
+    fn merge_sources(
+        &self,
+        mut verified_sources: Vec<ResearchSource>,
+        discovered_sources: Vec<ResearchSource>,
+    ) -> Vec<ResearchSource> {
+        let mut known_urls = verified_sources
+            .iter()
+            .map(|source| source.url.clone())
+            .collect::<BTreeSet<_>>();
+
+        for source in discovered_sources {
+            if known_urls.insert(source.url.clone()) {
+                verified_sources.push(source);
+            }
+        }
+
+        verified_sources
     }
 
     async fn verify_source(&self, url: &str, citations: &[&ResearchCitation]) -> ResearchSource {
@@ -234,14 +343,17 @@ impl Evaluator for ResearchEvaluator {
     ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let citations = self.collect_citations(proposal);
-        if citations.is_empty() {
+        let (discovered_sources, query_traces) = self.discover_sources(proposal).await;
+        let verified_sources = self.build_sources(&citations).await;
+        let sources = self.merge_sources(verified_sources, discovered_sources);
+
+        if citations.is_empty() && sources.is_empty() {
             return Err(EvalError::Parse(
-                "research proposals must include at least one external citation URL in the proposed content"
+                "research proposals must include at least one external citation URL or a resolvable discovery query"
                     .to_owned(),
             ));
         }
 
-        let sources = self.build_sources(&citations).await;
         let scores = self
             .metrics
             .iter()
@@ -259,8 +371,71 @@ impl Evaluator for ResearchEvaluator {
             scores,
             weighted_total,
             duration_ms: start.elapsed().as_millis() as u64,
-            research: Some(ResearchArtifacts { sources, citations }),
+            research: Some(ResearchArtifacts {
+                sources,
+                citations,
+                query_traces,
+            }),
+            lora: None,
         })
+    }
+}
+
+impl BraveSearchProvider {
+    async fn discover(
+        &self,
+        query: &str,
+    ) -> Result<(Vec<ResearchSource>, ResearchQueryTrace), String> {
+        let started = std::time::Instant::now();
+        let response = self
+            .client
+            .get("https://api.search.brave.com/res/v1/web/search")
+            .header("X-Subscription-Token", &self.api_key)
+            .query(&[("q", query), ("count", "5")])
+            .send()
+            .await
+            .map_err(|error| format!("Failed to query Brave Search: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("Brave Search rejected the query: {error}"))?;
+
+        let payload = response
+            .json::<BraveSearchResponse>()
+            .await
+            .map_err(|error| format!("Failed to parse Brave Search response: {error}"))?;
+
+        let mut sources = Vec::new();
+        let mut top_urls = Vec::new();
+        for result in payload.web.unwrap_or_default().results {
+            let parsed_url = Url::parse(&result.url).ok();
+            top_urls.push(result.url.clone());
+            sources.push(ResearchSource {
+                url: result.url,
+                final_url: None,
+                host: parsed_url
+                    .as_ref()
+                    .and_then(Url::host_str)
+                    .map(str::to_owned),
+                label: result.description,
+                title: result.title,
+                citation_count: 0,
+                verified: false,
+                status_code: None,
+                fetch_error: None,
+            });
+        }
+
+        Ok((
+            sources,
+            ResearchQueryTrace {
+                provider: "brave".to_owned(),
+                query_text: query.to_owned(),
+                result_count: top_urls.len() as u32,
+                top_urls,
+                latency_ms: started.elapsed().as_millis() as u64,
+                executed_at: Utc::now().to_rfc3339(),
+                error: None,
+            },
+        ))
     }
 }
 

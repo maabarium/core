@@ -31,3 +31,4 @@ data/*.log
 .dev/
 .tmp*
 /**/node_modules/
+/**/generated-resources/

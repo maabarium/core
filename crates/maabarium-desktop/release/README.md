@@ -9,11 +9,11 @@ The desktop release is a standalone Tauri application that links `maabarium-core
 That means:
 
 - the desktop app includes the core engine and can run the loop itself
-- the CLI is a separate binary and is not bundled into the desktop app by default
+- supported release builds can also bundle the standalone CLI binary as an app resource
 
 For a user installing the macOS desktop release, there is not a second required process for the core engine. The desktop app owns that runtime.
 
-The CLI remains optional and separate. It is only needed if you also want terminal-driven workflows such as manual status/export/key management outside the desktop app.
+The CLI remains optional at runtime, but supported desktop release builds can now seed a bundled copy into the app-data `bin/` directory so GUI installs can expose the same terminal-driven workflows without a second download step.
 
 ## Runtime Data Location
 
@@ -21,6 +21,7 @@ The packaged macOS desktop app stores its runtime files in app-specific director
 
 - database: `~/Library/Application Support/com.maabarium.console/maabarium.db`
 - blueprint library: `~/Library/Application Support/com.maabarium.console/blueprints/`
+- bundled CLI: `~/Library/Application Support/com.maabarium.console/bin/maabarium`
 - logs: `~/Library/Logs/com.maabarium.console/maabarium.log`
 
 The built-in blueprint library is bundled into the desktop app as resources and seeded into the app-data `blueprints/` directory on startup.
@@ -75,7 +76,7 @@ Build signed updater artifacts locally:
 cd crates/maabarium-desktop
 export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/maabarium.key"
 pnpm tauri build
-pnpm build:release-manifest -- --base-url https://downloads.example.com
+pnpm build:release-manifest -- --base-url https://downloads.example.com --cli-platform stable/0.1.0/darwin-aarch64/maabarium-cli.tar.gz
 ```
 
 The generated manifest is written to:

@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::{
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EvaluatorRegistry, ExportFormat, Persistence,
-    SecretStore, default_db_path, default_log_path,
+    SecretStore, UpdaterConfiguration, check_for_cli_update, default_db_path,
+    default_log_path, install_cli_update,
 };
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
@@ -46,6 +47,12 @@ enum Commands {
         #[command(subcommand)]
         action: KeysAction,
     },
+    /// Inspect and update the CLI binary itself
+    #[command(name = "self")]
+    SelfManage {
+        #[command(subcommand)]
+        action: SelfAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -64,6 +71,16 @@ enum KeysAction {
     },
     /// Delete an API key for a provider
     Delete { provider: String },
+}
+
+#[derive(Subcommand)]
+enum SelfAction {
+    /// Print the current CLI version and update channel configuration
+    Version,
+    /// Check for a newer CLI release in the configured channel
+    Check,
+    /// Download and install the newest CLI release for this platform
+    Update,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -156,6 +173,64 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", render_delete_key_message(&secret_store, &provider)?);
             }
         },
+        Commands::SelfManage { action } => match action {
+            SelfAction::Version => {
+                println!("maabarium {}", env!("CARGO_PKG_VERSION"));
+                match UpdaterConfiguration::from_env() {
+                    Ok(config) => {
+                        println!("channel: {}", config.channel);
+                        println!("manifest: {}", config.manifest_url);
+                    }
+                    Err(error) => {
+                        println!("update configuration unavailable: {error}");
+                    }
+                }
+            }
+            SelfAction::Check => {
+                let config = UpdaterConfiguration::from_env()?;
+                match check_for_cli_update(env!("CARGO_PKG_VERSION"), &config).await? {
+                    Some(plan) => {
+                        println!(
+                            "Update available: {} -> {} ({})",
+                            env!("CARGO_PKG_VERSION"),
+                            plan.manifest.version,
+                            plan.platform_key,
+                        );
+                        if let Some(notes) = plan.manifest.notes.as_deref() {
+                            if !notes.trim().is_empty() {
+                                println!("notes: {}", notes.trim());
+                            }
+                        }
+                    }
+                    None => {
+                        println!(
+                            "CLI is already up to date at version {}",
+                            env!("CARGO_PKG_VERSION")
+                        );
+                    }
+                }
+            }
+            SelfAction::Update => {
+                let config = UpdaterConfiguration::from_env()?;
+                let Some(plan) =
+                    check_for_cli_update(env!("CARGO_PKG_VERSION"), &config).await?
+                else {
+                    println!(
+                        "CLI is already up to date at version {}",
+                        env!("CARGO_PKG_VERSION")
+                    );
+                    return Ok(());
+                };
+
+                let executable_path = std::env::current_exe()?;
+                install_cli_update(&executable_path, &plan.artifact).await?;
+                println!(
+                    "Updated maabarium CLI from {} to {}",
+                    env!("CARGO_PKG_VERSION"),
+                    plan.manifest.version,
+                );
+            }
+        },
     }
 
     Ok(())
@@ -202,7 +277,7 @@ fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard>
 fn select_evaluator(
     blueprint: &BlueprintFile,
 ) -> anyhow::Result<Arc<dyn maabarium_core::evaluator::Evaluator>> {
-    EvaluatorRegistry::build_builtin(blueprint).map_err(Into::into)
+    EvaluatorRegistry::build(blueprint).map_err(Into::into)
 }
 
 fn normalize_db_path(db: &str) -> String {

@@ -8,12 +8,14 @@ use std::sync::Arc;
 
 pub mod code;
 pub mod lora;
+pub mod plugin;
 pub mod prompt;
 pub mod research;
 pub mod sandbox;
 
 pub use code::CodeEvaluator;
 pub use lora::LoraEvaluator;
+pub use plugin::{ProcessPluginEvaluator, ProcessPluginManifest};
 pub use prompt::PromptEvaluator;
 pub use research::ResearchEvaluator;
 
@@ -34,6 +36,51 @@ impl BuiltinEvaluatorKind {
             Self::Lora => "lora",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResearchQueryTrace {
+    pub provider: String,
+    pub query_text: String,
+    pub result_count: u32,
+    pub top_urls: Vec<String>,
+    pub latency_ms: u64,
+    pub executed_at: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoraStageArtifact {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub working_dir: String,
+    pub timeout_seconds: u64,
+    pub expected_artifacts: Vec<String>,
+    pub verified_artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoraArtifacts {
+    pub trainer: String,
+    pub base_model: String,
+    pub dataset: String,
+    pub adapter_path: String,
+    pub output_dir: Option<String>,
+    pub eval_command: Option<String>,
+    pub epochs: Option<u32>,
+    pub learning_rate: Option<f64>,
+    pub adapter_ratio: f64,
+    pub metadata_ratio: f64,
+    pub reproducibility_ratio: f64,
+    pub trainer_signal: f64,
+    pub execution_signal: f64,
+    pub sandbox_file_count: usize,
+    pub sandbox_total_bytes: usize,
+    pub stages: Vec<LoraStageArtifact>,
 }
 
 pub struct EvaluatorRegistry;
@@ -75,8 +122,43 @@ impl EvaluatorRegistry {
         }
     }
 
+    pub fn build(blueprint: &BlueprintFile) -> Result<Arc<dyn Evaluator>, EvalError> {
+        if blueprint
+            .evaluator
+            .as_ref()
+            .is_some_and(|config| config.kind == crate::blueprint::EvaluatorKind::Process)
+        {
+            return Ok(Arc::new(ProcessPluginEvaluator::from_blueprint(blueprint)?));
+        }
+
+        Self::build_builtin(blueprint)
+    }
+
+    pub fn describe(blueprint: &BlueprintFile) -> String {
+        if blueprint
+            .evaluator
+            .as_ref()
+            .is_some_and(|config| config.kind == crate::blueprint::EvaluatorKind::Process)
+        {
+            return blueprint
+                .evaluator
+                .as_ref()
+                .and_then(|config| config.plugin_id.clone())
+                .or_else(|| {
+                    blueprint
+                        .evaluator
+                        .as_ref()
+                        .and_then(|config| config.manifest_path.clone())
+                })
+                .map(|value| format!("process:{value}"))
+                .unwrap_or_else(|| "process".to_owned());
+        }
+
+        Self::resolve_builtin(blueprint).as_str().to_owned()
+    }
+
     pub fn external_plugins_supported() -> bool {
-        false
+        true
     }
 
     fn is_prompt_blueprint(blueprint: &BlueprintFile) -> bool {
@@ -140,6 +222,7 @@ pub struct ExperimentResult {
     pub weighted_total: f64,
     pub duration_ms: u64,
     pub research: Option<ResearchArtifacts>,
+    pub lora: Option<LoraArtifacts>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +230,8 @@ pub struct ExperimentResult {
 pub struct ResearchArtifacts {
     pub sources: Vec<ResearchSource>,
     pub citations: Vec<ResearchCitation>,
+    #[serde(default)]
+    pub query_traces: Vec<ResearchQueryTrace>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +329,7 @@ mod tests {
                     requests_per_minute: None,
                 }],
             },
+            evaluator: None,
             library: None,
         }
     }
@@ -280,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_defers_external_plugins() {
-        assert!(!EvaluatorRegistry::external_plugins_supported());
+    fn registry_reports_process_plugin_support() {
+        assert!(EvaluatorRegistry::external_plugins_supported());
     }
 }

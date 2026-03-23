@@ -27,4 +27,7 @@ uuid = { version = "1", features = ["v4"] }
 csv = "1"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-wasmtime = { version = "30", features = ["wat"] }
+wasmtime = { version = "41", features = ["wat"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"

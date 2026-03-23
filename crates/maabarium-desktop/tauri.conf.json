@@ -35,7 +35,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "resources": ["../../blueprints/"],
+    "resources": ["../../blueprints/", "generated-resources/cli/"],
     "targets": "all",
     "icon": [
       "icons/32x32.png",

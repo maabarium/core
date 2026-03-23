@@ -181,6 +181,7 @@ impl Evaluator for CodeEvaluator {
             weighted_total,
             duration_ms: start.elapsed().as_millis() as u64,
             research: None,
+            lora: None,
         })
     }
 }

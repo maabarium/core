@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Activity, AlertCircle, FileText, Play, Square } from "lucide-react";
 import appLogo from "../../icons/maabariumLogo.png";
 import { AreaComparisonChart } from "./components/charts/AreaComparisonChart";
@@ -7,9 +7,12 @@ import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { BlueprintWizardModal } from "./components/console/BlueprintWizardModal";
 import { ConsoleActivityPanel } from "./components/console/ConsoleActivityPanel";
 import { CouncilRosterCard } from "./components/console/CouncilRosterCard";
+import { DesktopSetupModal } from "./components/console/DesktopSetupModal";
 import { HardwareHeatCard } from "./components/console/HardwareHeatCard";
+import { LoraEvidenceCard } from "./components/console/LoraEvidenceCard";
 import { MetricPanelCard } from "./components/console/MetricPanelCard";
 import { PersistedStackCard } from "./components/console/PersistedStackCard";
+import { ReadinessCenterCard } from "./components/console/ReadinessCenterCard";
 import { ResearchEvidenceCard } from "./components/console/ResearchEvidenceCard";
 import { UpdatesCard } from "./components/console/UpdatesCard";
 import { WorkflowLibraryCard } from "./components/console/WorkflowLibraryCard";
@@ -38,12 +41,17 @@ import type {
   AnalyticsBucket,
   AnalyticsRange,
   ConsoleTab,
+  DesktopSetupState,
 } from "./types/console";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
   const [cpuInfoOpen, setCpuInfoOpen] = useState(false);
   const [analyticsRange, setAnalyticsRange] = useState<AnalyticsRange>("daily");
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [updatePreferencesSaving, setUpdatePreferencesSaving] = useState(false);
+  const [autoOpenedSetup, setAutoOpenedSetup] = useState(false);
   const {
     state,
     loading,
@@ -64,6 +72,10 @@ export default function App() {
     checkForUpdates,
     installAvailableUpdate,
     createBlueprintFromWizard,
+    saveDesktopSetup,
+    setProviderApiKey,
+    installOllama,
+    startOllama,
   } = useDesktopConsole();
   const {
     blueprintQuery,
@@ -110,6 +122,38 @@ export default function App() {
     presentDesktopError,
     dismissDesktopError,
   });
+
+  const wizardLocalModelOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...(state?.desktopSetup.selectedLocalModels ?? []),
+          ...(state?.ollama.models.map((model) => model.name) ?? []),
+          ...(state?.ollama.recommendedModels ?? []),
+        ]),
+      ).filter((value) => value.trim().length > 0),
+    [state],
+  );
+
+  const wizardProviderOptions = useMemo(
+    () => [
+      {
+        id: "ollama",
+        label: "Ollama Local",
+        endpoint: "http://localhost:11434",
+        defaultModelName: wizardLocalModelOptions[0] ?? "llama3",
+      },
+      ...(state?.desktopSetup.remoteProviders ?? [])
+        .filter((provider) => Boolean(provider.providerId.trim()))
+        .map((provider) => ({
+          id: provider.providerId,
+          label: provider.label,
+          endpoint: provider.endpoint ?? "",
+          defaultModelName: provider.modelName ?? "",
+        })),
+    ],
+    [state, wizardLocalModelOptions],
+  );
 
   const dashboard = useMemo(() => {
     const experiments = state?.experiments ?? [];
@@ -187,6 +231,13 @@ export default function App() {
   );
   const latestSuccessfulExperiment = useMemo(
     () => state?.experiments.find((experiment) => !experiment.error) ?? null,
+    [state],
+  );
+  const latestLoraExperiment = useMemo(
+    () =>
+      state?.experiments.find(
+        (experiment) => !experiment.error && Boolean(experiment.lora),
+      ) ?? null,
     [state],
   );
   const councilEntries = useMemo(
@@ -275,6 +326,20 @@ export default function App() {
     [selectedAnalytics],
   );
 
+  useEffect(() => {
+    if (
+      autoOpenedSetup ||
+      loading ||
+      !state?.desktopSetup ||
+      state.desktopSetup.onboardingCompleted
+    ) {
+      return;
+    }
+
+    setSetupOpen(true);
+    setAutoOpenedSetup(true);
+  }, [autoOpenedSetup, loading, state?.desktopSetup]);
+
   const scrollToSection = (sectionId: string) => {
     document.getElementById(sectionId)?.scrollIntoView({
       behavior: "smooth",
@@ -308,6 +373,80 @@ export default function App() {
     scrollToSection("console-section");
   };
 
+  const handleSaveDesktopSetup = async (
+    nextSetup: DesktopSetupState,
+    apiKeys: Record<string, string>,
+  ) => {
+    setSetupSaving(true);
+    try {
+      const saved = await saveDesktopSetup(nextSetup);
+      if (!saved) {
+        return;
+      }
+
+      for (const [providerId, apiKey] of Object.entries(apiKeys)) {
+        if (!apiKey.trim()) {
+          continue;
+        }
+
+        const stored = await setProviderApiKey(providerId, apiKey.trim());
+        if (!stored) {
+          return;
+        }
+      }
+
+      setSetupOpen(false);
+    } finally {
+      setSetupSaving(false);
+    }
+  };
+
+  const handlePersistUpdatePreferences = async (
+    updater: (current: DesktopSetupState) => DesktopSetupState,
+  ) => {
+    if (!state?.desktopSetup) {
+      return;
+    }
+
+    setUpdatePreferencesSaving(true);
+    try {
+      await saveDesktopSetup(updater(state.desktopSetup));
+    } finally {
+      setUpdatePreferencesSaving(false);
+    }
+  };
+
+  const handleSelectUpdateChannel = async (channel: string) => {
+    await handlePersistUpdatePreferences((current) => ({
+      ...current,
+      preferredUpdateChannel: channel,
+      remindLaterUntil: null,
+      remindLaterVersion: null,
+    }));
+  };
+
+  const handleRemindLater = async () => {
+    if (!updateCheck?.version) {
+      return;
+    }
+
+    await handlePersistUpdatePreferences((current) => ({
+      ...current,
+      remindLaterUntil: new Date(
+        Date.now() + 24 * 60 * 60 * 1000,
+      ).toISOString(),
+      remindLaterVersion: updateCheck.version,
+    }));
+  };
+
+  const handleClearUpdateReminder = async () => {
+    await handlePersistUpdatePreferences((current) => ({
+      ...current,
+      remindLaterUntil: null,
+      remindLaterVersion: null,
+    }));
+  };
+
   return (
     <div className="min-h-screen bg-[#050608] text-slate-100 font-sans selection:bg-teal-500/40 selection:text-teal-50">
       <ValidationErrorModal
@@ -320,6 +459,25 @@ export default function App() {
         message={desktopError?.message ?? null}
         onClose={dismissDesktopError}
       />
+
+      {state?.desktopSetup ? (
+        <DesktopSetupModal
+          isOpen={setupOpen}
+          setupState={state.desktopSetup}
+          readinessItems={state.readinessItems}
+          ollama={state.ollama}
+          pluginRuntime={state.pluginRuntime}
+          saving={setupSaving}
+          onClose={() => setSetupOpen(false)}
+          onSave={handleSaveDesktopSetup}
+          onInstallOllama={async () => {
+            await installOllama();
+          }}
+          onStartOllama={async () => {
+            await startOllama();
+          }}
+        />
+      ) : null}
 
       <nav className="sticky top-0 left-0 right-0 z-[100] bg-[#050608]/85 backdrop-blur-2xl border-b border-white/5 py-4">
         <div className="max-w-7xl mx-auto px-8 flex items-center justify-between gap-6">
@@ -636,11 +794,12 @@ export default function App() {
                 onOpenLogFile={() => void openLogFile()}
               />
 
-              <div className="grid grid-cols-1 gap-6 items-stretch xl:grid-cols-2 lg:flex-1">
+              <div className="grid grid-cols-1 gap-6 items-stretch xl:grid-cols-3 lg:flex-1">
                 <HardwareHeatCard hardwareTelemetry={hardwareTelemetry} />
                 <ResearchEvidenceCard
                   latestResearchExperiment={latestResearchExperiment}
                 />
+                <LoraEvidenceCard latestLoraExperiment={latestLoraExperiment} />
               </div>
             </div>
 
@@ -655,6 +814,14 @@ export default function App() {
                 onOpenBlueprintDirectory={() => void openBlueprintDirectory()}
               />
 
+              <ReadinessCenterCard
+                readinessItems={state?.readinessItems ?? []}
+                ollama={state?.ollama ?? null}
+                onOpenSetup={() => setSetupOpen(true)}
+                onInstallOllama={() => void installOllama()}
+                onStartOllama={() => void startOllama()}
+              />
+
               <PersistedStackCard
                 experimentCount={state?.experiments.length ?? 0}
                 proposalCount={state?.proposals.length ?? 0}
@@ -664,11 +831,18 @@ export default function App() {
 
               <UpdatesCard
                 updater={state?.updater}
+                desktopSetup={state?.desktopSetup}
                 updateCheck={updateCheck}
                 checkingForUpdates={checkingForUpdates}
                 installingUpdate={installingUpdate}
+                savingPreferences={updatePreferencesSaving}
                 onCheckForUpdates={() => void checkForUpdates()}
                 onInstallUpdate={() => void installAvailableUpdate()}
+                onSelectChannel={(channel) =>
+                  void handleSelectUpdateChannel(channel)
+                }
+                onRemindLater={() => void handleRemindLater()}
+                onClearReminder={() => void handleClearUpdateReminder()}
               />
             </div>
           </section>
@@ -707,6 +881,8 @@ export default function App() {
             form={wizardForm}
             metricWeightTotal={wizardMetricWeightTotal}
             modelNames={wizardModelNames}
+            localModelOptions={wizardLocalModelOptions}
+            providerOptions={wizardProviderOptions}
             setForm={setWizardForm}
             addMetric={addWizardMetric}
             updateMetric={updateWizardMetric}

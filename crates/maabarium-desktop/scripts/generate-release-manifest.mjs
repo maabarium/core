@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,12 @@ function parseArgs(argv) {
     notes: process.env.MAABARIUM_RELEASE_NOTES ?? "",
     pubDate: new Date().toISOString(),
     baseUrl: process.env.MAABARIUM_UPDATE_BASE_URL ?? "",
+    channel: process.env.MAABARIUM_UPDATE_CHANNEL ?? "stable",
+    minimumSupportedVersion:
+      process.env.MAABARIUM_MINIMUM_SUPPORTED_VERSION ?? packageJson.version,
+    migrationNotice: process.env.MAABARIUM_MIGRATION_NOTICE ?? "",
     platforms: [],
+    cliPlatforms: [],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -68,8 +74,32 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (token === "--channel" && next) {
+      args.channel = next;
+      index += 1;
+      continue;
+    }
+
+    if (token === "--minimum-supported-version" && next) {
+      args.minimumSupportedVersion = next;
+      index += 1;
+      continue;
+    }
+
+    if (token === "--migration-notice" && next) {
+      args.migrationNotice = next;
+      index += 1;
+      continue;
+    }
+
     if (token === "--platform" && next) {
       args.platforms.push(next);
+      index += 1;
+      continue;
+    }
+
+    if (token === "--cli-platform" && next) {
+      args.cliPlatforms.push(next);
       index += 1;
       continue;
     }
@@ -102,7 +132,11 @@ Optional:
   --notes <text>           Inline release notes
   --notes-file <path>      Read release notes from a file
   --pub-date <rfc3339>     Defaults to current time
+  --channel <name>         Defaults to stable
+  --minimum-supported-version <semver>
+  --migration-notice <text>
   --platform <key=path>    Explicit platform mapping relative to artifacts dir
+  --cli-platform <key=path>  Add a CLI archive mapping relative to the current working directory
 
 The generator auto-discovers updater artifacts when the platform can be inferred
 from the filename or path. Use --platform when separate CI jobs produce ambiguous
@@ -202,6 +236,39 @@ function registerArtifact(
   };
 }
 
+function registerCliArtifact(
+  cliArtifacts,
+  platformKey,
+  relativeArchivePath,
+  baseUrl,
+) {
+  const archivePath = path.resolve(process.cwd(), relativeArchivePath);
+
+  if (!fs.existsSync(archivePath)) {
+    throw new Error(
+      `CLI artifact not found for ${platformKey}: ${archivePath}`,
+    );
+  }
+
+  const sha256 = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(archivePath))
+    .digest("hex");
+  const url = new URL(
+    encodeUrlPath(relativeArchivePath),
+    baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`,
+  ).toString();
+
+  cliArtifacts[platformKey] = {
+    url,
+    sha256,
+    archiveKind: "tar.gz",
+    binaryName: platformKey.startsWith("windows")
+      ? "maabarium.exe"
+      : "maabarium",
+  };
+}
+
 function collectPlatforms({ artifactsDir, baseUrl, explicitMappings }) {
   const platforms = {};
 
@@ -249,6 +316,25 @@ function collectPlatforms({ artifactsDir, baseUrl, explicitMappings }) {
   return platforms;
 }
 
+function collectCliArtifacts({ baseUrl, explicitMappings }) {
+  const cliArtifacts = {};
+
+  for (const mapping of explicitMappings) {
+    const [platformKey, relativeArchivePath] = mapping.split("=", 2);
+    if (!platformKey || !relativeArchivePath) {
+      throw new Error(`Invalid --cli-platform value: ${mapping}`);
+    }
+    registerCliArtifact(
+      cliArtifacts,
+      platformKey,
+      relativeArchivePath,
+      baseUrl,
+    );
+  }
+
+  return cliArtifacts;
+}
+
 function validateSemver(version) {
   if (!/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
     throw new Error(
@@ -285,6 +371,10 @@ function main() {
     baseUrl: args.baseUrl,
     explicitMappings: args.platforms,
   });
+  const cliArtifacts = collectCliArtifacts({
+    baseUrl: args.baseUrl,
+    explicitMappings: args.cliPlatforms,
+  });
 
   if (Object.keys(platforms).length === 0) {
     throw new Error(
@@ -294,9 +384,19 @@ function main() {
 
   const manifest = {
     version: args.version,
+    channel: args.channel,
     notes: args.notes,
     pub_date: new Date(args.pubDate).toISOString(),
+    published_at: new Date(args.pubDate).toISOString(),
+    minimum_supported_version: args.minimumSupportedVersion,
+    migration_notice: args.migrationNotice || null,
     platforms,
+    cli:
+      Object.keys(cliArtifacts).length > 0
+        ? {
+            artifacts: cliArtifacts,
+          }
+        : undefined,
   };
 
   fs.mkdirSync(path.dirname(args.output), { recursive: true });

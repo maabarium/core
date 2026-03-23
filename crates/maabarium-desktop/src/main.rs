@@ -2,14 +2,16 @@ use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use maabarium_core::blueprint::{
     AgentDef, AgentsConfig, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintMeta,
-    BlueprintTemplateKind, ConstraintsConfig, DomainConfig, MetricDef, MetricsConfig,
-    ModelAssignment, ModelDef, ModelsConfig,
+    BlueprintTemplateKind, ConstraintsConfig, DomainConfig, EvaluatorKind, MetricDef,
+    MetricsConfig, ModelAssignment, ModelDef, ModelsConfig,
 };
 use maabarium_core::{
-    default_db_path, default_log_path, read_recent_log_lines_from_path, BlueprintFile, Engine,
-    EngineConfig, EvaluatorRegistry, Persistence, PersistedProposal,
+    default_db_path, default_log_path, read_recent_log_lines_from_path, ApiKeyStore,
+    BlueprintFile, Engine, EngineConfig, EvaluatorRegistry, Persistence, PersistedProposal,
+    ProcessPluginManifest, SecretStore,
 };
 use maabarium_core::persistence::PersistedExperiment;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,6 +26,15 @@ use tracing::{error, info, warn};
 use tracing_subscriber::prelude::*;
 use url::Url;
 
+mod setup;
+
+use crate::setup::{
+    build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
+    load_desktop_setup, save_desktop_setup as persist_desktop_setup,
+    start_ollama as start_ollama_runtime, DesktopSetupState, OllamaStatus,
+    ReadinessItem,
+};
+
 const DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
 const BLUEPRINTS_DIR_NAME: &str = "blueprints";
 const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
@@ -31,6 +42,7 @@ const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
 struct AppState {
     blueprints_dir: PathBuf,
     blueprint_path: Mutex<PathBuf>,
+    settings_path: PathBuf,
     hardware_sampler: Mutex<HardwareTelemetrySampler>,
     db_path: PathBuf,
     log_path: PathBuf,
@@ -106,6 +118,29 @@ struct InstallUpdateResult {
     should_restart: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginRuntimeState {
+    plugin_id: String,
+    display_name: Option<String>,
+    manifest_path: String,
+    command: Option<String>,
+    args: Vec<String>,
+    working_dir: Option<String>,
+    timeout_seconds: Option<u64>,
+    environment_keys: Vec<String>,
+    status: PluginRuntimeStatus,
+    summary: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PluginRuntimeStatus {
+    Ready,
+    NeedsAttention,
+}
+
 #[derive(Debug, Clone)]
 struct UpdateRuntimeConfig {
     channel: String,
@@ -117,6 +152,7 @@ struct UpdateRuntimeConfig {
 struct DesktopRuntimePaths {
     db_path: PathBuf,
     log_path: PathBuf,
+    cli_path: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,9 +166,13 @@ struct ConsoleState {
     blueprint: Option<BlueprintFile>,
     blueprint_error: Option<String>,
     evaluator_kind: Option<String>,
+    plugin_runtime: Option<PluginRuntimeState>,
     available_blueprints: Vec<BlueprintOption>,
     run_analytics: RunAnalytics,
     updater: UpdaterConfigurationState,
+    desktop_setup: DesktopSetupState,
+    readiness_items: Vec<ReadinessItem>,
+    ollama: OllamaStatus,
     experiments: Vec<PersistedExperiment>,
     proposals: Vec<PersistedProposal>,
     logs: Vec<String>,
@@ -282,6 +322,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_console_state,
+            save_desktop_setup,
+            set_provider_api_key,
+            install_ollama,
+            start_ollama,
             start_engine,
             stop_engine,
             open_log_file,
@@ -302,10 +346,16 @@ fn initialize_app_state(
 ) -> anyhow::Result<AppState> {
     let blueprints_dir = prepare_desktop_blueprints_directory(app)?;
     let blueprint_path = default_blueprint_path(&blueprints_dir);
+    seed_bundled_cli(app, &runtime_paths.cli_path)?;
+    let settings_path = blueprints_dir
+        .parent()
+        .unwrap_or(&blueprints_dir)
+        .join("desktop-setup.json");
 
     Ok(AppState {
         blueprints_dir,
         blueprint_path: Mutex::new(blueprint_path),
+        settings_path,
         hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
         db_path: runtime_paths.db_path.clone(),
         log_path: runtime_paths.log_path.clone(),
@@ -367,6 +417,104 @@ fn bundled_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBu
         .resource_dir()
         .context("Failed to resolve the desktop resource directory")?
         .join(BLUEPRINTS_DIR_NAME))
+}
+
+fn bundled_cli_resource_path(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+    let bundled_path = app
+        .path()
+        .resource_dir()
+        .map(|directory| {
+            directory
+                .join("cli")
+                .join(runtime_platform_key())
+                .join(cli_binary_name())
+        })
+        .unwrap_or_else(|_| dev_bundled_cli_resource_path());
+
+    if bundled_path.exists() {
+        Ok(bundled_path)
+    } else {
+        let dev_path = dev_bundled_cli_resource_path();
+        if dev_path.exists() {
+            Ok(dev_path)
+        } else {
+            Ok(bundled_path)
+        }
+    }
+}
+
+fn dev_bundled_cli_resource_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("generated-resources")
+        .join("cli")
+        .join(runtime_platform_key())
+        .join(cli_binary_name())
+}
+
+fn seed_bundled_cli(app: &tauri::AppHandle, destination: &Path) -> anyhow::Result<PathBuf> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create bundled CLI directory {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let bundled_cli_path = match bundled_cli_resource_path(app) {
+        Ok(path) if path.exists() => path,
+        Ok(_) => return Ok(destination.to_path_buf()),
+        Err(error) => {
+            warn!(?error, "Bundled CLI resource is unavailable");
+            return Ok(destination.to_path_buf());
+        }
+    };
+
+    let should_copy = !destination.exists()
+        || std::fs::read(destination).ok() != std::fs::read(&bundled_cli_path).ok();
+    if should_copy {
+        std::fs::copy(&bundled_cli_path, destination).with_context(|| {
+            format!(
+                "Failed to copy bundled CLI from {} to {}",
+                bundled_cli_path.display(),
+                destination.display()
+            )
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(destination)?.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(destination, permissions)?;
+        }
+    }
+
+    Ok(destination.to_path_buf())
+}
+
+fn cli_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "maabarium.exe"
+    } else {
+        "maabarium"
+    }
+}
+
+fn runtime_platform_key() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "linux" => "linux",
+        "windows" => "windows",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "aarch64",
+        "x86_64" => "x86_64",
+        "x86" => "i686",
+        other => other,
+    };
+    format!("{os}-{arch}")
 }
 
 fn seed_bundled_blueprints(app: &tauri::AppHandle, target_directory: &Path) -> anyhow::Result<usize> {
@@ -482,11 +630,16 @@ fn prepare_desktop_runtime_paths() -> anyhow::Result<DesktopRuntimePaths> {
 
     let db_path = data_dir.join("maabarium.db");
     let log_path = log_dir.join("maabarium.log");
+    let cli_path = data_dir.join("bin").join(cli_binary_name());
 
     migrate_legacy_runtime_file(&default_db_path(), &db_path)?;
     migrate_legacy_runtime_file(&default_log_path(), &log_path)?;
 
-    Ok(DesktopRuntimePaths { db_path, log_path })
+    Ok(DesktopRuntimePaths {
+        db_path,
+        log_path,
+        cli_path,
+    })
 }
 
 fn migrate_legacy_runtime_file(legacy_path: &Path, target_path: &Path) -> anyhow::Result<()> {
@@ -576,12 +729,13 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     let blueprint_path = current_blueprint_path(state);
     let hardware_telemetry = sample_hardware_telemetry(state);
     let blueprint_result = BlueprintFile::load(&blueprint_path);
+    let plugin_runtime = blueprint_result.as_ref().ok().and_then(describe_plugin_runtime);
     let available_blueprints = discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
+    let desktop_setup = hydrated_desktop_setup(state);
     let evaluator_kind = blueprint_result
         .as_ref()
         .ok()
-        .map(EvaluatorRegistry::resolve_builtin)
-        .map(|kind| kind.as_str().to_owned());
+        .map(EvaluatorRegistry::describe);
     let (experiments, run_analytics, proposals) = Persistence::open(&state.db_path.display().to_string())
         .map(|persistence| {
             let recent_experiments = persistence.recent_experiments(400).unwrap_or_default();
@@ -598,7 +752,21 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             )
         });
     let logs = read_recent_log_lines_from_path(&state.log_path, 40).unwrap_or_default();
-    let updater = describe_updater_configuration();
+    let updater = describe_updater_configuration(&desktop_setup);
+    let ollama = build_ollama_status();
+    let fallback_workspace = blueprint_result
+        .as_ref()
+        .ok()
+        .map(|blueprint| blueprint.domain.repo_path.as_str())
+        .filter(|value| !value.trim().is_empty());
+    let readiness_items = build_readiness_items(
+        &desktop_setup,
+        fallback_workspace,
+        &ollama,
+        updater.configured,
+        &state.db_path,
+        &state.log_path,
+    );
 
     match blueprint_result {
         Ok(blueprint) => ConsoleState {
@@ -610,9 +778,13 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             blueprint: Some(blueprint),
             blueprint_error: None,
             evaluator_kind,
+            plugin_runtime,
             available_blueprints,
             run_analytics,
             updater,
+            desktop_setup,
+            readiness_items,
+            ollama,
             experiments,
             proposals,
             logs,
@@ -626,14 +798,181 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             blueprint: None,
             blueprint_error: Some(error.to_string()),
             evaluator_kind,
+            plugin_runtime,
             available_blueprints,
             run_analytics,
             updater,
+            desktop_setup,
+            readiness_items,
+            ollama,
             experiments,
             proposals,
             logs,
         },
     }
+}
+
+fn hydrated_desktop_setup(state: &AppState) -> DesktopSetupState {
+    let mut setup = load_desktop_setup(&state.settings_path);
+    let secret_store = SecretStore::new();
+    for provider in &mut setup.remote_providers {
+        let has_secret = secret_store
+            .get_api_key(&provider.provider_id)
+            .ok()
+            .flatten()
+            .is_some();
+        provider.configured = has_secret && provider.model_name.is_some();
+    }
+
+    setup
+}
+
+fn describe_plugin_runtime(blueprint: &BlueprintFile) -> Option<PluginRuntimeState> {
+    let evaluator = blueprint.evaluator.as_ref()?;
+    if evaluator.kind != EvaluatorKind::Process {
+        return None;
+    }
+
+    let manifest_path = evaluator
+        .manifest_path
+        .as_deref()
+        .map(|path| resolve_relative_path(Path::new(&blueprint.domain.repo_path), path))?;
+    let manifest_display = manifest_path.display().to_string();
+
+    let content = match std::fs::read_to_string(&manifest_path) {
+        Ok(content) => content,
+        Err(error) => {
+            return Some(PluginRuntimeState {
+                plugin_id: evaluator
+                    .plugin_id
+                    .clone()
+                    .unwrap_or_else(|| "process-plugin".to_owned()),
+                display_name: None,
+                manifest_path: manifest_display.clone(),
+                command: None,
+                args: Vec::new(),
+                working_dir: None,
+                timeout_seconds: None,
+                environment_keys: Vec::new(),
+                status: PluginRuntimeStatus::NeedsAttention,
+                summary: "Plugin manifest could not be loaded.".to_owned(),
+                error: Some(format!(
+                    "Failed to read plugin manifest {}: {error}",
+                    manifest_display
+                )),
+            });
+        }
+    };
+
+    let manifest: ProcessPluginManifest = match toml::from_str(&content) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            return Some(PluginRuntimeState {
+                plugin_id: evaluator
+                    .plugin_id
+                    .clone()
+                    .unwrap_or_else(|| "process-plugin".to_owned()),
+                display_name: None,
+                manifest_path: manifest_display.clone(),
+                command: None,
+                args: Vec::new(),
+                working_dir: None,
+                timeout_seconds: None,
+                environment_keys: Vec::new(),
+                status: PluginRuntimeStatus::NeedsAttention,
+                summary: "Plugin manifest is invalid.".to_owned(),
+                error: Some(format!(
+                    "Invalid plugin manifest {}: {error}",
+                    manifest_display
+                )),
+            });
+        }
+    };
+
+    let resolved_working_dir = manifest
+        .process
+        .working_dir
+        .as_deref()
+        .map(|path| resolve_relative_path(manifest_path.parent().unwrap_or(Path::new(".")), path));
+    let resolved_command = resolve_plugin_command(
+        &manifest.process.command,
+        resolved_working_dir
+            .as_deref()
+            .unwrap_or_else(|| manifest_path.parent().unwrap_or(Path::new("."))),
+    );
+    let (status, summary, error) = if manifest.process.command.trim().is_empty() {
+        (
+            PluginRuntimeStatus::NeedsAttention,
+            "Plugin command is missing.".to_owned(),
+            Some("Plugin process command cannot be empty".to_owned()),
+        )
+    } else if resolved_command.is_none() {
+        (
+            PluginRuntimeStatus::NeedsAttention,
+            "Plugin command is not available on this machine.".to_owned(),
+            Some(format!(
+                "Command '{}' was not found from the plugin working directory or PATH.",
+                manifest.process.command
+            )),
+        )
+    } else {
+        (
+            PluginRuntimeStatus::Ready,
+            "Plugin manifest and command look ready for execution.".to_owned(),
+            None,
+        )
+    };
+
+    let mut environment_keys = manifest.environment.keys().cloned().collect::<Vec<_>>();
+    environment_keys.sort();
+
+    Some(PluginRuntimeState {
+        plugin_id: manifest.plugin.id.clone(),
+        display_name: manifest.plugin.display_name.clone(),
+        manifest_path: manifest_display,
+        command: resolved_command
+            .map(|command| command.display().to_string())
+            .or_else(|| Some(manifest.process.command.clone())),
+        args: manifest.process.args.clone(),
+        working_dir: resolved_working_dir.map(|path| path.display().to_string()),
+        timeout_seconds: Some(manifest.plugin.timeout_seconds),
+        environment_keys,
+        status,
+        summary,
+        error,
+    })
+}
+
+fn resolve_relative_path(base: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+fn resolve_plugin_command(command: &str, base: &Path) -> Option<PathBuf> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let command_path = Path::new(trimmed);
+    if command_path.is_absolute() {
+        return command_path.exists().then(|| command_path.to_path_buf());
+    }
+
+    if trimmed.contains(std::path::MAIN_SEPARATOR) || trimmed.starts_with('.') {
+        let candidate = base.join(command_path);
+        return candidate.exists().then_some(candidate);
+    }
+
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|entry| entry.join(trimmed))
+            .find(|candidate| candidate.exists())
+    })
 }
 
 fn discover_available_blueprints(blueprint_directory: &Path, active_path: &Path) -> Vec<BlueprintOption> {
@@ -891,11 +1230,20 @@ fn parse_token_usage_event(line: &str) -> Option<(DateTime<Utc>, u64)> {
     Some((timestamp, token_usage))
 }
 
-fn update_channel_from_env() -> String {
+fn update_channel_from_env() -> Option<String> {
     std::env::var("MAABARIUM_UPDATE_CHANNEL")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+fn resolved_update_channel(setup: Option<&DesktopSetupState>) -> String {
+    setup
+        .and_then(|value| value.preferred_update_channel.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(update_channel_from_env)
         .unwrap_or_else(|| "stable".to_owned())
 }
 
@@ -921,8 +1269,8 @@ fn update_pubkey_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn describe_updater_configuration() -> UpdaterConfigurationState {
-    let channel = update_channel_from_env();
+fn describe_updater_configuration(setup: &DesktopSetupState) -> UpdaterConfigurationState {
+    let channel = resolved_update_channel(Some(setup));
     let endpoint = update_endpoint_from_env(&channel);
     let configured = endpoint.is_some() && update_pubkey_from_env().is_some();
 
@@ -934,8 +1282,8 @@ fn describe_updater_configuration() -> UpdaterConfigurationState {
     }
 }
 
-fn update_runtime_configuration() -> Result<UpdateRuntimeConfig, String> {
-    let channel = update_channel_from_env();
+fn update_runtime_configuration(setup: &DesktopSetupState) -> Result<UpdateRuntimeConfig, String> {
+    let channel = resolved_update_channel(Some(setup));
     let endpoint = update_endpoint_from_env(&channel)
         .ok_or_else(|| "Set MAABARIUM_UPDATE_MANIFEST_URL or MAABARIUM_UPDATE_BASE_URL to enable desktop updates".to_owned())?;
     let pubkey = update_pubkey_from_env()
@@ -948,8 +1296,11 @@ fn update_runtime_configuration() -> Result<UpdateRuntimeConfig, String> {
     })
 }
 
-fn configured_updater(app: &tauri::AppHandle) -> Result<(tauri_plugin_updater::Updater, UpdateRuntimeConfig), String> {
-    let config = update_runtime_configuration()?;
+fn configured_updater(
+    app: &tauri::AppHandle,
+    setup: &DesktopSetupState,
+) -> Result<(tauri_plugin_updater::Updater, UpdateRuntimeConfig), String> {
+    let config = update_runtime_configuration(setup)?;
     let endpoint = Url::parse(&config.endpoint)
         .map_err(|error| format!("Invalid update manifest URL '{}': {error}", config.endpoint))?;
     let updater = app
@@ -968,6 +1319,52 @@ fn current_blueprint_path(state: &AppState) -> PathBuf {
         Ok(blueprint_path) => blueprint_path.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     }
+}
+
+#[tauri::command]
+fn save_desktop_setup(
+    state: tauri::State<'_, AppState>,
+    setup: DesktopSetupState,
+) -> Result<ConsoleState, String> {
+    persist_desktop_setup(&state.settings_path, &setup)?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn set_provider_api_key(
+    state: tauri::State<'_, AppState>,
+    provider_id: String,
+    api_key: String,
+) -> Result<ConsoleState, String> {
+    let provider_id = provider_id.trim().to_owned();
+    if provider_id.is_empty() {
+        return Err("Provider id is required".to_owned());
+    }
+
+    let secret_store = SecretStore::new();
+    if api_key.trim().is_empty() {
+        secret_store
+            .delete_api_key(&provider_id)
+            .map_err(|error| format!("Failed to clear API key for provider '{provider_id}': {error}"))?;
+    } else {
+        secret_store
+            .set_api_key(&provider_id, SecretString::from(api_key))
+            .map_err(|error| format!("Failed to store API key for provider '{provider_id}': {error}"))?;
+    }
+
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn install_ollama(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+    install_ollama_runtime()?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn start_ollama(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+    start_ollama_runtime()?;
+    Ok(build_console_state(&state))
 }
 
 fn sample_hardware_telemetry(state: &AppState) -> HardwareTelemetry {
@@ -1039,9 +1436,13 @@ fn set_blueprint_path(state: tauri::State<'_, AppState>, path: String) -> Result
 }
 
 #[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResult, String> {
+async fn check_for_updates(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<UpdateCheckResult, String> {
+    let setup = hydrated_desktop_setup(&state);
     let current_version = app.package_info().version.to_string();
-    let channel = update_channel_from_env();
+    let channel = resolved_update_channel(Some(&setup));
     let endpoint = update_endpoint_from_env(&channel);
     let configured = endpoint.is_some() && update_pubkey_from_env().is_some();
 
@@ -1058,7 +1459,7 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResult, S
         });
     }
 
-    let (updater, config) = configured_updater(&app)?;
+    let (updater, config) = configured_updater(&app, &setup)?;
     let update = updater
         .check()
         .await
@@ -1079,8 +1480,12 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateCheckResult, S
 }
 
 #[tauri::command]
-async fn install_available_update(app: tauri::AppHandle) -> Result<InstallUpdateResult, String> {
-    let (updater, _) = configured_updater(&app)?;
+async fn install_available_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<InstallUpdateResult, String> {
+    let setup = hydrated_desktop_setup(&state);
+    let (updater, _) = configured_updater(&app, &setup)?;
     let update = updater
         .check()
         .await
@@ -1255,11 +1660,12 @@ fn create_blueprint_from_wizard(
             assignment: request.model_assignment,
             models,
         },
-            library: Some(BlueprintLibraryMeta {
-                kind: BlueprintLibraryKind::Workflow,
-                setup_required: false,
-                template: None,
-            }),
+        evaluator: None,
+        library: Some(BlueprintLibraryMeta {
+            kind: BlueprintLibraryKind::Workflow,
+            setup_required: false,
+            template: None,
+        }),
     };
 
     blueprint
@@ -1318,7 +1724,7 @@ fn start_engine(state: tauri::State<'_, AppState>) -> Result<ConsoleState, Strin
             let outcome = async {
                 let blueprint = BlueprintFile::load(&blueprint_path)
                     .with_context(|| format!("Failed to load blueprint {}", blueprint_path.display()))?;
-                let evaluator = EvaluatorRegistry::build_builtin(&blueprint)
+                let evaluator = EvaluatorRegistry::build(&blueprint)
                     .context("Failed to build evaluator")?;
                 let engine = Engine::new(
                     EngineConfig {
@@ -1428,6 +1834,7 @@ mod tests {
         AppState {
             blueprints_dir: blueprints_dir.clone(),
             blueprint_path: Mutex::new(blueprints_dir.join("example.toml")),
+            settings_path: PathBuf::from("data/desktop-setup.json"),
             hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
             db_path: PathBuf::from("data/maabarium.db"),
             log_path: PathBuf::from("data/maabarium.log"),
@@ -1504,5 +1911,13 @@ mod tests {
         assert!(matches!(telemetry.gpu.status, HardwareSensorStatus::Unavailable));
         assert!(telemetry.gpu.utilization_percent.is_none());
         assert!(matches!(telemetry.npu.status, HardwareSensorStatus::Unavailable));
+    }
+
+    #[test]
+    fn resolved_update_channel_uses_saved_desktop_preference() {
+        let mut setup = DesktopSetupState::default();
+        setup.preferred_update_channel = Some("beta".to_owned());
+
+        assert_eq!(resolved_update_channel(Some(&setup)), "beta");
     }
 }

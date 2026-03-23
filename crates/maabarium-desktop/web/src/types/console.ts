@@ -31,9 +31,49 @@ export type ResearchCitation = {
   snippet: string;
 };
 
+export type ResearchQueryTrace = {
+  provider: string;
+  queryText: string;
+  resultCount: number;
+  topUrls: string[];
+  latencyMs: number;
+  executedAt: string;
+  error: string | null;
+};
+
 export type ResearchArtifacts = {
   sources: ResearchSource[];
   citations: ResearchCitation[];
+  queryTraces: ResearchQueryTrace[];
+};
+
+export type LoraStageArtifact = {
+  name: string;
+  command: string;
+  args: string[];
+  workingDir: string;
+  timeoutSeconds: number;
+  expectedArtifacts: string[];
+  verifiedArtifacts: string[];
+};
+
+export type LoraArtifacts = {
+  trainer: string;
+  baseModel: string;
+  dataset: string;
+  adapterPath: string;
+  outputDir: string | null;
+  evalCommand: string | null;
+  epochs: number | null;
+  learningRate: number | null;
+  adapterRatio: number;
+  metadataRatio: number;
+  reproducibilityRatio: number;
+  trainerSignal: number;
+  executionSignal: number;
+  sandboxFileCount: number;
+  sandboxTotalBytes: number;
+  stages: LoraStageArtifact[];
 };
 
 export type AgentDef = {
@@ -95,6 +135,7 @@ export type PersistedExperiment = {
   created_at: string;
   metrics: MetricScore[];
   research: ResearchArtifacts | null;
+  lora: LoraArtifacts | null;
 };
 
 export type FilePatch = {
@@ -141,10 +182,79 @@ export type UpdateCheckResult = {
   body: string | null;
 };
 
+export type PluginRuntimeStatus = "ready" | "needs_attention";
+
+export type PluginRuntimeState = {
+  pluginId: string;
+  displayName: string | null;
+  manifestPath: string;
+  command: string | null;
+  args: string[];
+  workingDir: string | null;
+  timeoutSeconds: number | null;
+  environmentKeys: string[];
+  status: PluginRuntimeStatus;
+  summary: string;
+  error: string | null;
+};
+
 export type InstallUpdateResult = {
   installed: boolean;
   version: string | null;
   shouldRestart: boolean;
+};
+
+export type RuntimeStrategy = "local" | "remote" | "mixed";
+
+export type RemoteProviderSetup = {
+  providerId: string;
+  label: string;
+  endpoint: string | null;
+  modelName: string | null;
+  fallbackOnly: boolean;
+  configured: boolean;
+};
+
+export type DesktopSetupState = {
+  guidedMode: boolean;
+  onboardingCompleted: boolean;
+  runtimeStrategy: RuntimeStrategy | null;
+  workspacePath: string | null;
+  selectedLocalModels: string[];
+  remoteProviders: RemoteProviderSetup[];
+  preferredUpdateChannel: string | null;
+  remindLaterUntil: string | null;
+  remindLaterVersion: string | null;
+  lastSetupCompletedAt: string | null;
+};
+
+export type ReadinessStatus = "ready" | "needs_attention" | "optional";
+
+export type ReadinessItem = {
+  id: string;
+  title: string;
+  status: ReadinessStatus;
+  summary: string;
+  actionLabel: string;
+  lastCheckedAtEpochMs: number;
+};
+
+export type OllamaModelInfo = {
+  name: string;
+  sizeLabel: string | null;
+  modifiedAt: string | null;
+};
+
+export type OllamaStatus = {
+  installed: boolean;
+  running: boolean;
+  commandAvailable: boolean;
+  launchAtLoginSupported: boolean;
+  installCommand: string | null;
+  startCommand: string | null;
+  statusDetail: string;
+  models: OllamaModelInfo[];
+  recommendedModels: string[];
 };
 
 export type AnalyticsRange = "daily" | "weekly" | "monthly";
@@ -222,9 +332,13 @@ export type ConsoleState = {
   blueprint: BlueprintFile | null;
   blueprintError: string | null;
   evaluatorKind: string | null;
+  pluginRuntime: PluginRuntimeState | null;
   availableBlueprints: AvailableBlueprint[];
   runAnalytics: RunAnalytics;
   updater: UpdaterConfigurationState;
+  desktopSetup: DesktopSetupState;
+  readinessItems: ReadinessItem[];
+  ollama: OllamaStatus;
   experiments: PersistedExperiment[];
   proposals: PersistedProposal[];
   logs: string[];

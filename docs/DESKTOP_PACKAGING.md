@@ -41,6 +41,7 @@ On macOS the desktop app uses:
 - database: `~/Library/Application Support/com.maabarium.console/maabarium.db`
 - log file: `~/Library/Logs/com.maabarium.console/maabarium.log`
 - blueprint library: `~/Library/Application Support/com.maabarium.console/blueprints/`
+- bundled CLI: `~/Library/Application Support/com.maabarium.console/bin/maabarium`
 
 On first desktop launch, if legacy repository-relative files exist, the app migrates them forward:
 
@@ -49,6 +50,8 @@ On first desktop launch, if legacy repository-relative files exist, the app migr
 - legacy blueprints: `blueprints/*.toml`
 
 The desktop bundle now also includes the built-in repository blueprint library as app resources. On startup the app seeds any missing built-in blueprints from the bundled resources into the app-data `blueprints/` directory, so downloaded releases no longer depend on a repository checkout to populate the library.
+
+Supported release builds can also bundle the standalone `maabarium` CLI binary as an app resource. On startup the desktop app seeds that binary into the app-data `bin/` directory and refreshes it when the bundled resource changes, so desktop installs can expose the same terminal tooling without a second manual download.
 
 The app reads the app-specific paths to populate live metrics, history, diff, and log views.
 
@@ -86,6 +89,7 @@ For any release-like handoff of the desktop app, document at least:
 - expected database path for the packaged app
 - expected log path for the packaged app
 - expected blueprint-library path for the packaged app
+- expected bundled CLI path for the packaged app when release bundling is enabled
 - whether the binary was tested against a real local database/log pair
 
 ## macOS Signing and Notarization
@@ -168,6 +172,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
 - On macOS that means `~/Library/Application Support/com.maabarium.console/` for the database and blueprint library, plus `~/Library/Logs/com.maabarium.console/` for logs.
 - Existing repository-relative desktop data and blueprints are migrated forward on first run when present.
 - Built-in blueprint TOMLs are bundled inside the app and seeded into app data when missing.
+- When release bundling is enabled, the packaged app also refreshes a seeded CLI copy under `~/Library/Application Support/com.maabarium.console/bin/`.
 
 ## Explicit Deferrals
 

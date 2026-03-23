@@ -32,6 +32,7 @@ impl Evaluator for MockEvaluator {
             weighted_total: self.score,
             duration_ms: 1,
             research: None,
+            lora: None,
         })
     }
 }

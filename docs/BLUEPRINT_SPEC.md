@@ -101,6 +101,13 @@ models = [
     # { name = "qwen", provider = "ollama", endpoint = "http://localhost:11434",
     #   temperature = 0.5, max_tokens = 1024 },
 ]
+
+# ─── Evaluator Override ─────────────────────────────────────────────────────
+
+[evaluator]
+kind = "process"                 # optional: "auto" | "builtin" | "process"
+manifest_path = "evaluators/custom-evaluator.toml"
+plugin_id = "custom-evaluator"   # optional display/runtime identifier
 ```
 
 ## Field Reference
@@ -186,6 +193,38 @@ models = [
 - `assignment = "explicit"`: each agent uses the model named in its `model` field.
 - `assignment = "round_robin"`: the runtime rotates requests across the configured model list through `ModelPool`.
 
+### `[evaluator]`
+
+This section is optional. If omitted, Maabarium continues to auto-select one of the built-in evaluators from the blueprint language, metrics, and target patterns.
+
+| Field           | Type   | Required | Description                                                       |
+| --------------- | ------ | -------- | ----------------------------------------------------------------- |
+| `kind`          | string | —        | `"auto"`, `"builtin"`, or `"process"`                             |
+| `manifest_path` | string | process  | Path to a TOML process-plugin manifest, resolved from `repo_path` |
+| `plugin_id`     | string | —        | Optional identifier shown in runtime state and diagnostics        |
+
+#### Process Evaluator Plugin Manifest
+
+When `kind = "process"`, `manifest_path` should point to a TOML file like this:
+
+```toml
+[plugin]
+id = "custom-evaluator"
+version = "1.0.0"
+display_name = "Custom Evaluator"
+timeout_seconds = 60
+
+[process]
+command = "python3"
+args = ["tools/custom_evaluator.py"]
+working_dir = "."
+
+[environment]
+RUST_LOG = "info"
+```
+
+The plugin subprocess receives JSON on stdin containing the proposal, current iteration, and metric definitions. It must print JSON on stdout with at least a `scores` array compatible with Maabarium metric scoring.
+
 ## Validation Rules
 
 The engine validates a blueprint at load time and refuses to start if:
@@ -214,10 +253,11 @@ The research evaluator activates when a blueprint clearly targets research work,
 
 The built-in research evaluator enforces cited research output instead of relying on prompt wording alone.
 
-It does two things that the generic prompt path does not:
+It does three things that the generic prompt path does not:
 
-1. it requires at least one external citation URL in the proposed content, and
-2. it verifies cited sources over HTTP and persists source metadata alongside the experiment row.
+1. it extracts external citations from the proposed content,
+2. it can issue a Brave Search API discovery query when credentials are configured, and
+3. it verifies and persists source metadata plus query traces alongside the experiment row.
 
 ### Citation Requirements
 
@@ -226,7 +266,7 @@ Research proposals must include at least one citation in the proposed file conte
 - markdown links such as `[SQLite docs](https://sqlite.org/index.html)`
 - bare URLs such as `https://www.rust-lang.org/`
 
-If no external citation URL is present in the proposal content, evaluation fails for that iteration.
+If neither a citation nor a usable discovery query can be derived, evaluation fails for that iteration.
 
 ### Persisted Research Metadata
 
@@ -234,6 +274,7 @@ For successful research evaluations, Maabarium stores:
 
 - Per-source records: original URL, final URL after redirects when available, host name, optional label, optional HTML title, citation count, verification status, HTTP status code when available, and fetch error when verification failed.
 - Per-citation records: file path, source URL, optional label, line number, and captured snippet.
+- Per-query-trace records: provider name, issued query text, result count, top returned URLs, latency, execution time, and any discovery error.
 
 This metadata is persisted in SQLite and included in JSON and CSV exports through the experiment record.
 

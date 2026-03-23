@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 anyhow.workspace = true
 chrono.workspace = true
 maabarium-core = { path = "../maabarium-core" }
+secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

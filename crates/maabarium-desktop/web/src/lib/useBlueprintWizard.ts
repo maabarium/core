@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { buildWizardForm } from "./blueprints";
+import { buildSuggestedWizardModel, buildWizardForm } from "./blueprints";
 import type {
   BlueprintWizardForm,
   BlueprintWizardRequest,
@@ -122,18 +122,18 @@ export function useBlueprintWizard({
   };
 
   const addWizardModel = () => {
+    const suggestedModel = buildSuggestedWizardModel(state);
     setWizardForm((current) => ({
       ...current,
       models: [
         ...current.models,
         {
-          name: `model_${current.models.length + 1}`,
-          provider: "ollama",
-          endpoint: "http://localhost:11434",
-          apiKeyEnv: "",
-          temperature: 0.7,
-          maxTokens: 2048,
-          requestsPerMinute: "",
+          ...suggestedModel,
+          name: current.models.some(
+            (model) => model.name === suggestedModel.name,
+          )
+            ? `${suggestedModel.name}_${current.models.length + 1}`
+            : suggestedModel.name,
         },
       ],
     }));

@@ -18,6 +18,13 @@ type BlueprintWizardModalProps = {
   form: BlueprintWizardForm;
   metricWeightTotal: number;
   modelNames: string[];
+  localModelOptions: string[];
+  providerOptions: Array<{
+    id: string;
+    label: string;
+    endpoint: string;
+    defaultModelName: string;
+  }>;
   setForm: Dispatch<SetStateAction<BlueprintWizardForm>>;
   addMetric: () => void;
   updateMetric: (
@@ -51,6 +58,8 @@ export function BlueprintWizardModal({
   form,
   metricWeightTotal,
   modelNames,
+  localModelOptions,
+  providerOptions,
   setForm,
   addMetric,
   updateMetric,
@@ -67,6 +76,11 @@ export function BlueprintWizardModal({
   if (!open) {
     return null;
   }
+
+  const providerOptionsById = new Map(
+    providerOptions.map((provider) => [provider.id, provider]),
+  );
+  const showHydrationReview = form.template !== "custom";
 
   return (
     <div className="fixed inset-0 z-[140] overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
@@ -135,6 +149,39 @@ export function BlueprintWizardModal({
                 );
               })}
             </div>
+
+            {showHydrationReview ? (
+              <div className="rounded-xl border border-teal-400/15 bg-teal-500/[0.06] px-4 py-4">
+                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-teal-200">
+                  Template Hydration Review
+                </div>
+                <div className="mt-2 text-sm text-slate-200">
+                  This template will generate a runnable workflow in the desktop
+                  blueprint directory instead of loading the starter template
+                  directly.
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] text-slate-400 md:grid-cols-3">
+                  <div>
+                    <span className="font-semibold text-slate-200">
+                      Workspace:
+                    </span>{" "}
+                    {form.repoPath || "Not set"}
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-200">
+                      Language:
+                    </span>{" "}
+                    {form.language || "Not set"}
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-200">
+                      Primary model:
+                    </span>{" "}
+                    {form.models[0]?.name || "Not set"}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
               <div className="space-y-4">
@@ -589,102 +636,220 @@ export function BlueprintWizardModal({
                         key={`${model.name}-${index}`}
                         className="space-y-3 rounded-lg border border-white/10 bg-slate-950/50 p-3"
                       >
-                        <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,0.8fr)_auto]">
-                          <input
-                            value={model.name}
-                            onChange={(event) =>
-                              updateModel(index, "name", event.target.value)
-                            }
-                            placeholder="Model name"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
-                            type="text"
-                          />
-                          <input
-                            value={model.provider}
-                            onChange={(event) =>
-                              updateModel(index, "provider", event.target.value)
-                            }
-                            placeholder="Provider"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
-                            type="text"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => removeModel(index)}
-                            disabled={form.models.length === 1}
-                            className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                          <input
-                            value={model.endpoint}
-                            onChange={(event) =>
-                              updateModel(index, "endpoint", event.target.value)
-                            }
-                            placeholder="Endpoint"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
-                            type="text"
-                          />
-                          <input
-                            value={model.apiKeyEnv}
-                            onChange={(event) =>
-                              updateModel(
-                                index,
-                                "apiKeyEnv",
-                                event.target.value,
-                              )
-                            }
-                            placeholder="API key env var (optional)"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
-                            type="text"
-                          />
-                          <input
-                            value={model.temperature}
-                            onChange={(event) =>
-                              updateModel(
-                                index,
-                                "temperature",
-                                Number(event.target.value),
-                              )
-                            }
-                            placeholder="Temperature"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
-                            type="number"
-                            min="0"
-                            max="2"
-                            step="0.1"
-                          />
-                          <input
-                            value={model.maxTokens}
-                            onChange={(event) =>
-                              updateModel(
-                                index,
-                                "maxTokens",
-                                Number(event.target.value),
-                              )
-                            }
-                            placeholder="Max tokens"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
-                            type="number"
-                            min="1"
-                            step="1"
-                          />
-                          <input
-                            value={model.requestsPerMinute}
-                            onChange={(event) =>
-                              updateModel(
-                                index,
-                                "requestsPerMinute",
-                                event.target.value,
-                              )
-                            }
-                            placeholder="Requests per minute"
-                            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60 md:col-span-2"
-                            type="text"
-                          />
-                        </div>
+                        {(() => {
+                          const isLocalProvider = model.provider === "ollama";
+                          const usesCustomLocalModel =
+                            isLocalProvider &&
+                            localModelOptions.length > 0 &&
+                            !localModelOptions.includes(model.name);
+
+                          return (
+                            <>
+                              <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,0.8fr)_auto]">
+                                <div className="space-y-2">
+                                  <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                                    Model Name
+                                  </label>
+                                  {isLocalProvider &&
+                                  localModelOptions.length > 0 &&
+                                  !usesCustomLocalModel ? (
+                                    <select
+                                      value={model.name}
+                                      onChange={(event) =>
+                                        updateModel(
+                                          index,
+                                          "name",
+                                          event.target.value,
+                                        )
+                                      }
+                                      className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                    >
+                                      {localModelOptions.map(
+                                        (localModelName) => (
+                                          <option
+                                            key={localModelName}
+                                            value={localModelName}
+                                          >
+                                            {localModelName}
+                                          </option>
+                                        ),
+                                      )}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      value={model.name}
+                                      onChange={(event) =>
+                                        updateModel(
+                                          index,
+                                          "name",
+                                          event.target.value,
+                                        )
+                                      }
+                                      placeholder="Model name"
+                                      className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                      type="text"
+                                    />
+                                  )}
+                                  {isLocalProvider &&
+                                  localModelOptions.length > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateModel(
+                                          index,
+                                          "name",
+                                          usesCustomLocalModel
+                                            ? localModelOptions[0]
+                                            : "",
+                                        )
+                                      }
+                                      className="text-[10px] font-bold uppercase tracking-widest text-teal-300 transition hover:text-teal-200"
+                                    >
+                                      {usesCustomLocalModel
+                                        ? "Use Suggested Model"
+                                        : "Custom Override"}
+                                    </button>
+                                  ) : null}
+                                </div>
+                                <div className="space-y-2">
+                                  <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                                    Provider
+                                  </label>
+                                  <select
+                                    value={model.provider}
+                                    onChange={(event) => {
+                                      const nextProviderId = event.target.value;
+                                      const providerOption =
+                                        providerOptionsById.get(nextProviderId);
+
+                                      setForm((current) => ({
+                                        ...current,
+                                        models: current.models.map(
+                                          (entry, modelIndex) => {
+                                            if (modelIndex !== index) {
+                                              return entry;
+                                            }
+
+                                            return {
+                                              ...entry,
+                                              provider: nextProviderId,
+                                              endpoint:
+                                                providerOption?.endpoint ||
+                                                entry.endpoint,
+                                              name:
+                                                nextProviderId === "ollama"
+                                                  ? (localModelOptions[0] ??
+                                                    entry.name)
+                                                  : providerOption?.defaultModelName ||
+                                                    entry.name,
+                                            };
+                                          },
+                                        ),
+                                      }));
+                                    }}
+                                    className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                  >
+                                    {providerOptions.map((provider) => (
+                                      <option
+                                        key={provider.id}
+                                        value={provider.id}
+                                      >
+                                        {provider.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => removeModel(index)}
+                                  disabled={form.models.length === 1}
+                                  className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <input
+                                  value={model.endpoint}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "endpoint",
+                                      event.target.value,
+                                    )
+                                  }
+                                  placeholder="Endpoint"
+                                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                  type="text"
+                                />
+                                <input
+                                  value={model.apiKeyEnv}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "apiKeyEnv",
+                                      event.target.value,
+                                    )
+                                  }
+                                  placeholder="API key env var (optional)"
+                                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                  type="text"
+                                />
+                                <input
+                                  value={model.temperature}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "temperature",
+                                      Number(event.target.value),
+                                    )
+                                  }
+                                  placeholder="Temperature"
+                                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                  type="number"
+                                  min="0"
+                                  max="2"
+                                  step="0.1"
+                                />
+                                <input
+                                  value={model.maxTokens}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "maxTokens",
+                                      Number(event.target.value),
+                                    )
+                                  }
+                                  placeholder="Max tokens"
+                                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60"
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                />
+                                <input
+                                  value={model.requestsPerMinute}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "requestsPerMinute",
+                                      event.target.value,
+                                    )
+                                  }
+                                  placeholder="Requests per minute"
+                                  className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-teal-400/60 md:col-span-2"
+                                  type="text"
+                                />
+                              </div>
+                              {isLocalProvider ? (
+                                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-slate-400">
+                                  {localModelOptions.length > 0
+                                    ? "Local Ollama models are sourced from the readiness scan and saved setup state. Switch to custom override only when you need a model name that is not currently detected."
+                                    : "No validated Ollama models were detected yet. Install or start Ollama from the readiness center, then reopen the wizard for validated local model choices."}
+                                </div>
+                              ) : null}
+                            </>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>
@@ -719,7 +884,11 @@ export function BlueprintWizardModal({
                 disabled={isCreating || isEngineRunning}
                 className="rounded-lg border border-teal-300/20 bg-gradient-to-r from-teal-500 to-amber-400 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {isCreating ? "Creating..." : "Create Blueprint"}
+                {isCreating
+                  ? "Generating..."
+                  : showHydrationReview
+                    ? "Generate Workflow"
+                    : "Create Blueprint"}
               </button>
             </div>
           </div>

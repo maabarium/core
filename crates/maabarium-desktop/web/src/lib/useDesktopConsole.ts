@@ -5,8 +5,16 @@ import { normalizeConsoleState } from "./normalizers";
 import type {
   BlueprintWizardRequest,
   ConsoleState,
+  DesktopSetupState,
   UpdateCheckResult,
 } from "../types/console";
+
+declare global {
+  interface Window {
+    __MAABARIUM_MOCK_CONSOLE_STATE__?: ConsoleState;
+    __MAABARIUM_MOCK_UPDATE_CHECK__?: UpdateCheckResult | null;
+  }
+}
 
 type UseDesktopConsoleArgs = {
   pollIntervalMs?: number;
@@ -21,6 +29,40 @@ type DesktopErrorState = {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readMockConsoleState(): ConsoleState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.__MAABARIUM_MOCK_CONSOLE_STATE__
+    ? normalizeConsoleState(window.__MAABARIUM_MOCK_CONSOLE_STATE__)
+    : null;
+}
+
+function readMockUpdateCheck(): UpdateCheckResult | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.__MAABARIUM_MOCK_UPDATE_CHECK__ ?? null;
+}
+
+function writeMockConsoleState(snapshot: ConsoleState) {
+  if (typeof window !== "undefined") {
+    window.__MAABARIUM_MOCK_CONSOLE_STATE__ = snapshot;
+  }
+}
+
+function writeMockUpdateCheck(updateCheck: UpdateCheckResult | null) {
+  if (typeof window !== "undefined") {
+    window.__MAABARIUM_MOCK_UPDATE_CHECK__ = updateCheck;
+  }
+}
+
+function isMockMode() {
+  return readMockConsoleState() !== null;
 }
 
 export function useDesktopConsole({
@@ -47,6 +89,15 @@ export function useDesktopConsole({
   };
 
   const refresh = async () => {
+    const mockSnapshot = readMockConsoleState();
+    if (mockSnapshot) {
+      setState(mockSnapshot);
+      setUpdateCheck(readMockUpdateCheck());
+      setActionError(null);
+      setLoading(false);
+      return;
+    }
+
     try {
       const snapshot = await invoke<ConsoleState>("get_console_state");
       applySnapshot(snapshot);
@@ -58,6 +109,11 @@ export function useDesktopConsole({
   };
 
   useEffect(() => {
+    if (readMockConsoleState()) {
+      void refresh();
+      return;
+    }
+
     void refresh();
     const interval = window.setInterval(() => {
       void refresh();
@@ -197,6 +253,17 @@ export function useDesktopConsole({
   };
 
   const checkForUpdates = async () => {
+    if (isMockMode()) {
+      setCheckingForUpdates(true);
+      try {
+        setUpdateCheck(readMockUpdateCheck());
+        setActionError(null);
+      } finally {
+        setCheckingForUpdates(false);
+      }
+      return;
+    }
+
     try {
       setCheckingForUpdates(true);
       const result = await invoke<UpdateCheckResult>("check_for_updates");
@@ -215,6 +282,20 @@ export function useDesktopConsole({
   };
 
   const installAvailableUpdate = async () => {
+    if (isMockMode()) {
+      setInstallingUpdate(true);
+      try {
+        const current = readMockUpdateCheck();
+        const next = current ? { ...current, available: false } : null;
+        writeMockUpdateCheck(next);
+        setUpdateCheck(next);
+        setActionError(null);
+      } finally {
+        setInstallingUpdate(false);
+      }
+      return;
+    }
+
     try {
       setInstallingUpdate(true);
       const result = await invoke<{ installed: boolean }>(
@@ -261,6 +342,165 @@ export function useDesktopConsole({
     }
   };
 
+  const saveDesktopSetup = async (setup: DesktopSetupState) => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        desktopSetup: setup,
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      setDesktopError(null);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("save_desktop_setup", { setup });
+      setDesktopError(null);
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Setup Error",
+        "Desktop setup could not be saved",
+        "Review the details below, then retry the setup flow.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const setProviderApiKey = async (providerId: string, apiKey: string) => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        desktopSetup: {
+          ...snapshot.desktopSetup,
+          remoteProviders: snapshot.desktopSetup.remoteProviders.map(
+            (provider) =>
+              provider.providerId === providerId
+                ? {
+                    ...provider,
+                    configured:
+                      apiKey.trim().length > 0 &&
+                      Boolean(provider.modelName?.trim()),
+                  }
+                : provider,
+          ),
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("set_provider_api_key", {
+        providerId,
+        apiKey,
+      });
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Provider Setup Error",
+        "The provider credential could not be stored",
+        "Review the details below, then retry saving the provider credentials.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const installOllama = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        ollama: {
+          ...snapshot.ollama,
+          installed: true,
+          commandAvailable: true,
+          statusDetail:
+            "Ollama appears installed in mock mode, but the local service is not running yet.",
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("install_ollama");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Ollama Install Error",
+        "Ollama could not be installed",
+        "Review the details below, then retry the guided local runtime setup.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const startOllama = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        ollama: {
+          ...snapshot.ollama,
+          installed: true,
+          running: true,
+          commandAvailable: true,
+          statusDetail:
+            "Ollama is running in mock mode with local models ready.",
+          models:
+            snapshot.ollama.models.length > 0
+              ? snapshot.ollama.models
+              : snapshot.ollama.recommendedModels.map((name) => ({
+                  name,
+                  sizeLabel: null,
+                  modifiedAt: null,
+                })),
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("start_ollama");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Ollama Start Error",
+        "Ollama could not be started",
+        "Review the details below, then retry the local runtime start action.",
+        error,
+      );
+      return false;
+    }
+  };
+
   return {
     state,
     loading,
@@ -282,5 +522,9 @@ export function useDesktopConsole({
     checkForUpdates,
     installAvailableUpdate,
     createBlueprintFromWizard,
+    saveDesktopSetup,
+    setProviderApiKey,
+    installOllama,
+    startOllama,
   };
 }

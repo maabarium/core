@@ -1,0 +1,37 @@
+[blueprint]
+name = "fixture-process-plugin"
+version = "0.1.0"
+description = "Fixture blueprint for process plugin evaluator coverage"
+
+[domain]
+repo_path = "."
+target_files = ["src/**/*.rs"]
+language = "rust"
+
+[constraints]
+max_iterations = 2
+timeout_seconds = 30
+require_tests_pass = false
+min_improvement = 0.01
+
+[metrics]
+metrics = [
+    { name = "quality", weight = 1.0, direction = "maximize", description = "Overall quality" },
+]
+
+[agents]
+council_size = 1
+debate_rounds = 0
+agents = [
+    { name = "fixture-agent", role = "tester", system_prompt = "You are a fixture agent.", model = "mock" },
+]
+
+[models]
+models = [
+    { name = "mock", provider = "mock", endpoint = "http://localhost", temperature = 0.0, max_tokens = 128 },
+]
+
+[evaluator]
+kind = "process"
+manifest_path = "./process-plugin-manifest.toml"
+plugin_id = "fixture-score"

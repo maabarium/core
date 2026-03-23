@@ -1,0 +1,10 @@
+[plugin]
+id = "fixture-score"
+version = "0.1.0"
+display_name = "Fixture Score Plugin"
+timeout_seconds = 5
+
+[process]
+command = "sh"
+args = ["./fixture-plugin.sh"]
+working_dir = "."
