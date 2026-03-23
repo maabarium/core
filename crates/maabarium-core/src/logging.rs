@@ -1,11 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn default_log_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/maabarium.log")
 }
 
 pub fn read_recent_log_lines(max_lines: usize) -> std::io::Result<Vec<String>> {
-    let path = default_log_path();
+    read_recent_log_lines_from_path(&default_log_path(), max_lines)
+}
+
+pub fn read_recent_log_lines_from_path(path: &Path, max_lines: usize) -> std::io::Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
     }

@@ -58,7 +58,7 @@ Runtime data remains external to the binary and is expected at:
 - `data/maabarium.db`
 - `data/maabarium.log`
 
-See [`docs/DESKTOP_PACKAGING.md`](docs/DESKTOP_PACKAGING.md) for the current release expectations and deferred packaging work.
+See [`docs/DESKTOP_PACKAGING.md`](docs/DESKTOP_PACKAGING.md) for packaging expectations and [`crates/maabarium-desktop/release/README.md`](crates/maabarium-desktop/release/README.md) for the concrete R2-backed updater release flow.
 
 ## Quick Start
 

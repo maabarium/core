@@ -26,9 +26,16 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": "MAABARIUM_RUNTIME_UPDATER_PUBKEY_REQUIRED"
+    }
+  },
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
+    "resources": ["../../blueprints/"],
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -37,12 +44,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "windows": {
-        "installMode": "passive"
-      }
-    }
   }
 }

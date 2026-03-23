@@ -1,0 +1,124 @@
+name: desktop-release-r2
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  macos-r2-release:
+    runs-on: macos-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      MAABARIUM_UPDATE_BASE_URL: ${{ vars.MAABARIUM_UPDATE_BASE_URL }}
+      R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+      R2_ENDPOINT: ${{ vars.CLOUDFLARE_R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      AWS_EC2_METADATA_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: crates/maabarium-desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY must be configured}"
+          : "${MAABARIUM_UPDATE_BASE_URL:?MAABARIUM_UPDATE_BASE_URL must be configured}"
+          : "${R2_BUCKET:?CLOUDFLARE_R2_BUCKET must be configured}"
+          : "${R2_ENDPOINT:?CLOUDFLARE_R2_ENDPOINT must be configured}"
+          : "${AWS_ACCESS_KEY_ID:?CLOUDFLARE_R2_ACCESS_KEY_ID must be configured}"
+          : "${AWS_SECRET_ACCESS_KEY:?CLOUDFLARE_R2_SECRET_ACCESS_KEY must be configured}"
+
+      - name: Install desktop dependencies
+        run: cd crates/maabarium-desktop && pnpm install --frozen-lockfile
+
+      - name: Build signed Tauri bundle
+        run: cd crates/maabarium-desktop && pnpm tauri build
+
+      - name: Stage updater bundle and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
+          BUNDLE_DIR="$GITHUB_WORKSPACE/target/release/bundle/macos"
+          RELEASE_DIR="$DESKTOP_DIR/release"
+          STAGING_DIR="$RELEASE_DIR/staging"
+
+          case "$(uname -m)" in
+            arm64|aarch64)
+              PLATFORM_KEY="darwin-aarch64"
+              ;;
+            x86_64)
+              PLATFORM_KEY="darwin-x86_64"
+              ;;
+            *)
+              echo "Unsupported macOS runner architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          UPDATER_BUNDLE="$(find "$BUNDLE_DIR" -maxdepth 1 -name "*.app.tar.gz" -print -quit)"
+          if [[ -z "$UPDATER_BUNDLE" ]]; then
+            echo "No macOS updater bundle was produced under $BUNDLE_DIR" >&2
+            exit 1
+          fi
+
+          SIG_PATH="${UPDATER_BUNDLE}.sig"
+          if [[ ! -f "$SIG_PATH" ]]; then
+            echo "Missing updater signature for $UPDATER_BUNDLE" >&2
+            exit 1
+          fi
+
+          mkdir -p "$STAGING_DIR/$PLATFORM_KEY"
+          cp "$UPDATER_BUNDLE" "$STAGING_DIR/$PLATFORM_KEY/"
+          cp "$SIG_PATH" "$STAGING_DIR/$PLATFORM_KEY/"
+
+          BUNDLE_NAME="$(basename "$UPDATER_BUNDLE")"
+
+          cd "$DESKTOP_DIR"
+          pnpm build:release-manifest -- \
+            --base-url "$MAABARIUM_UPDATE_BASE_URL" \
+            --artifacts-dir "$STAGING_DIR" \
+            --output "$RELEASE_DIR/latest.json" \
+            --platform "$PLATFORM_KEY=$PLATFORM_KEY/$BUNDLE_NAME"
+
+      - name: Upload release artifacts to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-r2-macos
+          path: |
+            crates/maabarium-desktop/release/latest.json
+            crates/maabarium-desktop/release/staging/**
+
+      - name: Publish bundles and latest.json to Cloudflare R2
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
+          aws s3 sync "$DESKTOP_DIR/release/staging/" "s3://$R2_BUCKET/" --delete --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "$DESKTOP_DIR/release/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"

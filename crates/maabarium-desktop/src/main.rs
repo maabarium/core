@@ -6,24 +6,30 @@ use maabarium_core::blueprint::{
     ModelAssignment, ModelDef, ModelsConfig,
 };
 use maabarium_core::{
-    default_db_path, default_log_path, read_recent_log_lines, BlueprintFile, Engine,
+    default_db_path, default_log_path, read_recent_log_lines_from_path, BlueprintFile, Engine,
     EngineConfig, EvaluatorRegistry, Persistence, PersistedProposal,
 };
 use maabarium_core::persistence::PersistedExperiment;
 use serde::{Deserialize, Serialize};
-use tauri_plugin_updater::UpdaterExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::System;
+use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::prelude::*;
 use url::Url;
 
+const DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
+const BLUEPRINTS_DIR_NAME: &str = "blueprints";
+const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
+
 struct AppState {
+    blueprints_dir: PathBuf,
     blueprint_path: Mutex<PathBuf>,
     hardware_sampler: Mutex<HardwareTelemetrySampler>,
     db_path: PathBuf,
@@ -105,6 +111,12 @@ struct UpdateRuntimeConfig {
     channel: String,
     endpoint: String,
     pubkey: String,
+}
+
+#[derive(Debug, Clone)]
+struct DesktopRuntimePaths {
+    db_path: PathBuf,
+    log_path: PathBuf,
 }
 
 #[derive(Debug, Serialize)]
@@ -257,21 +269,17 @@ struct CreateBlueprintWizardRequest {
 }
 
 fn main() {
-    let _log_guard = init_tracing().expect("failed to initialize tracing");
-
-    let state = AppState {
-        blueprint_path: Mutex::new(default_blueprint_path()),
-        hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
-        db_path: default_db_path(),
-        log_path: default_log_path(),
-        engine_cancel: Mutex::new(None),
-        engine_running: Arc::new(AtomicBool::new(false)),
-    };
+    let runtime_paths = prepare_desktop_runtime_paths().expect("failed to prepare desktop runtime paths");
+    let _log_guard = init_tracing(&runtime_paths.log_path).expect("failed to initialize tracing");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(state)
+        .setup(move |app| {
+            let state = initialize_app_state(app.handle(), &runtime_paths)?;
+            app.manage(state);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_console_state,
             start_engine,
@@ -288,16 +296,145 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-fn default_blueprint_path() -> PathBuf {
-    default_blueprints_directory().join("example.toml")
+fn initialize_app_state(
+    app: &tauri::AppHandle,
+    runtime_paths: &DesktopRuntimePaths,
+) -> anyhow::Result<AppState> {
+    let blueprints_dir = prepare_desktop_blueprints_directory(app)?;
+    let blueprint_path = default_blueprint_path(&blueprints_dir);
+
+    Ok(AppState {
+        blueprints_dir,
+        blueprint_path: Mutex::new(blueprint_path),
+        hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
+        db_path: runtime_paths.db_path.clone(),
+        log_path: runtime_paths.log_path.clone(),
+        engine_cancel: Mutex::new(None),
+        engine_running: Arc::new(AtomicBool::new(false)),
+    })
 }
 
-fn default_blueprints_directory() -> PathBuf {
+fn default_blueprint_path(blueprints_dir: &Path) -> PathBuf {
+    let default_path = blueprints_dir.join(DEFAULT_BLUEPRINT_FILE_NAME);
+    if default_path.exists() {
+        return default_path;
+    }
+
+    let mut blueprint_paths = list_blueprint_paths(blueprints_dir);
+    blueprint_paths.sort();
+    blueprint_paths
+        .into_iter()
+        .next()
+        .unwrap_or(default_path)
+}
+
+fn prepare_desktop_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .context("Failed to resolve the desktop app-data directory")?;
+    let blueprints_dir = app_data_dir.join(BLUEPRINTS_DIR_NAME);
+
+    std::fs::create_dir_all(&blueprints_dir).with_context(|| {
+        format!(
+            "Failed to create desktop blueprint directory {}",
+            blueprints_dir.display()
+        )
+    })?;
+
+    let migrated = copy_blueprint_files_if_missing(&legacy_blueprints_directory(), &blueprints_dir)
+        .context("Failed to migrate legacy blueprints into desktop app data")?;
+    let seeded = seed_bundled_blueprints(app, &blueprints_dir)
+        .context("Failed to seed bundled blueprints into desktop app data")?;
+
+    info!(
+        blueprint_directory = %blueprints_dir.display(),
+        migrated,
+        seeded,
+        "Desktop blueprint library prepared"
+    );
+
+    Ok(blueprints_dir)
+}
+
+fn legacy_blueprints_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../blueprints")
 }
 
-fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
-    let log_path = default_log_path();
+fn bundled_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+    Ok(app
+        .path()
+        .resource_dir()
+        .context("Failed to resolve the desktop resource directory")?
+        .join(BLUEPRINTS_DIR_NAME))
+}
+
+fn seed_bundled_blueprints(app: &tauri::AppHandle, target_directory: &Path) -> anyhow::Result<usize> {
+    let bundled_directory = match bundled_blueprints_directory(app) {
+        Ok(directory) => directory,
+        Err(error) => {
+            warn!(?error, "Desktop bundled blueprints directory is unavailable");
+            return Ok(0);
+        }
+    };
+
+    copy_blueprint_files_if_missing(&bundled_directory, target_directory)
+}
+
+fn copy_blueprint_files_if_missing(source_directory: &Path, target_directory: &Path) -> anyhow::Result<usize> {
+    if !source_directory.exists() {
+        return Ok(0);
+    }
+
+    std::fs::create_dir_all(target_directory).with_context(|| {
+        format!(
+            "Failed to create target blueprint directory {}",
+            target_directory.display()
+        )
+    })?;
+
+    let mut copied = 0_usize;
+    for source_path in list_blueprint_paths(source_directory) {
+        let Some(file_name) = source_path.file_name() else {
+            continue;
+        };
+
+        let target_path = target_directory.join(file_name);
+        if target_path.exists() {
+            continue;
+        }
+
+        std::fs::copy(&source_path, &target_path).with_context(|| {
+            format!(
+                "Failed to copy blueprint from {} to {}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+        copied += 1;
+    }
+
+    Ok(copied)
+}
+
+fn list_blueprint_paths(directory: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(directory)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(|extension| extension.eq_ignore_ascii_case("toml"))
+                    .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn init_tracing(log_path: &Path) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -334,11 +471,112 @@ fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard>
     Ok(guard)
 }
 
+fn prepare_desktop_runtime_paths() -> anyhow::Result<DesktopRuntimePaths> {
+    let data_dir = desktop_data_directory()?;
+    let log_dir = desktop_log_directory()?;
+
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("Failed to create desktop data directory {}", data_dir.display()))?;
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("Failed to create desktop log directory {}", log_dir.display()))?;
+
+    let db_path = data_dir.join("maabarium.db");
+    let log_path = log_dir.join("maabarium.log");
+
+    migrate_legacy_runtime_file(&default_db_path(), &db_path)?;
+    migrate_legacy_runtime_file(&default_log_path(), &log_path)?;
+
+    Ok(DesktopRuntimePaths { db_path, log_path })
+}
+
+fn migrate_legacy_runtime_file(legacy_path: &Path, target_path: &Path) -> anyhow::Result<()> {
+    if target_path.exists() || !legacy_path.exists() || legacy_path == target_path {
+        return Ok(());
+    }
+
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create directory for migrated runtime file {}",
+                target_path.display()
+            )
+        })?;
+    }
+
+    std::fs::copy(legacy_path, target_path).with_context(|| {
+        format!(
+            "Failed to migrate desktop runtime file from {} to {}",
+            legacy_path.display(),
+            target_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn desktop_data_directory() -> anyhow::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = desktop_home_directory()?;
+        return Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join(DESKTOP_RUNTIME_ID));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(app_data).join("Maabarium Console"));
+        }
+        return Ok(desktop_home_directory()?.join("AppData").join("Roaming").join("Maabarium Console"));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Some(xdg_data_home) = std::env::var_os("XDG_DATA_HOME") {
+            return Ok(PathBuf::from(xdg_data_home).join("maabarium"));
+        }
+        return Ok(desktop_home_directory()?.join(".local").join("share").join("maabarium"));
+    }
+}
+
+fn desktop_log_directory() -> anyhow::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = desktop_home_directory()?;
+        return Ok(home.join("Library").join("Logs").join(DESKTOP_RUNTIME_ID));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            return Ok(PathBuf::from(local_app_data).join("Maabarium Console").join("Logs"));
+        }
+        return Ok(desktop_home_directory()?.join("AppData").join("Local").join("Maabarium Console").join("Logs"));
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Some(xdg_state_home) = std::env::var_os("XDG_STATE_HOME") {
+            return Ok(PathBuf::from(xdg_state_home).join("maabarium"));
+        }
+        return Ok(desktop_home_directory()?.join(".local").join("state").join("maabarium"));
+    }
+}
+
+fn desktop_home_directory() -> anyhow::Result<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set for desktop runtime path resolution"))
+}
+
 fn build_console_state(state: &AppState) -> ConsoleState {
     let blueprint_path = current_blueprint_path(state);
     let hardware_telemetry = sample_hardware_telemetry(state);
     let blueprint_result = BlueprintFile::load(&blueprint_path);
-    let available_blueprints = discover_available_blueprints(&blueprint_path);
+    let available_blueprints = discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
     let evaluator_kind = blueprint_result
         .as_ref()
         .ok()
@@ -359,7 +597,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
                 Vec::new(),
             )
         });
-    let logs = read_recent_log_lines(40).unwrap_or_default();
+    let logs = read_recent_log_lines_from_path(&state.log_path, 40).unwrap_or_default();
     let updater = describe_updater_configuration();
 
     match blueprint_result {
@@ -398,25 +636,9 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     }
 }
 
-fn discover_available_blueprints(active_path: &Path) -> Vec<BlueprintOption> {
-    let blueprint_directory = active_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(default_blueprints_directory);
-
-    let mut blueprints = std::fs::read_dir(&blueprint_directory)
-        .ok()
+fn discover_available_blueprints(blueprint_directory: &Path, active_path: &Path) -> Vec<BlueprintOption> {
+    let mut blueprints = list_blueprint_paths(blueprint_directory)
         .into_iter()
-        .flat_map(|entries| entries.filter_map(Result::ok))
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .map(|extension| extension.eq_ignore_ascii_case("toml"))
-                    .unwrap_or(false)
-        })
         .map(|path| blueprint_option_from_path(&path, active_path))
         .collect::<Vec<_>>();
 
@@ -791,12 +1013,7 @@ fn open_blueprint_file(state: tauri::State<'_, AppState>) -> Result<(), String> 
 
 #[tauri::command]
 fn open_blueprint_directory(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let blueprint_path = current_blueprint_path(&state);
-    let directory = blueprint_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(default_blueprints_directory);
-    open_path_in_system_viewer(&directory)
+    open_path_in_system_viewer(&state.blueprints_dir)
 }
 
 #[tauri::command]
@@ -1049,7 +1266,7 @@ fn create_blueprint_from_wizard(
         .validate()
         .map_err(|error| format!("Failed to validate blueprint: {error}"))?;
 
-    let blueprint_directory = default_blueprints_directory();
+    let blueprint_directory = state.blueprints_dir.clone();
     std::fs::create_dir_all(&blueprint_directory)
         .map_err(|error| format!("Failed to create blueprint directory: {error}"))?;
 
@@ -1198,9 +1415,19 @@ fn slugify_blueprint_name(input: &str) -> String {
 mod tests {
     use super::*;
 
+    fn unique_test_directory(name: &str) -> PathBuf {
+        let unique_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("maabarium-desktop-{name}-{unique_id}"))
+    }
+
     fn test_app_state() -> AppState {
+        let blueprints_dir = PathBuf::from("blueprints");
         AppState {
-            blueprint_path: Mutex::new(PathBuf::from("blueprints/example.toml")),
+            blueprints_dir: blueprints_dir.clone(),
+            blueprint_path: Mutex::new(blueprints_dir.join("example.toml")),
             hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
             db_path: PathBuf::from("data/maabarium.db"),
             log_path: PathBuf::from("data/maabarium.log"),
@@ -1227,6 +1454,42 @@ mod tests {
         .expect("path update should succeed");
 
         assert_eq!(observed_path, PathBuf::from("blueprints/rust-code-quality.toml"));
+    }
+
+    #[test]
+    fn copy_blueprint_files_if_missing_only_adds_missing_toml_files() {
+        let source_directory = unique_test_directory("source-blueprints");
+        let target_directory = unique_test_directory("target-blueprints");
+
+        std::fs::create_dir_all(&source_directory).expect("source directory should be created");
+        std::fs::create_dir_all(&target_directory).expect("target directory should be created");
+        std::fs::write(source_directory.join("example.toml"), "name = 'bundled'\n")
+            .expect("source example blueprint should be written");
+        std::fs::write(source_directory.join("notes.txt"), "ignore me\n")
+            .expect("non-blueprint file should be written");
+        std::fs::write(target_directory.join("example.toml"), "name = 'existing'\n")
+            .expect("existing target blueprint should be written");
+        std::fs::write(source_directory.join("code-quality.toml"), "name = 'quality'\n")
+            .expect("source code-quality blueprint should be written");
+
+        let copied = copy_blueprint_files_if_missing(&source_directory, &target_directory)
+            .expect("copy should succeed");
+
+        assert_eq!(copied, 1);
+        assert_eq!(
+            std::fs::read_to_string(target_directory.join("example.toml"))
+                .expect("existing blueprint should still exist"),
+            "name = 'existing'\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target_directory.join("code-quality.toml"))
+                .expect("missing blueprint should be copied"),
+            "name = 'quality'\n"
+        );
+        assert!(!target_directory.join("notes.txt").exists());
+
+        std::fs::remove_dir_all(&source_directory).expect("source directory should be removed");
+        std::fs::remove_dir_all(&target_directory).expect("target directory should be removed");
     }
 
     #[test]

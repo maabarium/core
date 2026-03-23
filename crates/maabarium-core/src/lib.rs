@@ -24,6 +24,6 @@ pub use evaluator::{
     BuiltinEvaluatorKind, CodeEvaluator, EvaluatorRegistry, LoraEvaluator, PromptEvaluator,
     ResearchArtifacts, ResearchCitation, ResearchEvaluator, ResearchSource,
 };
-pub use logging::{default_log_path, read_recent_log_lines};
+pub use logging::{default_log_path, read_recent_log_lines, read_recent_log_lines_from_path};
 pub use persistence::{ExportFormat, PersistedProposal, Persistence, default_db_path};
 pub use secrets::{ApiKeyStore, SecretStore};

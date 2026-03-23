@@ -33,7 +33,7 @@ body {
     radial-gradient(circle at top, rgba(45, 212, 191, 0.14), transparent 36%),
     radial-gradient(
       circle at bottom right,
-      rgba(168, 85, 247, 0.12),
+      rgba(251, 191, 36, 0.12),
       transparent 30%
     ),
     radial-gradient(
@@ -68,7 +68,7 @@ samp {
   background: linear-gradient(
     180deg,
     rgba(45, 212, 191, 0.45),
-    rgba(168, 85, 247, 0.38)
+    rgba(251, 191, 36, 0.38)
   );
   border-radius: 999px;
 }
@@ -77,6 +77,6 @@ samp {
   background: linear-gradient(
     180deg,
     rgba(45, 212, 191, 0.65),
-    rgba(168, 85, 247, 0.55)
+    rgba(251, 191, 36, 0.55)
   );
 }
