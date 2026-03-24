@@ -16,7 +16,7 @@
     "Azeret Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", monospace;
   color: #f8fafc;
-  background: #050608;
+  background: #0b1220;
   font-family: var(--font-ui);
 }
 
@@ -30,18 +30,18 @@ body {
   margin: 0;
   font-family: var(--font-ui);
   background:
-    radial-gradient(circle at top, rgba(45, 212, 191, 0.14), transparent 36%),
+    radial-gradient(circle at top, rgba(45, 212, 191, 0.12), transparent 38%),
     radial-gradient(
       circle at bottom right,
-      rgba(251, 191, 36, 0.12),
-      transparent 30%
+      rgba(251, 191, 36, 0.1),
+      transparent 32%
     ),
     radial-gradient(
       circle at 20% 80%,
-      rgba(71, 85, 105, 0.14),
-      transparent 28%
+      rgba(71, 85, 105, 0.18),
+      transparent 30%
     ),
-    #050608;
+    #0b1220;
 }
 
 * {

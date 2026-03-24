@@ -122,6 +122,11 @@ export type BlueprintFile = {
     assignment: "explicit" | "round_robin";
     models: ModelDef[];
   };
+  library?: {
+    kind: "workflow" | "template";
+    setup_required: boolean;
+    template?: WizardTemplate | null;
+  } | null;
 };
 
 export type PersistedExperiment = {
@@ -206,6 +211,8 @@ export type InstallUpdateResult = {
 
 export type RuntimeStrategy = "local" | "remote" | "mixed";
 
+export type ResearchSearchMode = "brave_api" | "duckduckgo_scrape";
+
 export type RemoteProviderSetup = {
   providerId: string;
   label: string;
@@ -215,17 +222,43 @@ export type RemoteProviderSetup = {
   configured: boolean;
 };
 
+export type InterruptedRunNotice = {
+  blueprintName: string;
+  workspacePath: string;
+  interruptedAt: string;
+  reason: string | null;
+};
+
 export type DesktopSetupState = {
   guidedMode: boolean;
   onboardingCompleted: boolean;
   runtimeStrategy: RuntimeStrategy | null;
+  researchSearchMode: ResearchSearchMode;
   workspacePath: string | null;
+  selectedBlueprintPath: string | null;
   selectedLocalModels: string[];
   remoteProviders: RemoteProviderSetup[];
   preferredUpdateChannel: string | null;
   remindLaterUntil: string | null;
   remindLaterVersion: string | null;
   lastSetupCompletedAt: string | null;
+  interruptedRunNotice: InterruptedRunNotice | null;
+};
+
+export type RunStatus = "idle" | "running" | "stopping";
+
+export type LiveRunState = {
+  status: RunStatus;
+  blueprintName: string | null;
+  workspacePath: string | null;
+  currentIteration: number | null;
+  maxIterations: number | null;
+  phase: string | null;
+  latestScore: number | null;
+  latestDurationMs: number | null;
+  currentIterationElapsedMs: number | null;
+  startedAtEpochMs: number | null;
+  message: string | null;
 };
 
 export type ReadinessStatus = "ready" | "needs_attention" | "optional";
@@ -282,10 +315,18 @@ export type HardwareTelemetry = {
 
 export type HistoryRow = {
   experimentId: number;
-  score: number;
-  delta: number;
+  score: number | null;
+  delta: number | null;
   summary: string;
-  promoted: boolean;
+  status: "promoted" | "rejected" | "failed";
+};
+
+export type WorkspaceGitStatus = {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepository: boolean;
+  repositoryRoot: string | null;
 };
 
 export type CouncilEntry = {
@@ -325,6 +366,7 @@ export type AvailableBlueprint = {
 
 export type ConsoleState = {
   engineRunning: boolean;
+  runState: LiveRunState;
   blueprintPath: string;
   dbPath: string;
   logPath: string;
@@ -342,6 +384,12 @@ export type ConsoleState = {
   experiments: PersistedExperiment[];
   proposals: PersistedProposal[];
   logs: string[];
+};
+
+export type StartEngineRequest = {
+  workspacePath: string | null;
+  initializeGitIfNeeded: boolean;
+  saveWorkspaceAsDefault: boolean;
 };
 
 export type BlueprintWizardRequest = {

@@ -1,4 +1,4 @@
-import { Activity, ArrowUpRight, History, Terminal } from "lucide-react";
+import { Activity, History, Terminal } from "lucide-react";
 import { buildPatchPreview } from "../../lib/analytics";
 import type {
   ConsoleTab,
@@ -49,41 +49,50 @@ export function ConsoleActivityPanel({
             <table className="w-full text-left text-xs">
               <tbody className="divide-y divide-white/5">
                 {history.map((entry) => (
-                  <tr
-                    key={entry.experimentId}
-                    className="hover:bg-white/5 group"
-                  >
+                  <tr key={entry.experimentId} className="hover:bg-white/5">
                     <td className="p-4 font-mono text-slate-400">
                       #exp-{entry.experimentId}
                     </td>
                     <td className="p-4">
                       <div className="flex items-center gap-2">
                         <span className="text-white font-bold">
-                          {entry.score.toFixed(2)}
+                          {entry.score !== null ? entry.score.toFixed(2) : "--"}
                         </span>
-                        <span
-                          className={
-                            entry.delta >= 0 ? "text-teal-300" : "text-rose-400"
-                          }
-                        >
-                          {entry.delta >= 0 ? "+" : ""}
-                          {entry.delta.toFixed(2)}
-                        </span>
+                        {entry.delta !== null ? (
+                          <span
+                            className={
+                              entry.delta >= 0
+                                ? "text-teal-300"
+                                : "text-rose-400"
+                            }
+                          >
+                            {entry.delta >= 0 ? "+" : ""}
+                            {entry.delta.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-rose-400">failed</span>
+                        )}
                       </div>
                     </td>
                     <td className="p-4">
-                      <Badge color={entry.promoted ? "blue" : "rose"}>
-                        {entry.promoted ? "Promoted" : "Rejected"}
+                      <Badge
+                        color={
+                          entry.status === "promoted"
+                            ? "emerald"
+                            : entry.status === "rejected"
+                              ? "slate"
+                              : "rose"
+                        }
+                      >
+                        {entry.status === "promoted"
+                          ? "Promoted"
+                          : entry.status === "rejected"
+                            ? "Rejected"
+                            : "Failed"}
                       </Badge>
                     </td>
                     <td className="p-4 text-slate-500 italic truncate max-w-[180px]">
                       {entry.summary}
-                    </td>
-                    <td className="p-4 text-right">
-                      <ArrowUpRight
-                        size={14}
-                        className="text-slate-700 group-hover:text-teal-300 transition-colors inline"
-                      />
                     </td>
                   </tr>
                 ))}

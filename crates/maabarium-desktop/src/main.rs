@@ -1,16 +1,17 @@
 use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
+use git2::{IndexAddOption, Repository, Signature};
 use maabarium_core::blueprint::{
     AgentDef, AgentsConfig, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintMeta,
     BlueprintTemplateKind, ConstraintsConfig, DomainConfig, EvaluatorKind, MetricDef,
     MetricsConfig, ModelAssignment, ModelDef, ModelsConfig,
 };
-use maabarium_core::{
-    default_db_path, default_log_path, read_recent_log_lines_from_path, ApiKeyStore,
-    BlueprintFile, Engine, EngineConfig, EvaluatorRegistry, Persistence, PersistedProposal,
-    ProcessPluginManifest, SecretStore,
-};
 use maabarium_core::persistence::PersistedExperiment;
+use maabarium_core::{
+    default_db_path, default_log_path, read_recent_log_lines_from_path, ApiKeyStore, BlueprintFile,
+    Engine, EngineConfig, EnginePhase, EngineProgressUpdate, EvaluatorRegistry, PersistedProposal,
+    Persistence, ProcessPluginManifest, SecretStore,
+};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -19,7 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::System;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuBuilder, SubmenuBuilder};
+use tauri::{Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -31,13 +33,17 @@ mod setup;
 use crate::setup::{
     build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
     load_desktop_setup, save_desktop_setup as persist_desktop_setup,
-    start_ollama as start_ollama_runtime, DesktopSetupState, OllamaStatus,
-    ReadinessItem,
+    start_ollama as start_ollama_runtime, DesktopSetupState, OllamaStatus, ReadinessItem,
+    ResearchSearchMode,
 };
 
 const DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
 const BLUEPRINTS_DIR_NAME: &str = "blueprints";
 const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
+const APP_DISPLAY_NAME: &str = "Maabarium";
+const ABOUT_MENU_ID: &str = "about_maabarium";
+const LICENSE_MENU_ID: &str = "open_repository_license";
+const ABOUT_MENU_EVENT: &str = "maabarium://open-about";
 
 struct AppState {
     blueprints_dir: PathBuf,
@@ -48,6 +54,87 @@ struct AppState {
     log_path: PathBuf,
     engine_cancel: Mutex<Option<CancellationToken>>,
     engine_running: Arc<AtomicBool>,
+    run_state: Arc<Mutex<MutableRunState>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RunStatus {
+    Idle,
+    Running,
+    Stopping,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveRunState {
+    status: RunStatus,
+    blueprint_name: Option<String>,
+    workspace_path: Option<String>,
+    current_iteration: Option<u64>,
+    max_iterations: Option<u64>,
+    phase: Option<String>,
+    latest_score: Option<f64>,
+    latest_duration_ms: Option<u64>,
+    current_iteration_elapsed_ms: Option<u64>,
+    started_at_epoch_ms: Option<u64>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MutableRunState {
+    status: RunStatus,
+    blueprint_name: Option<String>,
+    workspace_path: Option<String>,
+    current_iteration: Option<u64>,
+    max_iterations: Option<u64>,
+    phase: Option<String>,
+    latest_score: Option<f64>,
+    latest_duration_ms: Option<u64>,
+    current_iteration_started_at_epoch_ms: Option<u64>,
+    started_at_epoch_ms: Option<u64>,
+    message: Option<String>,
+}
+
+impl Default for MutableRunState {
+    fn default() -> Self {
+        Self {
+            status: RunStatus::Idle,
+            blueprint_name: None,
+            workspace_path: None,
+            current_iteration: None,
+            max_iterations: None,
+            phase: None,
+            latest_score: None,
+            latest_duration_ms: None,
+            current_iteration_started_at_epoch_ms: None,
+            started_at_epoch_ms: None,
+            message: None,
+        }
+    }
+}
+
+impl MutableRunState {
+    fn snapshot(&self) -> LiveRunState {
+        let now = current_epoch_ms();
+        let current_iteration_elapsed_ms = self
+            .current_iteration_started_at_epoch_ms
+            .map(|started| now.saturating_sub(started));
+
+        LiveRunState {
+            status: self.status.clone(),
+            blueprint_name: self.blueprint_name.clone(),
+            workspace_path: self.workspace_path.clone(),
+            current_iteration: self.current_iteration,
+            max_iterations: self.max_iterations,
+            phase: self.phase.clone(),
+            latest_score: self.latest_score,
+            latest_duration_ms: self.latest_duration_ms,
+            current_iteration_elapsed_ms,
+            started_at_epoch_ms: self.started_at_epoch_ms,
+            message: self.message.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -159,6 +246,7 @@ struct DesktopRuntimePaths {
 #[serde(rename_all = "camelCase")]
 struct ConsoleState {
     engine_running: bool,
+    run_state: LiveRunState,
     blueprint_path: String,
     db_path: String,
     log_path: String,
@@ -291,8 +379,7 @@ struct CreateBlueprintWizardRequest {
     name: String,
     description: String,
     version: String,
-    #[serde(rename = "template")]
-    _template: BlueprintWizardTemplate,
+    template: BlueprintWizardTemplate,
     repo_path: String,
     language: String,
     target_files: Vec<String>,
@@ -308,11 +395,47 @@ struct CreateBlueprintWizardRequest {
     models: Vec<ModelDef>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartEngineRequest {
+    workspace_path: Option<String>,
+    initialize_git_if_needed: bool,
+    save_workspace_as_default: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceGitStatus {
+    path: String,
+    exists: bool,
+    is_directory: bool,
+    is_git_repository: bool,
+    repository_root: Option<String>,
+}
+
+impl From<BlueprintWizardTemplate> for BlueprintTemplateKind {
+    fn from(value: BlueprintWizardTemplate) -> Self {
+        match value {
+            BlueprintWizardTemplate::CodeQuality => BlueprintTemplateKind::CodeQuality,
+            BlueprintWizardTemplate::PromptOptimization => {
+                BlueprintTemplateKind::PromptOptimization
+            }
+            BlueprintWizardTemplate::ProductBuilder => BlueprintTemplateKind::ProductBuilder,
+            BlueprintWizardTemplate::GeneralResearch => BlueprintTemplateKind::GeneralResearch,
+            BlueprintWizardTemplate::LoraValidation => BlueprintTemplateKind::LoraValidation,
+            BlueprintWizardTemplate::Custom => BlueprintTemplateKind::Custom,
+        }
+    }
+}
+
 fn main() {
-    let runtime_paths = prepare_desktop_runtime_paths().expect("failed to prepare desktop runtime paths");
+    let runtime_paths =
+        prepare_desktop_runtime_paths().expect("failed to prepare desktop runtime paths");
     let _log_guard = init_tracing(&runtime_paths.log_path).expect("failed to initialize tracing");
 
     tauri::Builder::default()
+        .menu(build_app_menu)
+        .on_menu_event(handle_menu_event)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
@@ -331,7 +454,12 @@ fn main() {
             open_log_file,
             open_blueprint_file,
             open_blueprint_directory,
+            open_repository_license,
+            inspect_workspace_git_status,
+            initialize_workspace_git,
+            load_blueprint_for_wizard,
             create_blueprint_from_wizard,
+            update_blueprint_from_wizard,
             set_blueprint_path,
             check_for_updates,
             install_available_update
@@ -340,17 +468,107 @@ fn main() {
         .expect("error while running tauri application");
 }
 
+#[cfg(target_os = "macos")]
+fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let app_menu = SubmenuBuilder::new(app, APP_DISPLAY_NAME)
+        .text(ABOUT_MENU_ID, "About Maabarium")
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit_with_text("Quit Maabarium")
+        .build()?;
+
+    let file_menu = SubmenuBuilder::new(app, "File").close_window().build()?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let view_menu = SubmenuBuilder::new(app, "View").fullscreen().build()?;
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+    let help_menu = SubmenuBuilder::new(app, "Help")
+        .text(LICENSE_MENU_ID, "Open LICENSE")
+        .build()?;
+
+    MenuBuilder::new(app)
+        .item(&app_menu)
+        .item(&file_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&window_menu)
+        .item(&help_menu)
+        .build()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let file_menu = SubmenuBuilder::new(app, "File")
+        .close_window()
+        .quit_with_text("Quit Maabarium")
+        .build()?;
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+    let window_menu = SubmenuBuilder::new(app, "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+    let help_menu = SubmenuBuilder::new(app, "Help")
+        .text(LICENSE_MENU_ID, "Open LICENSE")
+        .build()?;
+
+    MenuBuilder::new(app)
+        .item(&file_menu)
+        .item(&edit_menu)
+        .item(&window_menu)
+        .item(&help_menu)
+        .build()
+}
+
+fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
+    match event.id().as_ref() {
+        ABOUT_MENU_ID => {
+            let _ = app.emit(ABOUT_MENU_EVENT, ());
+        }
+        LICENSE_MENU_ID => {
+            let _ = open_repository_license_path(app);
+        }
+        _ => {}
+    }
+}
+
 fn initialize_app_state(
     app: &tauri::AppHandle,
     runtime_paths: &DesktopRuntimePaths,
 ) -> anyhow::Result<AppState> {
     let blueprints_dir = prepare_desktop_blueprints_directory(app)?;
-    let blueprint_path = default_blueprint_path(&blueprints_dir);
     seed_bundled_cli(app, &runtime_paths.cli_path)?;
     let settings_path = blueprints_dir
         .parent()
         .unwrap_or(&blueprints_dir)
         .join("desktop-setup.json");
+    let blueprint_path = restored_blueprint_path(&blueprints_dir, &settings_path);
 
     Ok(AppState {
         blueprints_dir,
@@ -361,7 +579,18 @@ fn initialize_app_state(
         log_path: runtime_paths.log_path.clone(),
         engine_cancel: Mutex::new(None),
         engine_running: Arc::new(AtomicBool::new(false)),
+        run_state: Arc::new(Mutex::new(MutableRunState::default())),
     })
+}
+
+fn restored_blueprint_path(blueprints_dir: &Path, settings_path: &Path) -> PathBuf {
+    let stored_path = load_desktop_setup(settings_path)
+        .selected_blueprint_path
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .filter(|path| BlueprintFile::load(path).is_ok());
+
+    stored_path.unwrap_or_else(|| default_blueprint_path(blueprints_dir))
 }
 
 fn default_blueprint_path(blueprints_dir: &Path) -> PathBuf {
@@ -372,10 +601,7 @@ fn default_blueprint_path(blueprints_dir: &Path) -> PathBuf {
 
     let mut blueprint_paths = list_blueprint_paths(blueprints_dir);
     blueprint_paths.sort();
-    blueprint_paths
-        .into_iter()
-        .next()
-        .unwrap_or(default_path)
+    blueprint_paths.into_iter().next().unwrap_or(default_path)
 }
 
 fn prepare_desktop_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
@@ -517,11 +743,17 @@ fn runtime_platform_key() -> String {
     format!("{os}-{arch}")
 }
 
-fn seed_bundled_blueprints(app: &tauri::AppHandle, target_directory: &Path) -> anyhow::Result<usize> {
+fn seed_bundled_blueprints(
+    app: &tauri::AppHandle,
+    target_directory: &Path,
+) -> anyhow::Result<usize> {
     let bundled_directory = match bundled_blueprints_directory(app) {
         Ok(directory) => directory,
         Err(error) => {
-            warn!(?error, "Desktop bundled blueprints directory is unavailable");
+            warn!(
+                ?error,
+                "Desktop bundled blueprints directory is unavailable"
+            );
             return Ok(0);
         }
     };
@@ -529,7 +761,10 @@ fn seed_bundled_blueprints(app: &tauri::AppHandle, target_directory: &Path) -> a
     copy_blueprint_files_if_missing(&bundled_directory, target_directory)
 }
 
-fn copy_blueprint_files_if_missing(source_directory: &Path, target_directory: &Path) -> anyhow::Result<usize> {
+fn copy_blueprint_files_if_missing(
+    source_directory: &Path,
+    target_directory: &Path,
+) -> anyhow::Result<usize> {
     if !source_directory.exists() {
         return Ok(0);
     }
@@ -597,8 +832,8 @@ fn init_tracing(log_path: &Path) -> anyhow::Result<tracing_appender::non_blockin
 
     let file_appender = tracing_appender::rolling::never(log_directory, log_file_name);
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
-    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive("maabarium=info".parse()?);
+    let env_filter =
+        tracing_subscriber::EnvFilter::from_default_env().add_directive("maabarium=info".parse()?);
 
     tracing_subscriber::registry()
         .with(env_filter)
@@ -623,10 +858,18 @@ fn prepare_desktop_runtime_paths() -> anyhow::Result<DesktopRuntimePaths> {
     let data_dir = desktop_data_directory()?;
     let log_dir = desktop_log_directory()?;
 
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("Failed to create desktop data directory {}", data_dir.display()))?;
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("Failed to create desktop log directory {}", log_dir.display()))?;
+    std::fs::create_dir_all(&data_dir).with_context(|| {
+        format!(
+            "Failed to create desktop data directory {}",
+            data_dir.display()
+        )
+    })?;
+    std::fs::create_dir_all(&log_dir).with_context(|| {
+        format!(
+            "Failed to create desktop log directory {}",
+            log_dir.display()
+        )
+    })?;
 
     let db_path = data_dir.join("maabarium.db");
     let log_path = log_dir.join("maabarium.log");
@@ -682,7 +925,10 @@ fn desktop_data_directory() -> anyhow::Result<PathBuf> {
         if let Some(app_data) = std::env::var_os("APPDATA") {
             return Ok(PathBuf::from(app_data).join("Maabarium Console"));
         }
-        return Ok(desktop_home_directory()?.join("AppData").join("Roaming").join("Maabarium Console"));
+        return Ok(desktop_home_directory()?
+            .join("AppData")
+            .join("Roaming")
+            .join("Maabarium Console"));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -690,7 +936,10 @@ fn desktop_data_directory() -> anyhow::Result<PathBuf> {
         if let Some(xdg_data_home) = std::env::var_os("XDG_DATA_HOME") {
             return Ok(PathBuf::from(xdg_data_home).join("maabarium"));
         }
-        return Ok(desktop_home_directory()?.join(".local").join("share").join("maabarium"));
+        return Ok(desktop_home_directory()?
+            .join(".local")
+            .join("share")
+            .join("maabarium"));
     }
 }
 
@@ -704,9 +953,15 @@ fn desktop_log_directory() -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-            return Ok(PathBuf::from(local_app_data).join("Maabarium Console").join("Logs"));
+            return Ok(PathBuf::from(local_app_data)
+                .join("Maabarium Console")
+                .join("Logs"));
         }
-        return Ok(desktop_home_directory()?.join("AppData").join("Local").join("Maabarium Console").join("Logs"));
+        return Ok(desktop_home_directory()?
+            .join("AppData")
+            .join("Local")
+            .join("Maabarium Console")
+            .join("Logs"));
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -714,7 +969,10 @@ fn desktop_log_directory() -> anyhow::Result<PathBuf> {
         if let Some(xdg_state_home) = std::env::var_os("XDG_STATE_HOME") {
             return Ok(PathBuf::from(xdg_state_home).join("maabarium"));
         }
-        return Ok(desktop_home_directory()?.join(".local").join("state").join("maabarium"));
+        return Ok(desktop_home_directory()?
+            .join(".local")
+            .join("state")
+            .join("maabarium"));
     }
 }
 
@@ -727,33 +985,75 @@ fn desktop_home_directory() -> anyhow::Result<PathBuf> {
 
 fn build_console_state(state: &AppState) -> ConsoleState {
     let blueprint_path = current_blueprint_path(state);
+    let run_state = current_run_state(state);
     let hardware_telemetry = sample_hardware_telemetry(state);
     let blueprint_result = BlueprintFile::load(&blueprint_path);
-    let plugin_runtime = blueprint_result.as_ref().ok().and_then(describe_plugin_runtime);
-    let available_blueprints = discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
+    let plugin_runtime = blueprint_result
+        .as_ref()
+        .ok()
+        .and_then(describe_plugin_runtime);
+    let available_blueprints =
+        discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
     let desktop_setup = hydrated_desktop_setup(state);
+    let mut ollama = build_ollama_status();
+    merge_saved_local_models_into_ollama(&desktop_setup, &mut ollama);
     let evaluator_kind = blueprint_result
         .as_ref()
         .ok()
         .map(EvaluatorRegistry::describe);
-    let (experiments, run_analytics, proposals) = Persistence::open(&state.db_path.display().to_string())
-        .map(|persistence| {
-            let recent_experiments = persistence.recent_experiments(400).unwrap_or_default();
-            let console_experiments = recent_experiments.iter().take(12).cloned().collect::<Vec<_>>();
-            let run_analytics = build_run_analytics(&recent_experiments, &state.log_path);
-            let proposals = persistence.recent_proposals(5).unwrap_or_default();
-            (console_experiments, run_analytics, proposals)
-        })
-        .unwrap_or_else(|_| {
-            (
-                Vec::new(),
-                empty_run_analytics(),
-                Vec::new(),
-            )
-        });
+    let active_blueprint_name = blueprint_result
+        .as_ref()
+        .ok()
+        .map(|blueprint| blueprint.blueprint.name.clone());
+    let (experiments, run_analytics, proposals) =
+        Persistence::open(&state.db_path.display().to_string())
+            .map(|persistence| {
+                let recent_experiments = persistence.recent_experiments(400).unwrap_or_default();
+                let console_experiments = active_blueprint_name
+                    .as_deref()
+                    .and_then(|blueprint_name| {
+                        persistence
+                            .recent_experiments_for_blueprint(blueprint_name, 12)
+                            .ok()
+                    })
+                    .unwrap_or_else(|| {
+                        recent_experiments
+                            .iter()
+                            .take(12)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    });
+                let run_analytics = build_run_analytics(&recent_experiments, &state.log_path);
+                let proposals = active_blueprint_name
+                    .as_deref()
+                    .and_then(|blueprint_name| {
+                        persistence
+                            .recent_proposals_for_blueprint(blueprint_name, 5)
+                            .ok()
+                    })
+                    .unwrap_or_else(|| persistence.recent_proposals(5).unwrap_or_default());
+                (console_experiments, run_analytics, proposals)
+            })
+            .unwrap_or_else(|_| (Vec::new(), empty_run_analytics(), Vec::new()));
     let logs = read_recent_log_lines_from_path(&state.log_path, 40).unwrap_or_default();
     let updater = describe_updater_configuration(&desktop_setup);
-    let ollama = build_ollama_status();
+    let brave_search_configured = SecretStore::new()
+        .get_api_key("brave")
+        .ok()
+        .flatten()
+        .is_some();
+    let active_research_workflow = blueprint_result
+        .as_ref()
+        .ok()
+        .map(|blueprint| {
+            blueprint
+                .library
+                .as_ref()
+                .and_then(|library| library.template)
+                == Some(BlueprintTemplateKind::GeneralResearch)
+                || blueprint.domain.language.eq_ignore_ascii_case("research")
+        })
+        .unwrap_or(false);
     let fallback_workspace = blueprint_result
         .as_ref()
         .ok()
@@ -764,6 +1064,8 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         fallback_workspace,
         &ollama,
         updater.configured,
+        brave_search_configured,
+        active_research_workflow,
         &state.db_path,
         &state.log_path,
     );
@@ -771,6 +1073,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     match blueprint_result {
         Ok(blueprint) => ConsoleState {
             engine_running: state.engine_running.load(Ordering::SeqCst),
+            run_state,
             blueprint_path: blueprint_path.display().to_string(),
             db_path: state.db_path.display().to_string(),
             log_path: state.log_path.display().to_string(),
@@ -791,6 +1094,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         },
         Err(error) => ConsoleState {
             engine_running: state.engine_running.load(Ordering::SeqCst),
+            run_state,
             blueprint_path: blueprint_path.display().to_string(),
             db_path: state.db_path.display().to_string(),
             log_path: state.log_path.display().to_string(),
@@ -810,6 +1114,32 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             logs,
         },
     }
+}
+
+fn merge_saved_local_models_into_ollama(setup: &DesktopSetupState, ollama: &mut OllamaStatus) {
+    let mut merged_recommended_models = Vec::with_capacity(
+        setup.selected_local_models.len() + ollama.recommended_models.len(),
+    );
+
+    for model_name in &setup.selected_local_models {
+        if ollama.models.iter().any(|model| model.name == *model_name)
+            || merged_recommended_models.iter().any(|name| name == model_name)
+        {
+            continue;
+        }
+
+        merged_recommended_models.push(model_name.clone());
+    }
+
+    for model_name in ollama.recommended_models.drain(..) {
+        if merged_recommended_models.iter().any(|name| name == &model_name) {
+            continue;
+        }
+
+        merged_recommended_models.push(model_name);
+    }
+
+    ollama.recommended_models = merged_recommended_models;
 }
 
 fn hydrated_desktop_setup(state: &AppState) -> DesktopSetupState {
@@ -889,11 +1219,10 @@ fn describe_plugin_runtime(blueprint: &BlueprintFile) -> Option<PluginRuntimeSta
         }
     };
 
-    let resolved_working_dir = manifest
-        .process
-        .working_dir
-        .as_deref()
-        .map(|path| resolve_relative_path(manifest_path.parent().unwrap_or(Path::new(".")), path));
+    let resolved_working_dir =
+        manifest.process.working_dir.as_deref().map(|path| {
+            resolve_relative_path(manifest_path.parent().unwrap_or(Path::new(".")), path)
+        });
     let resolved_command = resolve_plugin_command(
         &manifest.process.command,
         resolved_working_dir
@@ -975,13 +1304,19 @@ fn resolve_plugin_command(command: &str, base: &Path) -> Option<PathBuf> {
     })
 }
 
-fn discover_available_blueprints(blueprint_directory: &Path, active_path: &Path) -> Vec<BlueprintOption> {
+fn discover_available_blueprints(
+    blueprint_directory: &Path,
+    active_path: &Path,
+) -> Vec<BlueprintOption> {
     let mut blueprints = list_blueprint_paths(blueprint_directory)
         .into_iter()
         .map(|path| blueprint_option_from_path(&path, active_path))
         .collect::<Vec<_>>();
 
-    if !blueprints.iter().any(|blueprint| blueprint.path == active_path.display().to_string()) {
+    if !blueprints
+        .iter()
+        .any(|blueprint| blueprint.path == active_path.display().to_string())
+    {
         blueprints.push(blueprint_option_from_path(active_path, active_path));
     }
 
@@ -1025,7 +1360,9 @@ fn blueprint_option_from_path(path: &Path, active_path: &Path) -> BlueprintOptio
         .as_ref()
         .map(|loaded| loaded.blueprint.version.trim().to_owned())
         .filter(|value| !value.is_empty());
-    let language = blueprint.as_ref().map(|loaded| loaded.domain.language.clone());
+    let language = blueprint
+        .as_ref()
+        .map(|loaded| loaded.domain.language.clone());
     let repo_path = blueprint
         .as_ref()
         .map(|loaded| loaded.domain.repo_path.trim().to_owned())
@@ -1086,7 +1423,9 @@ fn build_run_analytics(experiments: &[PersistedExperiment], log_path: &Path) -> 
     let today = Utc::now().date_naive();
     let experiment_dates = experiments
         .iter()
-        .filter_map(|experiment| parse_timestamp(&experiment.created_at).map(|date| date.date_naive()))
+        .filter_map(|experiment| {
+            parse_timestamp(&experiment.created_at).map(|date| date.date_naive())
+        })
         .collect::<Vec<_>>();
     let token_events = read_token_usage_events(log_path);
 
@@ -1130,7 +1469,8 @@ fn build_weekly_analytics(
     experiment_dates: &[NaiveDate],
     token_events: &[(DateTime<Utc>, u64)],
 ) -> Vec<AnalyticsBucket> {
-    let current_week_start = today - ChronoDuration::days(i64::from(today.weekday().num_days_from_monday()));
+    let current_week_start =
+        today - ChronoDuration::days(i64::from(today.weekday().num_days_from_monday()));
 
     (0..8)
         .rev()
@@ -1321,12 +1661,211 @@ fn current_blueprint_path(state: &AppState) -> PathBuf {
     }
 }
 
+fn current_run_state(state: &AppState) -> LiveRunState {
+    match state.run_state.lock() {
+        Ok(run_state) => run_state.snapshot(),
+        Err(poisoned) => poisoned.into_inner().snapshot(),
+    }
+}
+
+fn update_run_state<F>(state: &AppState, updater: F)
+where
+    F: FnOnce(&mut MutableRunState),
+{
+    update_run_state_handle(&state.run_state, updater);
+}
+
+fn update_run_state_handle<F>(run_state: &Arc<Mutex<MutableRunState>>, updater: F)
+where
+    F: FnOnce(&mut MutableRunState),
+{
+    match run_state.lock() {
+        Ok(mut run_state) => updater(&mut run_state),
+        Err(poisoned) => updater(&mut poisoned.into_inner()),
+    }
+}
+
+fn reset_run_state_handle(run_state: &Arc<Mutex<MutableRunState>>) {
+    update_run_state_handle(run_state, |run_state| {
+        *run_state = MutableRunState::default();
+    });
+}
+
+fn persist_selected_blueprint_path(
+    settings_path: &Path,
+    blueprint_path: &Path,
+) -> Result<(), String> {
+    let mut setup = load_desktop_setup(settings_path);
+    setup.selected_blueprint_path = Some(blueprint_path.display().to_string());
+    persist_desktop_setup(settings_path, &setup)?;
+    Ok(())
+}
+
+fn current_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn engine_phase_label(phase: EnginePhase) -> &'static str {
+    match phase {
+        EnginePhase::Starting => "starting",
+        EnginePhase::Planning => "planning",
+        EnginePhase::Branching => "branching",
+        EnginePhase::Applying => "applying",
+        EnginePhase::Evaluating => "evaluating",
+        EnginePhase::Persisting => "persisting",
+        EnginePhase::Promoting => "promoting",
+        EnginePhase::CleaningUp => "cleaning_up",
+        EnginePhase::Completed => "completed",
+        EnginePhase::Cancelled => "cancelled",
+    }
+}
+
+fn run_workspace_root(path: &Path) -> Result<PathBuf, String> {
+    let repo = Repository::discover(path).map_err(|error| {
+        format!(
+            "Failed to discover git repository from {}: {error}",
+            path.display()
+        )
+    })?;
+
+    if let Some(workdir) = repo.workdir() {
+        return Ok(workdir.to_path_buf());
+    }
+
+    repo.path()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "Resolved repository root is unavailable".to_owned())
+}
+
+fn ensure_repository_has_head(repo: &Repository) -> Result<(), String> {
+    let has_head = repo.head().ok().and_then(|head| head.target()).is_some();
+    if has_head {
+        return Ok(());
+    }
+
+    let mut index = repo
+        .index()
+        .map_err(|error| format!("Failed to open git index: {error}"))?;
+    index
+        .add_all(["."], IndexAddOption::DEFAULT, None)
+        .map_err(|error| format!("Failed to stage workspace files for initial commit: {error}"))?;
+    index
+        .write()
+        .map_err(|error| format!("Failed to write git index: {error}"))?;
+    let tree_id = index
+        .write_tree()
+        .map_err(|error| format!("Failed to create initial tree: {error}"))?;
+    let tree = repo
+        .find_tree(tree_id)
+        .map_err(|error| format!("Failed to load initial tree: {error}"))?;
+    let signature = repo
+        .signature()
+        .or_else(|_| Signature::now("Maabarium", "maabarium@local.invalid"))
+        .map_err(|error| format!("Failed to create git signature: {error}"))?;
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Initialize workspace for Maabarium",
+        &tree,
+        &[],
+    )
+    .map_err(|error| format!("Failed to create initial git commit: {error}"))?;
+    Ok(())
+}
+
+fn prepare_run_workspace(path: &Path, initialize_git_if_needed: bool) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err(format!(
+            "Selected workspace {} does not exist",
+            path.display()
+        ));
+    }
+    if !path.is_dir() {
+        return Err(format!(
+            "Selected workspace {} is not a directory",
+            path.display()
+        ));
+    }
+
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve workspace {}: {error}", path.display()))?;
+
+    match Repository::discover(&canonical) {
+        Ok(repo) => {
+            ensure_repository_has_head(&repo)?;
+            run_workspace_root(&canonical)
+        }
+        Err(_) if initialize_git_if_needed => {
+            let repo = Repository::init(&canonical).map_err(|error| {
+                format!("Failed to initialize git repository in {}: {error}", canonical.display())
+            })?;
+            ensure_repository_has_head(&repo)?;
+            Ok(canonical)
+        }
+        Err(_) => Err(format!(
+            "Selected workspace {} is not a git repository. Enable repository initialization before starting the run.",
+            canonical.display()
+        )),
+    }
+}
+
+fn resolve_run_workspace(
+    state: &AppState,
+    blueprint: &BlueprintFile,
+    request: &StartEngineRequest,
+) -> Result<PathBuf, String> {
+    let requested = request
+        .workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            let blueprint_workspace = blueprint.domain.repo_path.trim();
+            (!blueprint_workspace.is_empty()).then(|| PathBuf::from(blueprint_workspace))
+        })
+        .or_else(|| {
+            load_desktop_setup(&state.settings_path)
+                .workspace_path
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    prepare_run_workspace(&requested, request.initialize_git_if_needed)
+}
+
 #[tauri::command]
 fn save_desktop_setup(
     state: tauri::State<'_, AppState>,
     setup: DesktopSetupState,
 ) -> Result<ConsoleState, String> {
-    persist_desktop_setup(&state.settings_path, &setup)?;
+    let mut merged = setup;
+    if merged.selected_blueprint_path.is_none() {
+        merged.selected_blueprint_path =
+            load_desktop_setup(&state.settings_path).selected_blueprint_path;
+    }
+    persist_desktop_setup(&state.settings_path, &merged)?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn initialize_workspace_git(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<ConsoleState, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Workspace path is required".to_owned());
+    }
+
+    prepare_run_workspace(Path::new(trimmed), true)?;
     Ok(build_console_state(&state))
 }
 
@@ -1343,13 +1882,15 @@ fn set_provider_api_key(
 
     let secret_store = SecretStore::new();
     if api_key.trim().is_empty() {
-        secret_store
-            .delete_api_key(&provider_id)
-            .map_err(|error| format!("Failed to clear API key for provider '{provider_id}': {error}"))?;
+        secret_store.delete_api_key(&provider_id).map_err(|error| {
+            format!("Failed to clear API key for provider '{provider_id}': {error}")
+        })?;
     } else {
         secret_store
             .set_api_key(&provider_id, SecretString::from(api_key))
-            .map_err(|error| format!("Failed to store API key for provider '{provider_id}': {error}"))?;
+            .map_err(|error| {
+                format!("Failed to store API key for provider '{provider_id}': {error}")
+            })?;
     }
 
     Ok(build_console_state(&state))
@@ -1414,7 +1955,15 @@ fn open_blueprint_directory(state: tauri::State<'_, AppState>) -> Result<(), Str
 }
 
 #[tauri::command]
-fn set_blueprint_path(state: tauri::State<'_, AppState>, path: String) -> Result<ConsoleState, String> {
+fn open_repository_license(app: tauri::AppHandle) -> Result<(), String> {
+    open_repository_license_path(&app)
+}
+
+#[tauri::command]
+fn set_blueprint_path(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<ConsoleState, String> {
     if state.engine_running.load(Ordering::SeqCst) {
         return Err("Stop the engine before switching blueprints".to_owned());
     }
@@ -1429,10 +1978,17 @@ fn set_blueprint_path(state: tauri::State<'_, AppState>, path: String) -> Result
         return Err("Blueprint files must use the .toml extension".to_owned());
     }
 
-    BlueprintFile::load(&selected_path)
-        .map_err(|error| format!("Failed to load blueprint {}: {error}", selected_path.display()))?;
+    BlueprintFile::load(&selected_path).map_err(|error| {
+        format!(
+            "Failed to load blueprint {}: {error}",
+            selected_path.display()
+        )
+    })?;
 
-    update_blueprint_path(&state, selected_path, |state| Ok(build_console_state(state)))
+    update_blueprint_path(&state, selected_path, |state| {
+        persist_selected_blueprint_path(&state.settings_path, &current_blueprint_path(state))?;
+        Ok(build_console_state(state))
+    })
 }
 
 #[tauri::command]
@@ -1513,6 +2069,51 @@ async fn install_available_update(
 }
 
 #[tauri::command]
+fn inspect_workspace_git_status(path: String) -> Result<WorkspaceGitStatus, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Workspace path is required".to_owned());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    let exists = candidate.exists();
+    let is_directory = candidate.is_dir();
+    let (is_git_repository, repository_root) = if exists && is_directory {
+        match Repository::discover(&candidate) {
+            Ok(repo) => {
+                let root = if let Some(workdir) = repo.workdir() {
+                    Some(workdir.display().to_string())
+                } else {
+                    repo.path()
+                        .parent()
+                        .map(|path| path.display().to_string())
+                };
+                (true, root)
+            }
+            Err(_) => (false, None),
+        }
+    } else {
+        (false, None)
+    };
+
+    Ok(WorkspaceGitStatus {
+        path: trimmed.to_owned(),
+        exists,
+        is_directory,
+        is_git_repository,
+        repository_root,
+    })
+}
+
+#[tauri::command]
+fn load_blueprint_for_wizard(path: String) -> Result<BlueprintFile, String> {
+    let blueprint_path = blueprint_path_from_string(&path)?;
+    BlueprintFile::load(&blueprint_path)
+        .with_context(|| format!("Failed to load blueprint {}", blueprint_path.display()))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn create_blueprint_from_wizard(
     state: tauri::State<'_, AppState>,
     request: CreateBlueprintWizardRequest,
@@ -1521,6 +2122,254 @@ fn create_blueprint_from_wizard(
         return Err("Stop the engine before creating a blueprint".to_owned());
     }
 
+    let normalized_name = request.name.trim().to_owned();
+    let blueprint = build_blueprint_from_wizard_request(request, None)?;
+
+    let blueprint_directory = state.blueprints_dir.clone();
+    std::fs::create_dir_all(&blueprint_directory)
+        .map_err(|error| format!("Failed to create blueprint directory: {error}"))?;
+
+    let blueprint_path = next_blueprint_path(&blueprint_directory, &normalized_name);
+    write_blueprint_file(&blueprint_path, &blueprint)?;
+
+    update_blueprint_path(&state, blueprint_path, |state| {
+        persist_selected_blueprint_path(&state.settings_path, &current_blueprint_path(state))?;
+        Ok(build_console_state(state))
+    })
+}
+
+#[tauri::command]
+fn update_blueprint_from_wizard(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    request: CreateBlueprintWizardRequest,
+) -> Result<ConsoleState, String> {
+    if state.engine_running.load(Ordering::SeqCst) {
+        return Err("Stop the engine before editing a blueprint".to_owned());
+    }
+
+    let blueprint_path = blueprint_path_from_string(&path)?;
+    let existing_blueprint = BlueprintFile::load(&blueprint_path)
+        .with_context(|| format!("Failed to load blueprint {}", blueprint_path.display()))
+        .map_err(|error| error.to_string())?;
+    let updated_blueprint = build_blueprint_from_wizard_request(request, Some(&existing_blueprint))?;
+
+    write_blueprint_file(&blueprint_path, &updated_blueprint)?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn start_engine(
+    state: tauri::State<'_, AppState>,
+    request: StartEngineRequest,
+) -> Result<ConsoleState, String> {
+    if state.engine_running.load(Ordering::SeqCst) {
+        return Err("The engine is already running".to_owned());
+    }
+
+    let blueprint_path = current_blueprint_path(&state);
+    let mut blueprint = BlueprintFile::load(&blueprint_path)
+        .with_context(|| format!("Failed to load blueprint {}", blueprint_path.display()))
+        .map_err(|error| error.to_string())?;
+    let workspace_root = resolve_run_workspace(&state, &blueprint, &request)?;
+    blueprint.domain.repo_path = workspace_root.display().to_string();
+    {
+        let mut setup = load_desktop_setup(&state.settings_path);
+        setup.interrupted_run_notice = None;
+        let search_provider = match setup.research_search_mode {
+            ResearchSearchMode::BraveApi => "brave_api",
+            ResearchSearchMode::DuckduckgoScrape => "duckduckgo_scrape",
+        };
+        unsafe {
+            std::env::set_var("MAABARIUM_RESEARCH_SEARCH_PROVIDER", search_provider);
+        }
+        if request.save_workspace_as_default {
+            setup.workspace_path = Some(workspace_root.display().to_string());
+        }
+        persist_desktop_setup(&state.settings_path, &setup)?;
+    }
+
+    let db_path = state.db_path.clone();
+    let running_flag = state.engine_running.clone();
+    let cancel = CancellationToken::new();
+    let cancel_for_thread = cancel.clone();
+    let progress_state = state.run_state.clone();
+
+    {
+        let mut engine_cancel = state
+            .engine_cancel
+            .lock()
+            .map_err(|_| "Failed to acquire engine state lock".to_owned())?;
+        *engine_cancel = Some(cancel);
+    }
+
+    running_flag.store(true, Ordering::SeqCst);
+    update_run_state(&state, |run_state| {
+        *run_state = MutableRunState {
+            status: RunStatus::Running,
+            blueprint_name: Some(blueprint.blueprint.name.clone()),
+            workspace_path: Some(blueprint.domain.repo_path.clone()),
+            current_iteration: None,
+            max_iterations: Some(blueprint.constraints.max_iterations),
+            phase: Some("starting".to_owned()),
+            latest_score: None,
+            latest_duration_ms: None,
+            current_iteration_started_at_epoch_ms: None,
+            started_at_epoch_ms: Some(current_epoch_ms()),
+            message: Some("Preparing engine run".to_owned()),
+        };
+    });
+
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                error!(?error, "Failed to create desktop runtime");
+                running_flag.store(false, Ordering::SeqCst);
+                reset_run_state_handle(&progress_state);
+                return;
+            }
+        };
+
+        runtime.block_on(async move {
+            let outcome = async {
+                let evaluator =
+                    EvaluatorRegistry::build(&blueprint).context("Failed to build evaluator")?;
+                let progress_state_for_events = progress_state.clone();
+                let progress_reporter = std::sync::Arc::new(move |update: EngineProgressUpdate| {
+                    update_run_state_handle(&progress_state_for_events, |run_state| {
+                        if !matches!(run_state.status, RunStatus::Stopping) {
+                            run_state.status = RunStatus::Running;
+                        }
+                        run_state.blueprint_name = Some(update.blueprint_name.clone());
+                        run_state.workspace_path = Some(update.workspace_path.clone());
+                        run_state.max_iterations = Some(update.max_iterations);
+                        if update.iteration != run_state.current_iteration {
+                            run_state.current_iteration = update.iteration;
+                            run_state.current_iteration_started_at_epoch_ms =
+                                update.iteration.map(|_| current_epoch_ms());
+                        }
+                        run_state.phase = Some(engine_phase_label(update.phase).to_owned());
+                        run_state.latest_score = update.latest_score;
+                        run_state.latest_duration_ms = update.latest_duration_ms;
+                        run_state.message = update.message.clone();
+                        if run_state.started_at_epoch_ms.is_none() {
+                            run_state.started_at_epoch_ms = Some(current_epoch_ms());
+                        }
+                    });
+                });
+                let engine = Engine::new(
+                    EngineConfig {
+                        blueprint,
+                        db_path: db_path.display().to_string(),
+                        progress_reporter: Some(progress_reporter),
+                    },
+                    evaluator,
+                    cancel_for_thread,
+                )
+                .context("Failed to initialize engine")?;
+                engine.run().await.context("Engine run failed")
+            }
+            .await;
+
+            if let Err(error) = outcome {
+                error!(?error, "Desktop engine execution failed");
+            }
+            running_flag.store(false, Ordering::SeqCst);
+            reset_run_state_handle(&progress_state);
+        });
+    });
+
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn stop_engine(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+    if let Ok(mut engine_cancel) = state.engine_cancel.lock() {
+        if let Some(cancel) = engine_cancel.take() {
+            cancel.cancel();
+            update_run_state(&state, |run_state| {
+                run_state.status = RunStatus::Stopping;
+                run_state.phase = Some("stopping".to_owned());
+                run_state.message =
+                    Some("Waiting for the current engine step to unwind".to_owned());
+            });
+        }
+    }
+    Ok(build_console_state(&state))
+}
+
+fn open_path_in_system_viewer(path: &Path) -> Result<(), String> {
+    let command = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "cmd"
+    } else {
+        "xdg-open"
+    };
+
+    let mut process = Command::new(command);
+    if cfg!(target_os = "windows") {
+        process.arg("/C").arg("start").arg(path);
+    } else {
+        process.arg(path);
+    }
+
+    process
+        .spawn()
+        .map_err(|error| error.to_string())
+        .map(|_| ())
+}
+
+fn open_repository_license_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let license_path = resolved_repository_license_path(app)?;
+    open_path_in_system_viewer(&license_path)
+}
+
+fn resolved_repository_license_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled_license = resource_dir.join("LICENSE");
+        if bundled_license.exists() {
+            return Ok(bundled_license);
+        }
+    }
+
+    let repository_license = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../LICENSE");
+    if repository_license.exists() {
+        return repository_license
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve repository LICENSE path: {error}"));
+    }
+
+    Err("Could not locate the bundled or repository LICENSE file".to_owned())
+}
+
+fn blueprint_path_from_string(path: &str) -> Result<PathBuf, String> {
+    let blueprint_path = PathBuf::from(path.trim());
+    if blueprint_path.as_os_str().is_empty() {
+        return Err("Blueprint path is required".to_owned());
+    }
+
+    if blueprint_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("toml"))
+        .unwrap_or(true)
+    {
+        return Err("Blueprint files must use the .toml extension".to_owned());
+    }
+
+    Ok(blueprint_path)
+}
+
+fn build_blueprint_from_wizard_request(
+    request: CreateBlueprintWizardRequest,
+    existing_blueprint: Option<&BlueprintFile>,
+) -> Result<BlueprintFile, String> {
+    let selected_template = BlueprintTemplateKind::from(request.template);
     let normalized_name = request.name.trim();
     if normalized_name.is_empty() {
         return Err("Blueprint name is required".to_owned());
@@ -1578,7 +2427,10 @@ fn create_blueprint_from_wizard(
             description: metric.description.trim().to_owned(),
         })
         .collect::<Vec<_>>();
-    if metrics.iter().any(|metric| metric.name.is_empty() || metric.description.is_empty()) {
+    if metrics
+        .iter()
+        .any(|metric| metric.name.is_empty() || metric.description.is_empty())
+    {
         return Err("Each metric must include a name and description".to_owned());
     }
 
@@ -1598,10 +2450,9 @@ fn create_blueprint_from_wizard(
             requests_per_minute: model.requests_per_minute,
         })
         .collect::<Vec<_>>();
-    if models
-        .iter()
-        .any(|model| model.name.is_empty() || model.provider.is_empty() || model.endpoint.is_empty())
-    {
+    if models.iter().any(|model| {
+        model.name.is_empty() || model.provider.is_empty() || model.endpoint.is_empty()
+    }) {
         return Err("Each model must include a name, provider, and endpoint".to_owned());
     }
 
@@ -1620,10 +2471,9 @@ fn create_blueprint_from_wizard(
             model: agent.model.trim().to_owned(),
         })
         .collect::<Vec<_>>();
-    if agents
-        .iter()
-        .any(|agent| agent.name.is_empty() || agent.role.is_empty() || agent.system_prompt.is_empty())
-    {
+    if agents.iter().any(|agent| {
+        agent.name.is_empty() || agent.role.is_empty() || agent.system_prompt.is_empty()
+    }) {
         return Err("Each agent must include a name, role, and system prompt".to_owned());
     }
     if agents
@@ -1660,126 +2510,37 @@ fn create_blueprint_from_wizard(
             assignment: request.model_assignment,
             models,
         },
-        evaluator: None,
-        library: Some(BlueprintLibraryMeta {
-            kind: BlueprintLibraryKind::Workflow,
-            setup_required: false,
-            template: None,
-        }),
+        evaluator: existing_blueprint.and_then(|blueprint| blueprint.evaluator.clone()),
+        library: existing_blueprint
+            .and_then(|blueprint| blueprint.library.clone())
+            .map(|mut library| {
+                library.kind = BlueprintLibraryKind::Workflow;
+                library.setup_required = false;
+                library.template = Some(selected_template);
+                library
+            })
+            .or_else(|| {
+                Some(BlueprintLibraryMeta {
+                    kind: BlueprintLibraryKind::Workflow,
+                    setup_required: false,
+                    template: Some(selected_template),
+                })
+            }),
     };
 
     blueprint
         .validate()
         .map_err(|error| format!("Failed to validate blueprint: {error}"))?;
 
-    let blueprint_directory = state.blueprints_dir.clone();
-    std::fs::create_dir_all(&blueprint_directory)
-        .map_err(|error| format!("Failed to create blueprint directory: {error}"))?;
+    Ok(blueprint)
+}
 
-    let blueprint_path = next_blueprint_path(&blueprint_directory, normalized_name);
-    let toml = toml::to_string_pretty(&blueprint)
+fn write_blueprint_file(path: &Path, blueprint: &BlueprintFile) -> Result<(), String> {
+    let toml = toml::to_string_pretty(blueprint)
         .map_err(|error| format!("Failed to serialize blueprint: {error}"))?;
-    std::fs::write(&blueprint_path, toml)
+    std::fs::write(path, toml)
         .map_err(|error| format!("Failed to write blueprint file: {error}"))?;
-
-    update_blueprint_path(&state, blueprint_path, |state| Ok(build_console_state(state)))
-}
-
-#[tauri::command]
-fn start_engine(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
-    if state.engine_running.load(Ordering::SeqCst) {
-        return Err("The engine is already running".to_owned());
-    }
-
-    let blueprint_path = current_blueprint_path(&state);
-    let db_path = state.db_path.clone();
-    let running_flag = state.engine_running.clone();
-    let cancel = CancellationToken::new();
-    let cancel_for_thread = cancel.clone();
-
-    {
-        let mut engine_cancel = state
-            .engine_cancel
-            .lock()
-            .map_err(|_| "Failed to acquire engine state lock".to_owned())?;
-        *engine_cancel = Some(cancel);
-    }
-
-    running_flag.store(true, Ordering::SeqCst);
-
-    std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                error!(?error, "Failed to create desktop runtime");
-                running_flag.store(false, Ordering::SeqCst);
-                return;
-            }
-        };
-
-        runtime.block_on(async move {
-            let outcome = async {
-                let blueprint = BlueprintFile::load(&blueprint_path)
-                    .with_context(|| format!("Failed to load blueprint {}", blueprint_path.display()))?;
-                let evaluator = EvaluatorRegistry::build(&blueprint)
-                    .context("Failed to build evaluator")?;
-                let engine = Engine::new(
-                    EngineConfig {
-                        blueprint,
-                        db_path: db_path.display().to_string(),
-                    },
-                    evaluator,
-                    cancel_for_thread,
-                )
-                .context("Failed to initialize engine")?;
-                engine.run().await.context("Engine run failed")
-            }
-            .await;
-
-            if let Err(error) = outcome {
-                error!(?error, "Desktop engine execution failed");
-            }
-            running_flag.store(false, Ordering::SeqCst);
-        });
-    });
-
-    Ok(build_console_state(&state))
-}
-
-#[tauri::command]
-fn stop_engine(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
-    if let Ok(mut engine_cancel) = state.engine_cancel.lock() {
-        if let Some(cancel) = engine_cancel.take() {
-            cancel.cancel();
-        }
-    }
-    state.engine_running.store(false, Ordering::SeqCst);
-    Ok(build_console_state(&state))
-}
-
-fn open_path_in_system_viewer(path: &Path) -> Result<(), String> {
-    let command = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "cmd"
-    } else {
-        "xdg-open"
-    };
-
-    let mut process = Command::new(command);
-    if cfg!(target_os = "windows") {
-        process.arg("/C").arg("start").arg(path);
-    } else {
-        process.arg(path);
-    }
-
-    process
-        .spawn()
-        .map_err(|error| error.to_string())
-        .map(|_| ())
+    Ok(())
 }
 
 fn next_blueprint_path(directory: &Path, blueprint_name: &str) -> PathBuf {
@@ -1840,6 +2601,7 @@ mod tests {
             log_path: PathBuf::from("data/maabarium.log"),
             engine_cancel: Mutex::new(None),
             engine_running: Arc::new(AtomicBool::new(false)),
+            run_state: Arc::new(Mutex::new(MutableRunState::default())),
         }
     }
 
@@ -1860,7 +2622,10 @@ mod tests {
         })
         .expect("path update should succeed");
 
-        assert_eq!(observed_path, PathBuf::from("blueprints/rust-code-quality.toml"));
+        assert_eq!(
+            observed_path,
+            PathBuf::from("blueprints/rust-code-quality.toml")
+        );
     }
 
     #[test]
@@ -1876,8 +2641,11 @@ mod tests {
             .expect("non-blueprint file should be written");
         std::fs::write(target_directory.join("example.toml"), "name = 'existing'\n")
             .expect("existing target blueprint should be written");
-        std::fs::write(source_directory.join("code-quality.toml"), "name = 'quality'\n")
-            .expect("source code-quality blueprint should be written");
+        std::fs::write(
+            source_directory.join("code-quality.toml"),
+            "name = 'quality'\n",
+        )
+        .expect("source code-quality blueprint should be written");
 
         let copied = copy_blueprint_files_if_missing(&source_directory, &target_directory)
             .expect("copy should succeed");
@@ -1906,11 +2674,20 @@ mod tests {
         let telemetry = sampler.sample();
 
         assert!(telemetry.sampled_at_epoch_ms > 0);
-        assert!(matches!(telemetry.cpu.status, HardwareSensorStatus::Partial));
+        assert!(matches!(
+            telemetry.cpu.status,
+            HardwareSensorStatus::Partial
+        ));
         assert!(telemetry.cpu.utilization_percent.is_some());
-        assert!(matches!(telemetry.gpu.status, HardwareSensorStatus::Unavailable));
+        assert!(matches!(
+            telemetry.gpu.status,
+            HardwareSensorStatus::Unavailable
+        ));
         assert!(telemetry.gpu.utilization_percent.is_none());
-        assert!(matches!(telemetry.npu.status, HardwareSensorStatus::Unavailable));
+        assert!(matches!(
+            telemetry.npu.status,
+            HardwareSensorStatus::Unavailable
+        ));
     }
 
     #[test]

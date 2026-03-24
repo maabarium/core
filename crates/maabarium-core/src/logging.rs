@@ -8,7 +8,10 @@ pub fn read_recent_log_lines(max_lines: usize) -> std::io::Result<Vec<String>> {
     read_recent_log_lines_from_path(&default_log_path(), max_lines)
 }
 
-pub fn read_recent_log_lines_from_path(path: &Path, max_lines: usize) -> std::io::Result<Vec<String>> {
+pub fn read_recent_log_lines_from_path(
+    path: &Path,
+    max_lines: usize,
+) -> std::io::Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
     }

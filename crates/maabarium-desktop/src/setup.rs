@@ -13,6 +13,13 @@ pub enum RuntimeStrategy {
     Mixed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchSearchMode {
+    BraveApi,
+    DuckduckgoScrape,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteProviderSetup {
@@ -26,17 +33,29 @@ pub struct RemoteProviderSetup {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct InterruptedRunNotice {
+    pub blueprint_name: String,
+    pub workspace_path: String,
+    pub interrupted_at: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopSetupState {
     pub guided_mode: bool,
     pub onboarding_completed: bool,
     pub runtime_strategy: Option<RuntimeStrategy>,
+    pub research_search_mode: ResearchSearchMode,
     pub workspace_path: Option<String>,
+    pub selected_blueprint_path: Option<String>,
     pub selected_local_models: Vec<String>,
     pub remote_providers: Vec<RemoteProviderSetup>,
     pub preferred_update_channel: Option<String>,
     pub remind_later_until: Option<String>,
     pub remind_later_version: Option<String>,
     pub last_setup_completed_at: Option<String>,
+    pub interrupted_run_notice: Option<InterruptedRunNotice>,
 }
 
 impl Default for DesktopSetupState {
@@ -45,13 +64,16 @@ impl Default for DesktopSetupState {
             guided_mode: true,
             onboarding_completed: false,
             runtime_strategy: None,
+            research_search_mode: ResearchSearchMode::DuckduckgoScrape,
             workspace_path: None,
+            selected_blueprint_path: None,
             selected_local_models: Vec::new(),
             remote_providers: default_remote_provider_setups(),
             preferred_update_channel: None,
             remind_later_until: None,
             remind_later_version: None,
             last_setup_completed_at: None,
+            interrupted_run_notice: None,
         }
     }
 }
@@ -221,11 +243,15 @@ pub fn build_ollama_status() -> OllamaStatus {
     let status_detail = if !installed {
         "Ollama is not installed on this machine yet.".to_owned()
     } else if !running {
-        "Ollama appears to be installed, but the local service is not responding on port 11434.".to_owned()
+        "Ollama appears to be installed, but the local service is not responding on port 11434."
+            .to_owned()
     } else if models.is_empty() {
         "Ollama is running, but no local models were detected yet.".to_owned()
     } else {
-        format!("Ollama is running with {} installed local model(s).", models.len())
+        format!(
+            "Ollama is running with {} installed local model(s).",
+            models.len()
+        )
     };
 
     OllamaStatus {
@@ -284,6 +310,8 @@ pub fn build_readiness_items(
     fallback_workspace: Option<&str>,
     ollama: &OllamaStatus,
     updater_configured: bool,
+    brave_search_configured: bool,
+    active_research_workflow: bool,
     db_path: &Path,
     log_path: &Path,
 ) -> Vec<ReadinessItem> {
@@ -305,7 +333,10 @@ pub fn build_readiness_items(
         ReadinessItem {
             id: "workspace".to_owned(),
             title: "Workspace".to_owned(),
-            status: if workspace_path.map(Path::new).is_some_and(|path| path.exists()) {
+            status: if workspace_path
+                .map(Path::new)
+                .is_some_and(|path| path.exists())
+            {
                 ReadinessStatus::Ready
             } else {
                 ReadinessStatus::NeedsAttention
@@ -357,6 +388,34 @@ pub fn build_readiness_items(
                 "No remote providers are configured yet.".to_owned()
             },
             action_label: "Configure Provider".to_owned(),
+            last_checked_at_epoch_ms: now,
+        },
+        ReadinessItem {
+            id: "research_search".to_owned(),
+            title: "Research Search".to_owned(),
+            status: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
+                ReadinessStatus::Ready
+            } else if brave_search_configured {
+                ReadinessStatus::Ready
+            } else if active_research_workflow {
+                ReadinessStatus::NeedsAttention
+            } else {
+                ReadinessStatus::Optional
+            },
+            summary: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
+                "Free DuckDuckGo scraping is enabled for research discovery. It works out of the box, but it is unofficial and can be slower, less stable, or blocked without warning."
+                    .to_owned()
+            } else if brave_search_configured {
+                "Brave Search discovery is configured in the OS keychain for research workflows."
+                    .to_owned()
+            } else if active_research_workflow {
+                "No Brave Search API key is configured. General Research workflows can still run, but discovery-backed searches will fail until BRAVE_SEARCH_API_KEY is stored in setup."
+                    .to_owned()
+            } else {
+                "Optional for internet-backed research workflows. Add a Brave Search API key if you want automatic discovery queries and source harvesting."
+                    .to_owned()
+            },
+            action_label: "Configure Search".to_owned(),
             last_checked_at_epoch_ms: now,
         },
         ReadinessItem {
@@ -412,7 +471,11 @@ pub fn build_readiness_items(
             } else {
                 ReadinessStatus::NeedsAttention
             },
-            summary: format!("Database: {} | Logs: {}", db_path.display(), log_path.display()),
+            summary: format!(
+                "Database: {} | Logs: {}",
+                db_path.display(),
+                log_path.display()
+            ),
             action_label: "Inspect Paths".to_owned(),
             last_checked_at_epoch_ms: now,
         },
@@ -422,6 +485,11 @@ pub fn build_readiness_items(
 fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
     setup.workspace_path = setup
         .workspace_path
+        .take()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    setup.selected_blueprint_path = setup
+        .selected_blueprint_path
         .take()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -474,6 +542,31 @@ fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
         .take()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    setup.last_setup_completed_at = setup
+        .last_setup_completed_at
+        .take()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    setup.interrupted_run_notice = setup.interrupted_run_notice.take().and_then(|notice| {
+        let blueprint_name = notice.blueprint_name.trim().to_owned();
+        let workspace_path = notice.workspace_path.trim().to_owned();
+        let interrupted_at = notice.interrupted_at.trim().to_owned();
+        let reason = notice
+            .reason
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+
+        if blueprint_name.is_empty() || workspace_path.is_empty() || interrupted_at.is_empty() {
+            None
+        } else {
+            Some(InterruptedRunNotice {
+                blueprint_name,
+                workspace_path,
+                interrupted_at,
+                reason,
+            })
+        }
+    });
     setup
 }
 

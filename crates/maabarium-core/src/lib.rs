@@ -19,11 +19,11 @@ pub mod updater;
 pub use blueprint::{
     BlueprintFile, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintTemplateKind,
 };
-pub use engine::{Engine, EngineConfig};
+pub use engine::{Engine, EngineConfig, EnginePhase, EngineProgressReporter, EngineProgressUpdate};
 pub use error::CoreError;
 pub use evaluator::{
-    BuiltinEvaluatorKind, CodeEvaluator, EvaluatorRegistry, LoraEvaluator, PromptEvaluator,
-    LoraArtifacts, LoraStageArtifact, ProcessPluginEvaluator, ProcessPluginManifest,
+    BuiltinEvaluatorKind, CodeEvaluator, EvaluatorRegistry, LoraArtifacts, LoraEvaluator,
+    LoraStageArtifact, ProcessPluginEvaluator, ProcessPluginManifest, PromptEvaluator,
     ResearchArtifacts, ResearchCitation, ResearchEvaluator, ResearchQueryTrace, ResearchSource,
 };
 pub use logging::{default_log_path, read_recent_log_lines, read_recent_log_lines_from_path};

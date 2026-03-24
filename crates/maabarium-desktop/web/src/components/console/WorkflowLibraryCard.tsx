@@ -28,6 +28,7 @@ type WorkflowLibraryCardProps = {
   onResetFilters: () => void;
   onToggleGroup: (group: string) => void;
   onSelectBlueprint: (path: string) => void;
+  onEditBlueprint: (path: string) => void;
   onOpenTemplateWizard: (
     template: WizardTemplate,
     displayName: string,
@@ -55,6 +56,7 @@ export function WorkflowLibraryCard({
   onResetFilters,
   onToggleGroup,
   onSelectBlueprint,
+  onEditBlueprint,
   onOpenTemplateWizard,
 }: WorkflowLibraryCardProps) {
   return (
@@ -91,7 +93,7 @@ export function WorkflowLibraryCard({
           </div>
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
             <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 p-1">
-              {(["detailed", "compact"] as const).map((currentDensity) => (
+              {(["compact", "detailed"] as const).map((currentDensity) => (
                 <button
                   key={currentDensity}
                   type="button"
@@ -191,6 +193,10 @@ export function WorkflowLibraryCard({
                           isSwitching ||
                           !blueprint.isLoadable ||
                           pendingBlueprintPath !== null;
+                        const isEditable =
+                          blueprint.libraryKind === "workflow" &&
+                          blueprint.isLoadable &&
+                          !blueprint.requiresSetup;
 
                         return (
                           <div
@@ -287,7 +293,10 @@ export function WorkflowLibraryCard({
                                 ) : null}
                                 {blueprint.language ? (
                                   <span>
-                                    {formatBlueprintGroup(blueprint.language)}
+                                    {formatBlueprintGroup(
+                                      blueprint.language,
+                                      blueprint.libraryKind,
+                                    )}
                                   </span>
                                 ) : null}
                                 {blueprint.metricCount !== null ? (
@@ -330,6 +339,21 @@ export function WorkflowLibraryCard({
                                       : "Load Workflow"}
                                 </button>
                               )}
+                              {isEditable ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onEditBlueprint(blueprint.path)
+                                  }
+                                  disabled={
+                                    isEngineRunning ||
+                                    pendingBlueprintPath !== null
+                                  }
+                                  className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-amber-200 transition hover:bg-amber-500/15 disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                  Edit In Wizard
+                                </button>
+                              ) : null}
                             </div>
                           </div>
                         );

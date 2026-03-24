@@ -7,14 +7,67 @@ import type { PersistedExperiment } from "../../types/console";
 import { Badge } from "../ui/Badge";
 import { GlassCard } from "../ui/GlassCard";
 
+const SCRAPER_DISCOVERY_MARKER = "[scraper_discovery]";
+
+function isScraperDiscoveryError(error: string | null): boolean {
+  return Boolean(error?.includes(SCRAPER_DISCOVERY_MARKER));
+}
+
+function formatQueryTraceProvider(provider: string): string {
+  if (provider === "duckduckgo_html") {
+    return "DuckDuckGo Scrape";
+  }
+
+  if (provider === "brave") {
+    return "Brave API";
+  }
+
+  return provider;
+}
+
+function summarizeResearchProviders(
+  experiment: PersistedExperiment,
+): string | null {
+  const providers = Array.from(
+    new Set(
+      (experiment.research?.queryTraces ?? []).map((trace) =>
+        formatQueryTraceProvider(trace.provider),
+      ),
+    ),
+  );
+
+  if (providers.length === 0) {
+    return null;
+  }
+
+  return providers.join(", ");
+}
+
+function formatQueryTraceError(error: string | null): string | null {
+  if (!error) {
+    return null;
+  }
+
+  return error.replace(SCRAPER_DISCOVERY_MARKER, "").trim();
+}
+
 function buildResearchMarkdown(experiment: PersistedExperiment) {
   const createdAt = formatExperimentTimestamp(experiment.created_at);
+  const providerSummary = summarizeResearchProviders(experiment);
+  const scraperIssueCount =
+    experiment.research?.queryTraces.filter((trace) =>
+      isScraperDiscoveryError(trace.error),
+    ).length ?? 0;
   const lines = [
     `# Research Experiment ${experiment.id}`,
     "",
     `- Captured: ${createdAt}`,
     `- Weighted score: ${experiment.weighted_total.toFixed(2)}`,
     `- Duration: ${experiment.duration_ms}ms`,
+    ...(providerSummary ? [`- Discovery providers: ${providerSummary}`] : []),
+    ...(scraperIssueCount > 0
+      ? [`- Scraper issues: ${scraperIssueCount}`]
+      : []),
     "",
     "## Summary",
     "",
@@ -50,7 +103,9 @@ function buildResearchMarkdown(experiment: PersistedExperiment) {
   if (experiment.research?.queryTraces.length) {
     lines.push("## Query Traces", "");
     for (const trace of experiment.research.queryTraces) {
-      lines.push(`- ${trace.provider}: ${trace.queryText}`);
+      lines.push(
+        `- ${formatQueryTraceProvider(trace.provider)}: ${trace.queryText}`,
+      );
       lines.push(
         `  - Executed: ${formatExperimentTimestamp(trace.executedAt)}`,
       );
@@ -60,7 +115,10 @@ function buildResearchMarkdown(experiment: PersistedExperiment) {
         lines.push(`  - Top URLs: ${trace.topUrls.join(", ")}`);
       }
       if (trace.error) {
-        lines.push(`  - Error: ${trace.error}`);
+        lines.push(`  - Error: ${formatQueryTraceError(trace.error)}`);
+        if (isScraperDiscoveryError(trace.error)) {
+          lines.push("  - Marker: scraper_discovery");
+        }
       }
     }
     lines.push("");
@@ -87,6 +145,14 @@ export function ResearchEvidenceCard({
 }: {
   latestResearchExperiment: PersistedExperiment | null;
 }) {
+  const providerSummary = latestResearchExperiment
+    ? summarizeResearchProviders(latestResearchExperiment)
+    : null;
+  const scraperDiscoveryFailures =
+    latestResearchExperiment?.research?.queryTraces.filter((trace) =>
+      isScraperDiscoveryError(trace.error),
+    ).length ?? 0;
+
   return (
     <GlassCard title="Research Evidence" icon={Search} className="h-full">
       {latestResearchExperiment?.research ? (
@@ -126,6 +192,15 @@ export function ResearchEvidenceCard({
                 <Badge color="slate">
                   {latestResearchExperiment.research.queryTraces.length} queries
                 </Badge>
+                {providerSummary ? (
+                  <Badge color="slate">{providerSummary}</Badge>
+                ) : null}
+                {scraperDiscoveryFailures > 0 ? (
+                  <Badge color="rose">
+                    {scraperDiscoveryFailures} scraper issue
+                    {scraperDiscoveryFailures === 1 ? "" : "s"}
+                  </Badge>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -232,12 +307,17 @@ export function ResearchEvidenceCard({
                       className="rounded-lg border border-white/10 bg-white/5 px-3 py-3"
                     >
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge color="blue">{trace.provider}</Badge>
+                        <Badge color="blue">
+                          {formatQueryTraceProvider(trace.provider)}
+                        </Badge>
                         <Badge color={trace.error ? "rose" : "emerald"}>
                           {trace.error
                             ? "Failed"
                             : `${trace.resultCount} results`}
                         </Badge>
+                        {isScraperDiscoveryError(trace.error) ? (
+                          <Badge color="rose">Scraper Issue</Badge>
+                        ) : null}
                         <Badge color="slate">{trace.latencyMs}ms</Badge>
                       </div>
                       <div className="mt-3 text-sm leading-relaxed text-slate-200">
@@ -248,7 +328,7 @@ export function ResearchEvidenceCard({
                       </div>
                       {trace.error ? (
                         <div className="mt-3 text-xs leading-relaxed text-rose-300">
-                          {trace.error}
+                          {formatQueryTraceError(trace.error)}
                         </div>
                       ) : trace.topUrls.length > 0 ? (
                         <div className="mt-3 space-y-1 text-[11px] text-slate-400">

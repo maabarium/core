@@ -68,7 +68,10 @@ impl UpdaterConfiguration {
         if let Ok(manifest_url) = std::env::var("MAABARIUM_UPDATE_MANIFEST_URL") {
             let manifest_url = manifest_url.trim().to_owned();
             if !manifest_url.is_empty() {
-                return Ok(Self { channel, manifest_url });
+                return Ok(Self {
+                    channel,
+                    manifest_url,
+                });
             }
         }
 
@@ -86,7 +89,11 @@ impl UpdaterConfiguration {
 }
 
 pub async fn fetch_release_manifest(url: &str) -> Result<ReleaseManifest, UpdaterError> {
-    let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
+    let response = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?;
     Ok(response.json::<ReleaseManifest>().await?)
 }
 
@@ -101,7 +108,11 @@ pub async fn check_for_cli_update(
         .as_ref()
         .and_then(|cli| cli.artifacts.get(&platform_key))
         .cloned()
-        .ok_or_else(|| UpdaterError::InvalidManifest(format!("Release manifest does not include a CLI artifact for platform '{platform_key}'")))?;
+        .ok_or_else(|| {
+            UpdaterError::InvalidManifest(format!(
+                "Release manifest does not include a CLI artifact for platform '{platform_key}'"
+            ))
+        })?;
 
     if let Some(minimum_supported_version) = manifest.minimum_supported_version.as_deref() {
         if version_less_than(current_version, minimum_supported_version) {
@@ -149,9 +160,11 @@ pub async fn install_cli_update(
     }
 
     let extracted_binary = extract_cli_binary(bytes.as_ref(), artifact)?;
-    let executable_parent = executable_path
-        .parent()
-        .ok_or_else(|| UpdaterError::InvalidManifest("CLI executable path is missing a parent directory".to_owned()))?;
+    let executable_parent = executable_path.parent().ok_or_else(|| {
+        UpdaterError::InvalidManifest(
+            "CLI executable path is missing a parent directory".to_owned(),
+        )
+    })?;
     let temp_path = executable_parent.join(format!("{}.download", artifact.binary_name));
     fs::write(&temp_path, extracted_binary)?;
 
@@ -197,7 +210,10 @@ pub fn current_platform_key() -> Result<String, UpdaterError> {
     Ok(format!("{os}-{arch}"))
 }
 
-fn extract_cli_binary(bytes: &[u8], artifact: &CliReleaseArtifact) -> Result<Vec<u8>, UpdaterError> {
+fn extract_cli_binary(
+    bytes: &[u8],
+    artifact: &CliReleaseArtifact,
+) -> Result<Vec<u8>, UpdaterError> {
     match artifact.archive_kind.as_str() {
         "tar.gz" => extract_from_tar_gz(bytes, &artifact.binary_name),
         other => Err(UpdaterError::InvalidManifest(format!(

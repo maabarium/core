@@ -5,7 +5,7 @@ use secrecy::ExposeSecret;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::blueprint::MetricDef;
 use crate::error::EvalError;
@@ -20,12 +20,22 @@ use super::{
 pub struct ResearchEvaluator {
     client: Client,
     metrics: Vec<MetricDef>,
-    discovery_provider: Option<BraveSearchProvider>,
+    discovery_provider: Option<DiscoveryProvider>,
+    provider_hint: &'static str,
+}
+
+enum DiscoveryProvider {
+    Brave(BraveSearchProvider),
+    DuckDuckGo(DuckDuckGoScrapeProvider),
 }
 
 struct BraveSearchProvider {
     client: Client,
     api_key: String,
+}
+
+struct DuckDuckGoScrapeProvider {
+    client: Client,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,21 +59,77 @@ struct BraveWebResult {
     description: Option<String>,
 }
 
+const RESEARCH_SEARCH_PROVIDER_ENV: &str = "MAABARIUM_RESEARCH_SEARCH_PROVIDER";
+const SCRAPER_FAILURE_MARKER: &str = "scraper_discovery";
+
+fn mark_discovery_error(provider_name: &str, message: String) -> String {
+    if provider_name == "duckduckgo_html" {
+        format!("[{SCRAPER_FAILURE_MARKER}] {message}")
+    } else {
+        message
+    }
+}
+
+fn log_scraper_failure(stage: &str, query: &str, error: &str) {
+    warn!(
+        search_provider = "duckduckgo_html",
+        marker = SCRAPER_FAILURE_MARKER,
+        failure_stage = stage,
+        query = %query,
+        error = %error,
+        "[scraper_discovery] DuckDuckGo HTML discovery failed"
+    );
+}
+
 impl ResearchEvaluator {
     pub fn new(metrics: Vec<MetricDef>) -> Self {
-        let discovery_provider = SecretStore::new()
+        let brave_api_key = SecretStore::new()
             .resolve_api_key("brave", Some("BRAVE_SEARCH_API_KEY"))
             .ok()
-            .flatten()
-            .map(|api_key| BraveSearchProvider {
-                client: Client::new(),
-                api_key: api_key.expose_secret().to_owned(),
-            });
+            .flatten();
+        let requested_provider = std::env::var(RESEARCH_SEARCH_PROVIDER_ENV).ok();
+        let client = Client::new();
+        let (discovery_provider, provider_hint) = match requested_provider.as_deref() {
+            Some("brave_api") => (
+                brave_api_key.map(|api_key| {
+                    DiscoveryProvider::Brave(BraveSearchProvider {
+                        client: Client::new(),
+                        api_key: api_key.expose_secret().to_owned(),
+                    })
+                }),
+                "brave_api",
+            ),
+            Some("duckduckgo_scrape") => (
+                Some(DiscoveryProvider::DuckDuckGo(DuckDuckGoScrapeProvider {
+                    client: Client::new(),
+                })),
+                "duckduckgo_scrape",
+            ),
+            _ => {
+                if let Some(api_key) = brave_api_key {
+                    (
+                        Some(DiscoveryProvider::Brave(BraveSearchProvider {
+                            client: Client::new(),
+                            api_key: api_key.expose_secret().to_owned(),
+                        })),
+                        "brave_api",
+                    )
+                } else {
+                    (
+                        Some(DiscoveryProvider::DuckDuckGo(DuckDuckGoScrapeProvider {
+                            client: Client::new(),
+                        })),
+                        "duckduckgo_scrape",
+                    )
+                }
+            }
+        };
 
         Self {
-            client: Client::new(),
+            client,
             metrics,
             discovery_provider,
+            provider_hint,
         }
     }
 
@@ -100,18 +166,22 @@ impl ResearchEvaluator {
 
         match provider.discover(&query).await {
             Ok((sources, trace)) => (sources, vec![trace]),
-            Err(message) => (
+            Err(message) => {
+                let provider_name = provider.name();
+                let marked_message = mark_discovery_error(provider_name, message);
+                (
                 Vec::new(),
                 vec![ResearchQueryTrace {
-                    provider: "brave".to_owned(),
+                    provider: provider_name.to_owned(),
                     query_text: query,
                     result_count: 0,
                     top_urls: Vec::new(),
                     latency_ms: 0,
                     executed_at: Utc::now().to_rfc3339(),
-                    error: Some(message),
+                    error: Some(marked_message),
                 }],
-            ),
+                )
+            }
         }
     }
 
@@ -204,7 +274,10 @@ impl ResearchEvaluator {
             Duration::from_secs(10),
             self.client
                 .get(url)
-                .header(reqwest::header::USER_AGENT, "maabarium-research-evaluator/0.1")
+                .header(
+                    reqwest::header::USER_AGENT,
+                    "maabarium-research-evaluator/0.1",
+                )
                 .send(),
         )
         .await;
@@ -348,10 +421,14 @@ impl Evaluator for ResearchEvaluator {
         let sources = self.merge_sources(verified_sources, discovered_sources);
 
         if citations.is_empty() && sources.is_empty() {
-            return Err(EvalError::Parse(
+            let message = if self.discovery_provider.is_some() {
                 "research proposals must include at least one external citation URL or a resolvable discovery query"
-                    .to_owned(),
-            ));
+            } else if self.provider_hint == "brave_api" {
+                "research proposals must include at least one external citation URL; Brave Search is selected but not configured, so resolvable discovery queries are unavailable until BRAVE_SEARCH_API_KEY is set"
+            } else {
+                "research proposals must include at least one external citation URL or a resolvable discovery query"
+            };
+            return Err(EvalError::Parse(message.to_owned()));
         }
 
         let scores = self
@@ -378,6 +455,25 @@ impl Evaluator for ResearchEvaluator {
             }),
             lora: None,
         })
+    }
+}
+
+impl DiscoveryProvider {
+    async fn discover(
+        &self,
+        query: &str,
+    ) -> Result<(Vec<ResearchSource>, ResearchQueryTrace), String> {
+        match self {
+            DiscoveryProvider::Brave(provider) => provider.discover(query).await,
+            DiscoveryProvider::DuckDuckGo(provider) => provider.discover(query).await,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            DiscoveryProvider::Brave(_) => "brave",
+            DiscoveryProvider::DuckDuckGo(_) => "duckduckgo_html",
+        }
     }
 }
 
@@ -437,6 +533,199 @@ impl BraveSearchProvider {
             },
         ))
     }
+}
+
+impl DuckDuckGoScrapeProvider {
+    async fn discover(
+        &self,
+        query: &str,
+    ) -> Result<(Vec<ResearchSource>, ResearchQueryTrace), String> {
+        let started = std::time::Instant::now();
+        let response = self
+            .client
+            .get("https://html.duckduckgo.com/html/")
+            .header(
+                reqwest::header::USER_AGENT,
+                "maabarium-research-evaluator/0.1",
+            )
+            .query(&[("q", query)])
+            .send()
+            .await
+            .map_err(|error| {
+                let message = format!("Failed to query DuckDuckGo HTML search: {error}");
+                log_scraper_failure("request", query, &message);
+                message
+            })?
+            .error_for_status()
+            .map_err(|error| {
+                let message = format!("DuckDuckGo HTML search rejected the query: {error}");
+                log_scraper_failure("status", query, &message);
+                message
+            })?;
+
+        let body = response
+            .text()
+            .await
+            .map_err(|error| {
+                let message = format!("Failed to read DuckDuckGo HTML search response: {error}");
+                log_scraper_failure("response_body", query, &message);
+                message
+            })?;
+        let parsed_results = parse_duckduckgo_results(&body);
+        if parsed_results.is_empty() {
+            log_scraper_failure(
+                "parse_empty",
+                query,
+                "DuckDuckGo HTML response produced no parseable results; the upstream layout may have changed or the request may have been blocked",
+            );
+        }
+        let mut sources = Vec::new();
+        let mut top_urls = Vec::new();
+
+        for result in parsed_results.into_iter().take(5) {
+            let parsed_url = Url::parse(&result.url).ok();
+            top_urls.push(result.url.clone());
+            sources.push(ResearchSource {
+                url: result.url,
+                final_url: None,
+                host: parsed_url
+                    .as_ref()
+                    .and_then(Url::host_str)
+                    .map(str::to_owned),
+                label: result.snippet,
+                title: Some(result.title),
+                citation_count: 0,
+                verified: false,
+                status_code: None,
+                fetch_error: None,
+            });
+        }
+
+        Ok((
+            sources,
+            ResearchQueryTrace {
+                provider: "duckduckgo_html".to_owned(),
+                query_text: query.to_owned(),
+                result_count: top_urls.len() as u32,
+                top_urls,
+                latency_ms: started.elapsed().as_millis() as u64,
+                executed_at: Utc::now().to_rfc3339(),
+                error: None,
+            },
+        ))
+    }
+}
+
+struct DuckDuckGoSearchResult {
+    url: String,
+    title: String,
+    snippet: Option<String>,
+}
+
+fn parse_duckduckgo_results(body: &str) -> Vec<DuckDuckGoSearchResult> {
+    let mut results = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(class_offset) = body[cursor..].find("result__a") {
+        let class_index = cursor + class_offset;
+        let Some(anchor_start) = body[..class_index].rfind("<a ") else {
+            cursor = class_index + "result__a".len();
+            continue;
+        };
+        let Some(href_offset) = body[anchor_start..].find("href=\"") else {
+            cursor = class_index + "result__a".len();
+            continue;
+        };
+        let href_start = anchor_start + href_offset + 6;
+        let Some(href_end_rel) = body[href_start..].find('"') else {
+            break;
+        };
+        let href_end = href_start + href_end_rel;
+        let raw_href = &body[href_start..href_end];
+
+        let Some(title_start_rel) = body[href_end..].find('>') else {
+            break;
+        };
+        let title_start = href_end + title_start_rel + 1;
+        let Some(title_end_rel) = body[title_start..].find("</a>") else {
+            break;
+        };
+        let title_end = title_start + title_end_rel;
+
+        let Some(url) = decode_duckduckgo_result_url(raw_href) else {
+            cursor = title_end + 4;
+            continue;
+        };
+
+        let snippet = body[title_end..]
+            .find("result__snippet")
+            .and_then(|snippet_class_offset| {
+                let snippet_class_index = title_end + snippet_class_offset;
+                let snippet_open_end = body[snippet_class_index..].find('>')? + snippet_class_index + 1;
+                let snippet_close = body[snippet_open_end..].find("</")? + snippet_open_end;
+                Some(clean_html_text(&body[snippet_open_end..snippet_close]))
+            })
+            .filter(|value| !value.is_empty());
+
+        results.push(DuckDuckGoSearchResult {
+            url,
+            title: clean_html_text(&body[title_start..title_end]),
+            snippet,
+        });
+        cursor = title_end + 4;
+    }
+
+    results
+}
+
+fn decode_duckduckgo_result_url(raw_href: &str) -> Option<String> {
+    if raw_href.starts_with("http://") || raw_href.starts_with("https://") {
+        return Some(raw_href.to_owned());
+    }
+
+    let absolute = Url::parse("https://html.duckduckgo.com")
+        .ok()?
+        .join(raw_href)
+        .ok()?;
+    absolute
+        .query_pairs()
+        .find(|(key, _)| key == "uddg")
+        .map(|(_, value)| value.into_owned())
+}
+
+fn clean_html_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut in_tag = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            '&' if !in_tag => {
+                let mut entity = String::new();
+                while let Some(next) = chars.peek().copied() {
+                    entity.push(next);
+                    chars.next();
+                    if next == ';' || entity.len() > 10 {
+                        break;
+                    }
+                }
+                output.push_str(match entity.as_str() {
+                    "amp;" => "&",
+                    "quot;" => "\"",
+                    "apos;" => "'",
+                    "lt;" => "<",
+                    "gt;" => ">",
+                    _ => " ",
+                });
+            }
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn citation_key(citation: &ResearchCitation) -> String {
@@ -587,8 +876,16 @@ mod tests {
         let citations = evaluator.collect_citations(&proposal);
         assert_eq!(citations.len(), 2);
         assert_eq!(citations[0].line_number, 1);
-        assert!(citations.iter().any(|citation| citation.source_url.contains("sqlite.org")));
-        assert!(citations.iter().any(|citation| citation.source_url.contains("rust-lang.org")));
+        assert!(
+            citations
+                .iter()
+                .any(|citation| citation.source_url.contains("sqlite.org"))
+        );
+        assert!(
+            citations
+                .iter()
+                .any(|citation| citation.source_url.contains("rust-lang.org"))
+        );
     }
 
     #[tokio::test]
@@ -628,7 +925,9 @@ mod tests {
             .await
             .expect("research evaluation should succeed");
 
-        let research = result.research.expect("research metadata should be present");
+        let research = result
+            .research
+            .expect("research metadata should be present");
         assert_eq!(research.citations.len(), 1);
         assert_eq!(research.sources.len(), 1);
         assert!(research.sources[0].verified);

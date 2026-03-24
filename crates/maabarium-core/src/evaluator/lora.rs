@@ -200,7 +200,9 @@ impl LoraEvaluator {
         }
 
         let successful_ratio = outcomes.len() as f64 / defined_stages as f64;
-        let artifact_bonus = if outcomes.iter().any(|outcome| outcome.expected_artifacts_total > 0)
+        let artifact_bonus = if outcomes
+            .iter()
+            .any(|outcome| outcome.expected_artifacts_total > 0)
         {
             0.2
         } else {
@@ -296,7 +298,10 @@ impl LoraEvaluator {
             outcomes.push(self.run_lora_stage("train", sandbox_root, train).await?);
         }
         if let Some(evaluate) = run_manifest.evaluate.as_ref() {
-            outcomes.push(self.run_lora_stage("evaluate", sandbox_root, evaluate).await?);
+            outcomes.push(
+                self.run_lora_stage("evaluate", sandbox_root, evaluate)
+                    .await?,
+            );
         }
         Ok(outcomes)
     }

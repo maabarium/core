@@ -43,6 +43,21 @@ pub struct Agent {
     llm: Arc<dyn LLMProvider>,
 }
 
+fn research_patch_guidance(language: &str) -> &'static str {
+    if language.eq_ignore_ascii_case("research") {
+        "\n\
+         Research workflow rules:\n\
+         - Prefer a single markdown patch in docs/, research/, notes/, or reports/.\n\
+         - Every major claim you add must include at least one inline markdown link or bare external URL.\n\
+         - If you cannot supply at least one external URL, return an empty file_patches array and explain the evidence gap in summary.\n\
+         - Prefer appending a new section or creating a new markdown file instead of rewriting large existing files.\n\
+         - When modifying an existing file, copy exact unchanged context lines and ensure each unified diff hunk count is exact.\n\
+         - Do not invent hunk sizes or line counts."
+    } else {
+        ""
+    }
+}
+
 impl Agent {
     pub fn new(def: AgentDef, llm: Arc<dyn LLMProvider>) -> Self {
         Self { def, llm }
@@ -84,6 +99,7 @@ impl Agent {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         };
+            let research_guidance = research_patch_guidance(language);
         let prompt = format!(
             "Context:\n{context}\n\nTarget files:\n{targets_desc}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
              Existing file contents:\n{files_desc}\n\n\
@@ -93,7 +109,7 @@ impl Agent {
               For create/delete, still provide a unified diff against the empty or prior file.\n\
               Each patch must target exactly one safe relative path.\n\
               Do not return full-file replacements. Do not invent paths outside the target patterns.\n\
-               Keep changes narrow and preserve valid {language} syntax."
+               Keep changes narrow and preserve valid {language} syntax.{research_guidance}"
         );
         let req = CompletionRequest {
             system: self.def.system_prompt.clone(),

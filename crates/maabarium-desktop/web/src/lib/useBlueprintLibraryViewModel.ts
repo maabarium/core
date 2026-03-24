@@ -20,7 +20,7 @@ export function useBlueprintLibraryViewModel({
   const [blueprintLanguageFilter, setBlueprintLanguageFilter] =
     useState<string>("all");
   const [blueprintDensity, setBlueprintDensity] =
-    useState<BlueprintDensity>("detailed");
+    useState<BlueprintDensity>("compact");
   const [collapsedBlueprintGroups, setCollapsedBlueprintGroups] = useState<
     Record<string, boolean>
   >({});
@@ -29,7 +29,7 @@ export function useBlueprintLibraryViewModel({
     const languages = Array.from(
       new Set(
         availableBlueprints.map((blueprint) =>
-          formatBlueprintGroup(blueprint.language),
+          formatBlueprintGroup(blueprint.language, blueprint.libraryKind),
         ),
       ),
     );
@@ -41,7 +41,10 @@ export function useBlueprintLibraryViewModel({
     const query = blueprintQuery.trim().toLowerCase();
 
     return availableBlueprints.filter((blueprint) => {
-      const group = formatBlueprintGroup(blueprint.language);
+      const group = formatBlueprintGroup(
+        blueprint.language,
+        blueprint.libraryKind,
+      );
       const matchesLanguage =
         blueprintLanguageFilter === "all" || group === blueprintLanguageFilter;
 
@@ -74,7 +77,10 @@ export function useBlueprintLibraryViewModel({
     const groups = new Map<string, AvailableBlueprint[]>();
 
     for (const blueprint of filteredBlueprints) {
-      const key = formatBlueprintGroup(blueprint.language);
+      const key = formatBlueprintGroup(
+        blueprint.language,
+        blueprint.libraryKind,
+      );
       const existing = groups.get(key);
       if (existing) {
         existing.push(blueprint);
@@ -84,7 +90,20 @@ export function useBlueprintLibraryViewModel({
     }
 
     return Array.from(groups.entries())
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([leftGroup, leftBlueprints], [rightGroup, rightBlueprints]) => {
+        const leftHasActive = leftBlueprints.some(
+          (blueprint) => blueprint.isActive,
+        );
+        const rightHasActive = rightBlueprints.some(
+          (blueprint) => blueprint.isActive,
+        );
+
+        if (leftHasActive !== rightHasActive) {
+          return leftHasActive ? -1 : 1;
+        }
+
+        return leftGroup.localeCompare(rightGroup);
+      })
       .map(([group, blueprints]) => ({
         group,
         blueprints: blueprints.sort((left, right) => {

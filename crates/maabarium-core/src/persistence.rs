@@ -121,7 +121,22 @@ impl Persistence {
                 experiment_id INTEGER PRIMARY KEY,
                 metadata_json TEXT NOT NULL,
                 FOREIGN KEY (experiment_id) REFERENCES experiments(id)
-            );",
+            );
+            CREATE INDEX IF NOT EXISTS idx_experiments_blueprint_success_score
+                ON experiments (blueprint_name, weighted_total DESC)
+                WHERE error IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_experiments_blueprint_id
+                ON experiments (blueprint_name, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_metrics_experiment_id
+                ON metrics (experiment_id);
+            CREATE INDEX IF NOT EXISTS idx_proposals_experiment_id
+                ON proposals (experiment_id);
+            CREATE INDEX IF NOT EXISTS idx_research_sources_experiment_id
+                ON research_sources (experiment_id);
+            CREATE INDEX IF NOT EXISTS idx_research_citations_experiment_id
+                ON research_citations (experiment_id);
+            CREATE INDEX IF NOT EXISTS idx_research_query_traces_experiment_id
+                ON research_query_traces (experiment_id);",
         )?;
         let _ = conn.execute(
             "ALTER TABLE proposals ADD COLUMN file_patches_json TEXT NOT NULL DEFAULT '[]'",
@@ -253,6 +268,63 @@ impl Persistence {
         Ok(experiments)
     }
 
+    pub fn recent_experiments_for_blueprint(
+        &self,
+        blueprint_name: &str,
+        limit: usize,
+    ) -> Result<Vec<PersistedExperiment>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at
+             FROM experiments
+             WHERE blueprint_name = ?1
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![blueprint_name, limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+
+        let mut experiments = Vec::new();
+        for row in rows {
+            let (
+                id,
+                iteration,
+                blueprint_name,
+                proposal_summary,
+                weighted_total,
+                duration_ms,
+                error,
+                created_at,
+            ) = row?;
+            let metrics = self.load_metrics(id)?;
+            experiments.push(PersistedExperiment {
+                id,
+                iteration: iteration as u64,
+                blueprint_name,
+                proposal_summary,
+                weighted_total,
+                duration_ms: duration_ms as u64,
+                error,
+                created_at,
+                metrics,
+                research: self.load_research_artifacts(id)?,
+                lora: self.load_lora_artifacts(id)?,
+            });
+        }
+
+        Ok(experiments)
+    }
+
     pub fn recent_proposals(&self, limit: usize) -> Result<Vec<PersistedProposal>, PersistError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, experiment_id, summary, file_patches_json, created_at
@@ -262,6 +334,47 @@ impl Persistence {
         )?;
 
         let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+
+        let mut proposals = Vec::new();
+        for row in rows {
+            let (id, experiment_id, summary, file_patches_json, created_at) = row?;
+            let file_patches =
+                serde_json::from_str::<Vec<FilePatch>>(&file_patches_json).unwrap_or_default();
+            proposals.push(PersistedProposal {
+                id,
+                experiment_id,
+                summary,
+                created_at,
+                file_patches,
+            });
+        }
+
+        Ok(proposals)
+    }
+
+    pub fn recent_proposals_for_blueprint(
+        &self,
+        blueprint_name: &str,
+        limit: usize,
+    ) -> Result<Vec<PersistedProposal>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT proposals.id, proposals.experiment_id, proposals.summary, proposals.file_patches_json, proposals.created_at
+             FROM proposals
+             INNER JOIN experiments ON experiments.id = proposals.experiment_id
+             WHERE experiments.blueprint_name = ?1
+             ORDER BY proposals.id DESC
+             LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![blueprint_name, limit as i64], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
@@ -590,9 +703,9 @@ impl Persistence {
         &self,
         experiment_id: i64,
     ) -> Result<Option<LoraArtifacts>, PersistError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT metadata_json FROM lora_artifacts WHERE experiment_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT metadata_json FROM lora_artifacts WHERE experiment_id = ?1")?;
         let result = stmt.query_row(params![experiment_id], |row| row.get::<_, String>(0));
         match result {
             Ok(metadata_json) => Ok(Some(serde_json::from_str(&metadata_json)?)),
@@ -740,5 +853,48 @@ mod tests {
         let _ = std::fs::remove_file(db_path);
         let _ = std::fs::remove_file(json_path);
         let _ = std::fs::remove_file(csv_path);
+    }
+
+    #[test]
+    fn loads_recent_history_for_a_single_blueprint() {
+        let db_path =
+            std::env::temp_dir().join(format!("maabarium-blueprint-history-{}.db", uuid::Uuid::new_v4()));
+
+        let persistence =
+            Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+                .expect("db should open");
+
+        persistence
+            .log_experiment("general-research-test", &sample_result())
+            .expect("workflow experiment should be logged");
+        persistence
+            .log_failure(
+                "general-research-test",
+                2,
+                "Git operation failed: could not find repository",
+            )
+            .expect("workflow failure should be logged");
+        persistence
+            .log_experiment("example", &sample_result())
+            .expect("other workflow experiment should be logged");
+
+        let workflow_experiments = persistence
+            .recent_experiments_for_blueprint("general-research-test", 10)
+            .expect("workflow experiments should load");
+        assert_eq!(workflow_experiments.len(), 2);
+        assert!(workflow_experiments.iter().all(|experiment| {
+            experiment.blueprint_name == "general-research-test"
+        }));
+        assert_eq!(
+            workflow_experiments[0].error.as_deref(),
+            Some("Git operation failed: could not find repository")
+        );
+
+        let workflow_proposals = persistence
+            .recent_proposals_for_blueprint("general-research-test", 10)
+            .expect("workflow proposals should load");
+        assert_eq!(workflow_proposals.len(), 1);
+
+        let _ = std::fs::remove_file(db_path);
     }
 }

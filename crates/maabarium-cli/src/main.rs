@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::{
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EvaluatorRegistry, ExportFormat, Persistence,
-    SecretStore, UpdaterConfiguration, check_for_cli_update, default_db_path,
-    default_log_path, install_cli_update,
+    SecretStore, UpdaterConfiguration, check_for_cli_update, default_db_path, default_log_path,
+    install_cli_update,
 };
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
@@ -115,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
             let config = EngineConfig {
                 blueprint,
                 db_path: normalize_db_path(&db),
+                progress_reporter: None,
             };
             let engine = Engine::new(config, evaluator, cancel)
                 .map_err(|e| anyhow::anyhow!("Engine init error: {e}"))?;
@@ -212,8 +213,7 @@ async fn main() -> anyhow::Result<()> {
             }
             SelfAction::Update => {
                 let config = UpdaterConfiguration::from_env()?;
-                let Some(plan) =
-                    check_for_cli_update(env!("CARGO_PKG_VERSION"), &config).await?
+                let Some(plan) = check_for_cli_update(env!("CARGO_PKG_VERSION"), &config).await?
                 else {
                     println!(
                         "CLI is already up to date at version {}",

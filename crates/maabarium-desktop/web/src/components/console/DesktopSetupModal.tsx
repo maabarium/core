@@ -6,9 +6,12 @@ import type {
   OllamaStatus,
   PluginRuntimeState,
   ReadinessItem,
+  ResearchSearchMode,
   RemoteProviderSetup,
   RuntimeStrategy,
+  WorkspaceGitStatus,
 } from "../../types/console";
+import { listOllamaModelNames } from "../../lib/ollama";
 import { Badge } from "../ui/Badge";
 
 type DesktopSetupModalProps = {
@@ -19,6 +22,7 @@ type DesktopSetupModalProps = {
   pluginRuntime: PluginRuntimeState | null;
   saving: boolean;
   onClose: () => void;
+  onInspectWorkspace: (path: string) => Promise<WorkspaceGitStatus | null>;
   onSave: (
     nextSetup: DesktopSetupState,
     apiKeys: Record<string, string>,
@@ -35,12 +39,16 @@ export function DesktopSetupModal({
   pluginRuntime,
   saving,
   onClose,
+  onInspectWorkspace,
   onSave,
   onInstallOllama,
   onStartOllama,
 }: DesktopSetupModalProps) {
   const [form, setForm] = useState<DesktopSetupState>(setupState);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  const [workspaceStatus, setWorkspaceStatus] =
+    useState<WorkspaceGitStatus | null>(null);
+  const [inspectingWorkspace, setInspectingWorkspace] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -49,17 +57,80 @@ export function DesktopSetupModal({
 
     setForm(setupState);
     setApiKeys({});
+    setWorkspaceStatus(null);
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const normalizedWorkspace = form.workspacePath?.trim() ?? "";
+    if (!normalizedWorkspace) {
+      setWorkspaceStatus(null);
+      setInspectingWorkspace(false);
+      return;
+    }
+
+    let cancelled = false;
+    setInspectingWorkspace(true);
+
+    void onInspectWorkspace(normalizedWorkspace)
+      .then((status) => {
+        if (!cancelled) {
+          setWorkspaceStatus(status);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setInspectingWorkspace(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.workspacePath, isOpen, onInspectWorkspace]);
 
   if (!isOpen) {
     return null;
   }
 
-  const availableModelNames = Array.from(
-    new Set([
-      ...(ollama?.models.map((model) => model.name) ?? []),
-      ...(ollama?.recommendedModels ?? []),
-    ]),
+  const workspaceMissing = Boolean(
+    workspaceStatus && form.workspacePath?.trim() && !workspaceStatus.exists,
+  );
+  const workspaceNotDirectory = Boolean(
+    workspaceStatus && workspaceStatus.exists && !workspaceStatus.isDirectory,
+  );
+  const workspaceNeedsGitInit = Boolean(
+    workspaceStatus &&
+    workspaceStatus.exists &&
+    workspaceStatus.isDirectory &&
+    !workspaceStatus.isGitRepository,
+  );
+  const researchSearchReadiness =
+    readinessItems.find((item) => item.id === "research_search") ?? null;
+  const searchMode = form.researchSearchMode;
+  const researchSearchOptions: Array<{
+    value: ResearchSearchMode;
+    label: string;
+    copy: string;
+  }> = [
+    {
+      value: "duckduckgo_scrape",
+      label: "Free Scraper",
+      copy: "Uses DuckDuckGo HTML scraping with no API key. It works out of the box, but results can be less stable or blocked without warning.",
+    },
+    {
+      value: "brave_api",
+      label: "Brave API",
+      copy: "Uses the official Brave Search API. It is more reliable, but requires a configured API key.",
+    },
+  ];
+
+  const availableModelNames = listOllamaModelNames(
+    ollama,
+    form.selectedLocalModels,
   );
 
   const toggleModel = (modelName: string) => {
@@ -209,6 +280,19 @@ export function DesktopSetupModal({
                 <div className="mt-2 text-sm text-slate-300">
                   {form.workspacePath ?? "No workspace selected yet."}
                 </div>
+                <div className="mt-3 text-xs leading-relaxed text-slate-400">
+                  {inspectingWorkspace
+                    ? "Inspecting folder and repository status..."
+                    : workspaceMissing
+                      ? "This saved workspace path does not exist. Choose an existing folder before you rely on it as the default workspace."
+                      : workspaceNotDirectory
+                        ? "The selected path is not a folder. Choose a workspace directory instead."
+                        : workspaceStatus?.isGitRepository
+                          ? `Repository detected${workspaceStatus.repositoryRoot ? ` at ${workspaceStatus.repositoryRoot}` : "."}`
+                          : workspaceNeedsGitInit
+                            ? "This default workspace is not inside a git repository yet. The run modal can initialize it before an experiment starts."
+                            : "Choose a workspace to inspect its repository status."}
+                </div>
               </div>
               <button
                 type="button"
@@ -218,6 +302,20 @@ export function DesktopSetupModal({
                 Choose Workspace
               </button>
             </div>
+
+            {workspaceStatus && !inspectingWorkspace ? (
+              <div
+                className={`mt-4 rounded-lg border px-3 py-3 text-xs leading-relaxed ${workspaceStatus.isGitRepository ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-100" : workspaceMissing || workspaceNotDirectory ? "border-rose-400/20 bg-rose-500/10 text-rose-100" : "border-amber-300/20 bg-amber-500/10 text-amber-100"}`}
+              >
+                {workspaceStatus.isGitRepository
+                  ? `Git repository ready. Runs can branch safely from ${workspaceStatus.repositoryRoot ?? workspaceStatus.path}.`
+                  : workspaceMissing
+                    ? "The saved workspace path could not be found. Update setup before using it as the default run location."
+                    : workspaceNotDirectory
+                      ? "The selected path is not a directory. Pick a workspace folder instead of a file."
+                      : "No git repository was found for this folder. That is allowed, but you will need the run modal's git initialization option enabled before a run can prepare experiment branches safely."}
+              </div>
+            ) : null}
           </section>
 
           {pluginRuntime ? (
@@ -433,6 +531,94 @@ export function DesktopSetupModal({
               </div>
             </section>
           ) : null}
+
+          <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                  Research Search
+                </div>
+                <div className="mt-2 text-sm text-slate-300">
+                  Choose how internet-backed research discovery should work.
+                </div>
+                <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                  General Research workflows can use an official API-backed
+                  provider or a free scraper-backed fallback with lower
+                  reliability.
+                </div>
+              </div>
+              {researchSearchReadiness ? (
+                <Badge
+                  color={
+                    researchSearchReadiness.status === "ready"
+                      ? "emerald"
+                      : researchSearchReadiness.status === "optional"
+                        ? "slate"
+                        : "rose"
+                  }
+                >
+                  {researchSearchReadiness.status === "needs_attention"
+                    ? "Needs Attention"
+                    : researchSearchReadiness.status === "optional"
+                      ? "Optional"
+                      : "Ready"}
+                </Badge>
+              ) : null}
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                {researchSearchOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        researchSearchMode: option.value,
+                      }))
+                    }
+                    className={`rounded-lg border px-3 py-3 text-left transition ${searchMode === option.value ? "border-teal-400/30 bg-teal-500/10 text-white" : "border-white/10 bg-slate-950/60 text-slate-400 hover:bg-white/5"}`}
+                  >
+                    <div className="text-xs font-bold uppercase tracking-[0.18em]">
+                      {option.label}
+                    </div>
+                    <div className="mt-1 text-[11px] leading-relaxed">
+                      {option.copy}
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {searchMode === "brave_api" ? (
+                <>
+                  <input
+                    value={apiKeys.brave ?? ""}
+                    onChange={(event) =>
+                      setApiKeys((current) => ({
+                        ...current,
+                        brave: event.target.value,
+                      }))
+                    }
+                    className="rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-teal-400/40"
+                    placeholder="Paste Brave Search API key to store in the OS keychain"
+                  />
+                  <div className="text-[11px] leading-relaxed text-slate-500">
+                    Leave this blank to keep the existing key unchanged. The
+                    runtime resolves it as BRAVE_SEARCH_API_KEY for research
+                    discovery.
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-lg border border-amber-300/20 bg-amber-500/10 px-3 py-3 text-[11px] leading-relaxed text-amber-100">
+                  Free scraper mode is unofficial. Search results may be slower,
+                  lower quality, rate-limited, or unavailable if the upstream
+                  HTML layout changes. Use it for out-of-the-box discovery, not
+                  for high-assurance research.
+                </div>
+              )}
+            </div>
+          </section>
 
           <section className="rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">

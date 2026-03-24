@@ -32,6 +32,16 @@ export function invertDelta(delta: string): string {
 export function buildHistory(experiments: PersistedExperiment[]): HistoryRow[] {
   const successful = experiments.filter((experiment) => !experiment.error);
   const rows = experiments.slice(0, 8).map((experiment) => {
+    if (experiment.error) {
+      return {
+        experimentId: experiment.id,
+        score: null,
+        delta: null,
+        summary: experiment.error,
+        status: "failed" as const,
+      };
+    }
+
     const currentIndex = successful.findIndex(
       (candidate) => candidate.id === experiment.id,
     );
@@ -45,11 +55,8 @@ export function buildHistory(experiments: PersistedExperiment[]): HistoryRow[] {
       experimentId: experiment.id,
       score: experiment.weighted_total,
       delta,
-      summary:
-        experiment.error ||
-        experiment.proposal_summary ||
-        "No proposal summary recorded",
-      promoted: !experiment.error && delta >= 0,
+      summary: experiment.proposal_summary || "No proposal summary recorded",
+      status: delta >= 0 ? ("promoted" as const) : ("rejected" as const),
     };
   });
 

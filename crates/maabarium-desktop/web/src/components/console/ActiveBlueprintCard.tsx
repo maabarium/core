@@ -9,6 +9,7 @@ export function ActiveBlueprintCard({
   activeBlueprintOption,
   engineRunning,
   onOpenBlueprintWizard,
+  onEditBlueprintWizard,
   onSelectBlueprint,
   onOpenBlueprintFile,
   onOpenBlueprintDirectory,
@@ -17,6 +18,7 @@ export function ActiveBlueprintCard({
   activeBlueprintOption: AvailableBlueprint | null;
   engineRunning: boolean;
   onOpenBlueprintWizard: () => void;
+  onEditBlueprintWizard: () => void;
   onSelectBlueprint: () => void;
   onOpenBlueprintFile: () => void;
   onOpenBlueprintDirectory: () => void;
@@ -40,7 +42,10 @@ export function ActiveBlueprintCard({
           <div className="flex flex-wrap gap-2 pt-1">
             {activeBlueprintOption.language ? (
               <Badge color="slate">
-                {formatBlueprintGroup(activeBlueprintOption.language)}
+                {formatBlueprintGroup(
+                  activeBlueprintOption.language,
+                  activeBlueprintOption.libraryKind,
+                )}
               </Badge>
             ) : null}
             {activeBlueprintOption.version ? (
@@ -74,9 +79,20 @@ export function ActiveBlueprintCard({
         </div>
       ) : null}
       <div className="grid grid-cols-1 gap-2">
+        {activeBlueprintOption?.libraryKind === "workflow" ? (
+          <button
+            onClick={onEditBlueprintWizard}
+            className="w-full py-2 bg-gradient-to-r from-teal-500 to-amber-400 hover:brightness-110 border border-teal-300/20 rounded-lg text-xs font-black tracking-[0.16em] text-slate-950 transition-all flex items-center justify-center gap-2"
+            type="button"
+            disabled={engineRunning}
+          >
+            <Layers size={14} />
+            EDIT IN WIZARD
+          </button>
+        ) : null}
         <button
           onClick={onOpenBlueprintWizard}
-          className="w-full py-2 bg-gradient-to-r from-teal-500 to-amber-400 hover:brightness-110 border border-teal-300/20 rounded-lg text-xs font-black tracking-[0.16em] text-slate-950 transition-all flex items-center justify-center gap-2"
+          className={`w-full py-2 border rounded-lg text-xs font-black tracking-[0.16em] transition-all flex items-center justify-center gap-2 ${activeBlueprintOption?.libraryKind === "workflow" ? "bg-white/5 hover:bg-white/10 border-white/10 text-slate-100" : "bg-gradient-to-r from-teal-500 to-amber-400 hover:brightness-110 border-teal-300/20 text-slate-950"}`}
           type="button"
           disabled={engineRunning}
         >
@@ -112,8 +128,8 @@ export function ActiveBlueprintCard({
         </div>
       </div>
       <p className="mt-3 text-xs text-slate-500 leading-relaxed">
-        The wizard is the default path for creating a valid starter blueprint.
-        Power users can still load or hand-edit
+        The wizard is the default path for creating or revising runnable
+        workflows. Power users can still load or hand-edit
         <span className="font-mono"> .toml </span>
         files directly.
       </p>

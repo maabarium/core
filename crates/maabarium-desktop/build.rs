@@ -12,7 +12,8 @@ fn main() {
 }
 
 fn prepare_bundled_cli() -> Result<(), String> {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|error| error.to_string())?);
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|error| error.to_string())?);
     let generated_cli_dir = manifest_dir.join("generated-resources").join("cli");
     fs::create_dir_all(&generated_cli_dir).map_err(|error| error.to_string())?;
 
@@ -43,7 +44,9 @@ fn prepare_bundled_cli() -> Result<(), String> {
 
     let status = command.status().map_err(|error| error.to_string())?;
     if !status.success() {
-        return Err(format!("building maabarium-cli for bundling exited with status {status}"));
+        return Err(format!(
+            "building maabarium-cli for bundling exited with status {status}"
+        ));
     }
 
     let binary_name = cli_binary_name();
@@ -52,7 +55,10 @@ fn prepare_bundled_cli() -> Result<(), String> {
         .join(&profile)
         .join(binary_name);
     if !built_binary.exists() {
-        return Err(format!("expected bundled CLI binary at {}", built_binary.display()));
+        return Err(format!(
+            "expected bundled CLI binary at {}",
+            built_binary.display()
+        ));
     }
 
     let destination_dir = generated_cli_dir.join(&resource_platform_key);
@@ -70,8 +76,18 @@ fn prepare_bundled_cli() -> Result<(), String> {
         fs::set_permissions(&destination, permissions).map_err(|error| error.to_string())?;
     }
 
-    println!("cargo:rerun-if-changed={}", Path::new(&workspace_root).join("crates/maabarium-cli/src/main.rs").display());
-    println!("cargo:rerun-if-changed={}", Path::new(&workspace_root).join("crates/maabarium-cli/Cargo.toml").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&workspace_root)
+            .join("crates/maabarium-cli/src/main.rs")
+            .display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&workspace_root)
+            .join("crates/maabarium-cli/Cargo.toml")
+            .display()
+    );
     Ok(())
 }
 

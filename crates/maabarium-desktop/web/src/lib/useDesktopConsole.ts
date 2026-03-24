@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { normalizeConsoleState } from "./normalizers";
+import { listOllamaModelNames } from "./ollama";
 import type {
+  BlueprintFile,
   BlueprintWizardRequest,
   ConsoleState,
   DesktopSetupState,
+  StartEngineRequest,
   UpdateCheckResult,
+  WorkspaceGitStatus,
 } from "../types/console";
 
 declare global {
@@ -145,20 +149,95 @@ export function useDesktopConsole({
     });
   };
 
-  const toggleEngine = async () => {
+  const startEngine = async (request: StartEngineRequest) => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextWorkspacePath = request.workspacePath?.trim() || null;
+      const nextSnapshot = {
+        ...snapshot,
+        engineRunning: true,
+        runState: {
+          status: "running" as const,
+          blueprintName: snapshot.blueprint?.blueprint.name ?? null,
+          workspacePath:
+            nextWorkspacePath ??
+            snapshot.blueprint?.domain.repo_path ??
+            snapshot.desktopSetup.workspacePath ??
+            null,
+          currentIteration: 1,
+          maxIterations: snapshot.blueprint?.constraints.max_iterations ?? null,
+          phase: "starting",
+          latestScore: null,
+          latestDurationMs: null,
+          currentIterationElapsedMs: 0,
+          startedAtEpochMs: Date.now(),
+          message: "Preparing engine run",
+        },
+        desktopSetup: {
+          ...snapshot.desktopSetup,
+          workspacePath: request.saveWorkspaceAsDefault
+            ? (nextWorkspacePath ?? snapshot.desktopSetup.workspacePath ?? null)
+            : (snapshot.desktopSetup.workspacePath ?? null),
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
     try {
-      await runSnapshotCommand(
-        state?.engineRunning ? "stop_engine" : "start_engine",
-      );
+      await runSnapshotCommand("start_engine", { request });
+      return true;
     } catch (error) {
       presentDesktopError(
-        "Run Loop Error",
-        state?.engineRunning
-          ? "The loop could not be stopped"
-          : "The loop could not be started",
-        "Review the error details below before trying the run-loop action again.",
+        "Run Flow Error",
+        "The flow could not be started",
+        "Review the workspace and git preparation details below before trying the run-flow action again.",
         error,
       );
+      return false;
+    }
+  };
+
+  const stopEngine = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        engineRunning: false,
+        runState: {
+          ...snapshot.runState,
+          status: "idle" as const,
+          phase: null,
+          message: null,
+          currentIteration: null,
+          currentIterationElapsedMs: null,
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("stop_engine");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Run Flow Error",
+        "The flow could not be stopped",
+        "Review the error details below before trying the stop action again.",
+        error,
+      );
+      return false;
     }
   };
 
@@ -199,6 +278,20 @@ export function useDesktopConsole({
         "Folder Open Error",
         "The blueprint folder could not be opened",
         "The desktop app could not open the blueprint directory in the system file browser.",
+        error,
+      );
+    }
+  };
+
+  const openRepositoryLicense = async () => {
+    try {
+      await invoke("open_repository_license");
+      setActionError(null);
+    } catch (error) {
+      presentDesktopError(
+        "License Open Error",
+        "The repository license could not be opened",
+        "The desktop app could not hand the bundled or local LICENSE file off to the system viewer.",
         error,
       );
     }
@@ -342,6 +435,84 @@ export function useDesktopConsole({
     }
   };
 
+  const updateBlueprintFromWizard = async (
+    path: string,
+    request: BlueprintWizardRequest,
+  ) => {
+    try {
+      await runSnapshotCommand("update_blueprint_from_wizard", {
+        path,
+        request,
+      });
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Blueprint Update Error",
+        "The blueprint could not be updated",
+        "Review the details below, then adjust the wizard inputs or desktop environment before trying again.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const loadBlueprintForWizard = async (path: string) => {
+    try {
+      return await invoke<BlueprintFile>("load_blueprint_for_wizard", {
+        path,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Blueprint Load Error",
+        "The blueprint could not be opened in the wizard",
+        "Review the details below, then retry from the workflow library or active workflow panel.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const inspectWorkspaceGitStatus = async (path: string) => {
+    try {
+      return await invoke<WorkspaceGitStatus>("inspect_workspace_git_status", {
+        path,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Workspace Inspection Error",
+        "The workspace could not be inspected",
+        "Review the details below, then retry after selecting a valid folder.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const initializeWorkspaceGit = async (path: string) => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      applySnapshot(snapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("initialize_workspace_git", { path });
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Workspace Initialization Error",
+        "Git could not be initialized for this workspace",
+        "Review the details below, then retry after selecting a writable folder.",
+        error,
+      );
+      return false;
+    }
+  };
+
   const saveDesktopSetup = async (setup: DesktopSetupState) => {
     if (isMockMode()) {
       const snapshot = readMockConsoleState();
@@ -475,7 +646,7 @@ export function useDesktopConsole({
           models:
             snapshot.ollama.models.length > 0
               ? snapshot.ollama.models
-              : snapshot.ollama.recommendedModels.map((name) => ({
+              : listOllamaModelNames(snapshot.ollama).map((name) => ({
                   name,
                   sizeLabel: null,
                   modifiedAt: null,
@@ -513,15 +684,21 @@ export function useDesktopConsole({
     checkingForUpdates,
     installingUpdate,
     switchingBlueprintPath,
-    toggleEngine,
+    startEngine,
+    stopEngine,
     openLogFile,
     openBlueprintFile,
     openBlueprintDirectory,
+    openRepositoryLicense,
     selectBlueprint,
     selectBlueprintFromLibrary,
     checkForUpdates,
     installAvailableUpdate,
     createBlueprintFromWizard,
+    updateBlueprintFromWizard,
+    loadBlueprintForWizard,
+    inspectWorkspaceGitStatus,
+    initializeWorkspaceGit,
     saveDesktopSetup,
     setProviderApiKey,
     installOllama,

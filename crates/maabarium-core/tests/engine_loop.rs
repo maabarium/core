@@ -64,6 +64,7 @@ async fn test_engine_runs_two_iterations() {
     let config = EngineConfig {
         blueprint,
         db_path: db_path.display().to_string(),
+        progress_reporter: None,
     };
 
     let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");

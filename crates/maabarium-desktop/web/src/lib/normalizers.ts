@@ -75,6 +75,21 @@ function normalizeBlueprintFile(
           }))
         : [],
     },
+    library: blueprint.library
+      ? {
+          kind: blueprint.library.kind === "template" ? "template" : "workflow",
+          setup_required: Boolean(blueprint.library.setup_required),
+          template:
+            blueprint.library.template === "code_quality" ||
+            blueprint.library.template === "prompt_optimization" ||
+            blueprint.library.template === "product_builder" ||
+            blueprint.library.template === "general_research" ||
+            blueprint.library.template === "lora_validation" ||
+            blueprint.library.template === "custom"
+              ? blueprint.library.template
+              : null,
+        }
+      : null,
   };
 }
 
@@ -245,7 +260,13 @@ function normalizeDesktopSetup(
       setup?.runtimeStrategy === "mixed"
         ? setup.runtimeStrategy
         : null,
+    researchSearchMode:
+      setup?.researchSearchMode === "brave_api" ||
+      setup?.researchSearchMode === "duckduckgo_scrape"
+        ? setup.researchSearchMode
+        : "duckduckgo_scrape",
     workspacePath: setup?.workspacePath ?? null,
+    selectedBlueprintPath: setup?.selectedBlueprintPath ?? null,
     selectedLocalModels: Array.isArray(setup?.selectedLocalModels)
       ? setup.selectedLocalModels.filter(
           (value): value is string => typeof value === "string",
@@ -265,6 +286,57 @@ function normalizeDesktopSetup(
     remindLaterUntil: setup?.remindLaterUntil ?? null,
     remindLaterVersion: setup?.remindLaterVersion ?? null,
     lastSetupCompletedAt: setup?.lastSetupCompletedAt ?? null,
+    interruptedRunNotice:
+      setup?.interruptedRunNotice &&
+      typeof setup.interruptedRunNotice.blueprintName === "string" &&
+      typeof setup.interruptedRunNotice.workspacePath === "string" &&
+      typeof setup.interruptedRunNotice.interruptedAt === "string"
+        ? {
+            blueprintName: setup.interruptedRunNotice.blueprintName,
+            workspacePath: setup.interruptedRunNotice.workspacePath,
+            interruptedAt: setup.interruptedRunNotice.interruptedAt,
+            reason: setup.interruptedRunNotice.reason ?? null,
+          }
+        : null,
+  };
+}
+
+function normalizeRunState(
+  snapshot: ConsoleState["runState"],
+): ConsoleState["runState"] {
+  return {
+    status:
+      snapshot?.status === "running" ||
+      snapshot?.status === "stopping" ||
+      snapshot?.status === "idle"
+        ? snapshot.status
+        : "idle",
+    blueprintName: snapshot?.blueprintName ?? null,
+    workspacePath: snapshot?.workspacePath ?? null,
+    currentIteration:
+      typeof snapshot?.currentIteration === "number"
+        ? snapshot.currentIteration
+        : null,
+    maxIterations:
+      typeof snapshot?.maxIterations === "number"
+        ? snapshot.maxIterations
+        : null,
+    phase: snapshot?.phase ?? null,
+    latestScore:
+      typeof snapshot?.latestScore === "number" ? snapshot.latestScore : null,
+    latestDurationMs:
+      typeof snapshot?.latestDurationMs === "number"
+        ? snapshot.latestDurationMs
+        : null,
+    currentIterationElapsedMs:
+      typeof snapshot?.currentIterationElapsedMs === "number"
+        ? snapshot.currentIterationElapsedMs
+        : null,
+    startedAtEpochMs:
+      typeof snapshot?.startedAtEpochMs === "number"
+        ? snapshot.startedAtEpochMs
+        : null,
+    message: snapshot?.message ?? null,
   };
 }
 
@@ -320,6 +392,7 @@ function normalizeOllamaStatus(
 export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
   return {
     engineRunning: Boolean(snapshot.engineRunning),
+    runState: normalizeRunState(snapshot.runState),
     blueprintPath: snapshot.blueprintPath ?? "",
     dbPath: snapshot.dbPath ?? "",
     logPath: snapshot.logPath ?? "",

@@ -3,7 +3,6 @@ import type {
   BlueprintWizardForm,
   ConsoleState,
   CouncilEntry,
-  DesktopSetupState,
   ModelDef,
   OllamaStatus,
   RemoteProviderSetup,
@@ -12,6 +11,7 @@ import type {
   WizardModelForm,
   WizardTemplate,
 } from "../types/console";
+import { listOllamaModelNames } from "./ollama";
 
 function summarizePrompt(systemPrompt: string): string {
   const normalized = systemPrompt.replace(/\s+/g, " ").trim();
@@ -64,10 +64,17 @@ export function buildCouncilEntries(
   );
 }
 
-export function formatBlueprintGroup(language: string | null): string {
-  return language && language.trim().length > 0
-    ? language.trim().toUpperCase()
-    : "UNSPECIFIED";
+export function formatBlueprintGroup(
+  language: string | null,
+  libraryKind?: "workflow" | "template" | null,
+): string {
+  const normalized = language?.trim().toUpperCase() || "UNSPECIFIED";
+
+  if (libraryKind === "workflow" && normalized === "RUST") {
+    return "CUSTOM";
+  }
+
+  return normalized;
 }
 
 export function buildBlueprintSummary(
@@ -342,15 +349,29 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   );
 }
 
+export function normalizeWizardAgentModels(
+  form: BlueprintWizardForm,
+): BlueprintWizardForm {
+  const availableModelNames = uniqueStrings(
+    form.models.map((model) => model.name),
+  );
+  const fallbackModelName = availableModelNames[0] ?? "llama3";
+
+  return {
+    ...form,
+    agents: form.agents.map((agent) => {
+      const selectedModel = agent.model.trim();
+      return availableModelNames.includes(selectedModel)
+        ? { ...agent, model: selectedModel }
+        : { ...agent, model: fallbackModelName };
+    }),
+  };
+}
+
 function buildLocalWizardModels(
-  setup: DesktopSetupState | undefined,
   ollama: OllamaStatus | undefined,
 ): WizardModelForm[] {
-  const localModelNames = uniqueStrings([
-    ...(setup?.selectedLocalModels ?? []),
-    ...(ollama?.models.map((model) => model.name) ?? []),
-    ...(ollama?.recommendedModels ?? []),
-  ]);
+  const localModelNames = listOllamaModelNames(ollama);
 
   return localModelNames.map((name) => ({
     name,
@@ -389,7 +410,7 @@ export function buildSuggestedWizardModels(
 ): WizardModelForm[] {
   const setup = state?.desktopSetup;
   const runtimeStrategy = setup?.runtimeStrategy;
-  const localModels = buildLocalWizardModels(setup, state?.ollama);
+  const localModels = buildLocalWizardModels(state?.ollama);
   const remoteModels = buildRemoteWizardModels(setup?.remoteProviders);
 
   if (runtimeStrategy === "local") {
@@ -475,21 +496,21 @@ function wizardTemplateAgents(
           name: "researcher",
           role: "lead researcher",
           systemPrompt:
-            "You gather the best available evidence on the topic, perform internet lookups when tool access exists, and keep a running list of sources.",
+            "You gather the best available evidence on the topic, keep a running list of concrete source URLs, and only propose research content when it is grounded in explicit citations. If live search is unavailable, say so and avoid unsupported claims. A runtime note will identify the active search provider; if it is a scraper-backed fallback, treat search results as leads and verify claims against the destination pages before using them.",
           model: modelName,
         },
         {
           name: "verifier",
           role: "source verifier",
           systemPrompt:
-            "You challenge unsupported claims, demand attribution, and call out when live source access is unavailable or too weak to support a conclusion.",
+            "You reject unsupported claims, missing external URLs, weak source quality, and malformed patch plans. Demand exact attribution and call out when live source access is unavailable or too weak to support a conclusion. A runtime note will identify the active search provider; if it is a scraper-backed fallback, apply a stricter bar to evidence quality and call out scraper reliability limits when confidence should be reduced.",
           model: modelName,
         },
         {
           name: "synthesizer",
           role: "research synthesizer",
           systemPrompt:
-            "You produce a concise research brief with explicit citations for major claims and clear uncertainty when evidence is incomplete.",
+            "You produce one narrow markdown brief patch with exact unified diff headers, explicit citation URLs for every major claim, and clear uncertainty where evidence is incomplete. Prefer creating or appending a single research file over broad rewrites. If the evidence is too weak, return no patch and explain the gap. A runtime note will identify the active search provider; if it is a scraper-backed fallback and that affects confidence, say so briefly in the research output.",
           model: modelName,
         },
       ];
@@ -592,9 +613,12 @@ export function buildWizardForm(
   const defaults = wizardTemplateDefaults(template);
   const activeBlueprint = state?.blueprint;
   const suggestedModels = buildSuggestedWizardModels(state);
-  const models = activeBlueprint?.models?.models?.length
-    ? activeBlueprint.models.models.map(buildWizardModelForm)
-    : suggestedModels;
+  const models =
+    suggestedModels.length > 0
+      ? suggestedModels
+      : activeBlueprint?.models?.models?.length
+        ? activeBlueprint.models.models.map(buildWizardModelForm)
+        : wizardTemplateModels();
   const primaryModelName = models[0]?.name || "llama3";
   const agents = wizardTemplateAgents(template, primaryModelName);
   const suggestedWorkspacePath =
@@ -602,7 +626,7 @@ export function buildWizardForm(
     activeBlueprint?.domain.repo_path ||
     ".";
 
-  return {
+  return normalizeWizardAgentModels({
     name: "",
     description: defaults.description,
     version: "1.0.0",
@@ -620,7 +644,79 @@ export function buildWizardForm(
     metrics: wizardTemplateMetrics(template),
     agents,
     models,
-  };
+  });
+}
+
+function inferWizardTemplate(blueprint: BlueprintFile): WizardTemplate {
+  const language = blueprint.domain.language.trim().toLowerCase();
+  const targetFiles = blueprint.domain.target_files.map((value) =>
+    value.trim().toLowerCase(),
+  );
+
+  if (language === "research") {
+    return "general_research";
+  }
+
+  if (language === "lora") {
+    return "lora_validation";
+  }
+
+  if (language === "application") {
+    return "product_builder";
+  }
+
+  if (
+    language === "markdown" &&
+    targetFiles.some((value) => value.includes("prompts/"))
+  ) {
+    return "prompt_optimization";
+  }
+
+  if (language === "rust") {
+    return "code_quality";
+  }
+
+  return "custom";
+}
+
+export function buildWizardFormFromBlueprint(
+  blueprint: BlueprintFile,
+): BlueprintWizardForm {
+  const models =
+    blueprint.models.models.length > 0
+      ? blueprint.models.models.map(buildWizardModelForm)
+      : wizardTemplateModels();
+  const storedTemplate = blueprint.library?.template ?? null;
+
+  return normalizeWizardAgentModels({
+    name: blueprint.blueprint.name,
+    description: blueprint.blueprint.description,
+    version: blueprint.blueprint.version,
+    template: storedTemplate ?? inferWizardTemplate(blueprint),
+    repoPath: blueprint.domain.repo_path,
+    language: blueprint.domain.language,
+    targetFilesText: blueprint.domain.target_files.join("\n"),
+    maxIterations: blueprint.constraints.max_iterations,
+    timeoutSeconds: blueprint.constraints.timeout_seconds,
+    requireTestsPass: blueprint.constraints.require_tests_pass,
+    minImprovement: blueprint.constraints.min_improvement,
+    councilSize: blueprint.agents.council_size,
+    debateRounds: blueprint.agents.debate_rounds,
+    modelAssignment: blueprint.models.assignment,
+    metrics: blueprint.metrics.metrics.map((metric) => ({
+      name: metric.name,
+      weight: metric.weight,
+      direction: metric.direction === "minimize" ? "minimize" : "maximize",
+      description: metric.description,
+    })),
+    agents: blueprint.agents.agents.map((agent) => ({
+      name: agent.name,
+      role: agent.role,
+      systemPrompt: agent.system_prompt,
+      model: agent.model,
+    })),
+    models,
+  });
 }
 
 export function applyWizardTemplate(
@@ -632,7 +728,7 @@ export function applyWizardTemplate(
   const primaryModelName = models[0]?.name || "llama3";
   const agents = wizardTemplateAgents(template, primaryModelName);
 
-  return {
+  return normalizeWizardAgentModels({
     ...form,
     template,
     description: defaults.description,
@@ -645,5 +741,5 @@ export function applyWizardTemplate(
     agents,
     modelAssignment: "explicit",
     models,
-  };
+  });
 }

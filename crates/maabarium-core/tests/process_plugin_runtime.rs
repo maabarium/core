@@ -8,14 +8,20 @@ mod tests {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let current_dir = std::env::current_dir().expect("current directory should be available");
         let candidates = [
-            manifest_dir.join("tests").join("fixtures").join("process-plugin"),
+            manifest_dir
+                .join("tests")
+                .join("fixtures")
+                .join("process-plugin"),
             manifest_dir
                 .join("crates")
                 .join("maabarium-core")
                 .join("tests")
                 .join("fixtures")
                 .join("process-plugin"),
-            current_dir.join("tests").join("fixtures").join("process-plugin"),
+            current_dir
+                .join("tests")
+                .join("fixtures")
+                .join("process-plugin"),
             current_dir
                 .join("crates")
                 .join("maabarium-core")

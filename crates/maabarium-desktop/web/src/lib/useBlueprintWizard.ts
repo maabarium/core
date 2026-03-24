@@ -1,6 +1,14 @@
+import type { Dispatch, SetStateAction } from "react";
 import { useMemo, useState } from "react";
-import { buildSuggestedWizardModel, buildWizardForm } from "./blueprints";
+import {
+  buildWizardFormFromBlueprint,
+  buildSuggestedWizardModel,
+  buildSuggestedWizardModels,
+  buildWizardForm,
+  normalizeWizardAgentModels,
+} from "./blueprints";
 import type {
+  BlueprintFile,
   BlueprintWizardForm,
   BlueprintWizardRequest,
   ConsoleState,
@@ -28,9 +36,23 @@ export function useBlueprintWizard({
 }: UseBlueprintWizardArgs) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardCreating, setWizardCreating] = useState(false);
-  const [wizardForm, setWizardForm] = useState<BlueprintWizardForm>(
+  const [wizardEditingPath, setWizardEditingPath] = useState<string | null>(
+    null,
+  );
+  const [wizardForm, setWizardFormState] = useState<BlueprintWizardForm>(
     buildWizardForm(null),
   );
+  const wizardMode: "create" | "edit" = wizardEditingPath ? "edit" : "create";
+
+  const setWizardForm: Dispatch<SetStateAction<BlueprintWizardForm>> = (
+    value,
+  ) => {
+    setWizardFormState((current) =>
+      normalizeWizardAgentModels(
+        typeof value === "function" ? value(current) : value,
+      ),
+    );
+  };
 
   const wizardMetricWeightTotal = useMemo(
     () =>
@@ -44,9 +66,13 @@ export function useBlueprintWizard({
 
   const wizardModelNames = useMemo(
     () =>
-      wizardForm.models
-        .map((model) => model.name.trim())
-        .filter((name) => name.length > 0),
+      Array.from(
+        new Set(
+          wizardForm.models
+            .map((model) => model.name.trim())
+            .filter((name) => name.length > 0),
+        ),
+      ),
     [wizardForm.models],
   );
 
@@ -105,38 +131,45 @@ export function useBlueprintWizard({
   };
 
   const addWizardAgent = () => {
-    const fallbackModel = wizardModelNames[0] || "llama3";
-    setWizardForm((current) => ({
-      ...current,
-      councilSize: current.agents.length + 1,
-      agents: [
-        ...current.agents,
-        {
-          name: `agent_${current.agents.length + 1}`,
-          role: "specialist",
-          systemPrompt: "Describe how this agent should contribute.",
-          model: fallbackModel,
-        },
-      ],
-    }));
+    setWizardForm((current) => {
+      const fallbackModel =
+        current.models.find((model) => model.name.trim().length > 0)?.name ??
+        buildSuggestedWizardModel(state).name;
+
+      return {
+        ...current,
+        councilSize: current.agents.length + 1,
+        agents: [
+          ...current.agents,
+          {
+            name: `agent_${current.agents.length + 1}`,
+            role: "specialist",
+            systemPrompt: "Describe how this agent should contribute.",
+            model: fallbackModel,
+          },
+        ],
+      };
+    });
   };
 
   const addWizardModel = () => {
-    const suggestedModel = buildSuggestedWizardModel(state);
-    setWizardForm((current) => ({
-      ...current,
-      models: [
-        ...current.models,
-        {
-          ...suggestedModel,
-          name: current.models.some(
-            (model) => model.name === suggestedModel.name,
-          )
-            ? `${suggestedModel.name}_${current.models.length + 1}`
-            : suggestedModel.name,
-        },
-      ],
-    }));
+    setWizardForm((current) => {
+      const suggestedModels = buildSuggestedWizardModels(state);
+      const nextSuggestedModel =
+        suggestedModels.find(
+          (suggestedModel) =>
+            !current.models.some(
+              (model) =>
+                model.provider === suggestedModel.provider &&
+                model.name === suggestedModel.name,
+            ),
+        ) ?? buildSuggestedWizardModel(state);
+
+      return {
+        ...current,
+        models: [...current.models, nextSuggestedModel],
+      };
+    });
   };
 
   const removeWizardMetric = (index: number) => {
@@ -170,6 +203,7 @@ export function useBlueprintWizard({
   };
 
   const openBlueprintWizard = () => {
+    setWizardEditingPath(null);
     setWizardForm(buildWizardForm(state));
     dismissDesktopError();
     setWizardOpen(true);
@@ -180,6 +214,7 @@ export function useBlueprintWizard({
     displayName: string,
     description: string | null,
   ) => {
+    setWizardEditingPath(null);
     const initial = buildWizardForm(state, template);
     setWizardForm({
       ...initial,
@@ -189,6 +224,16 @@ export function useBlueprintWizard({
         .replace(/^-+|-+$/g, ""),
       description: description ?? initial.description,
     });
+    dismissDesktopError();
+    setWizardOpen(true);
+  };
+
+  const openExistingBlueprintWizard = (
+    path: string,
+    blueprint: BlueprintFile,
+  ) => {
+    setWizardEditingPath(path);
+    setWizardForm(buildWizardFormFromBlueprint(blueprint));
     dismissDesktopError();
     setWizardOpen(true);
   };
@@ -208,6 +253,7 @@ export function useBlueprintWizard({
     }
 
     setWizardOpen(false);
+    setWizardEditingPath(null);
   };
 
   const buildWizardRequest = (): BlueprintWizardRequest | null => {
@@ -344,6 +390,8 @@ export function useBlueprintWizard({
     setWizardOpen,
     wizardCreating,
     setWizardCreating,
+    wizardMode,
+    wizardEditingPath,
     wizardForm,
     setWizardForm,
     wizardMetricWeightTotal,
@@ -359,6 +407,7 @@ export function useBlueprintWizard({
     removeWizardModel,
     openBlueprintWizard,
     openTemplateWizard,
+    openExistingBlueprintWizard,
     closeBlueprintWizard,
     buildWizardRequest,
   };

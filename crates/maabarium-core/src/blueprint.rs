@@ -217,9 +217,7 @@ impl BlueprintFile {
     pub fn requires_setup(&self) -> bool {
         self.library
             .as_ref()
-            .map(|library| {
-                library.setup_required || library.kind == BlueprintLibraryKind::Template
-            })
+            .map(|library| library.setup_required || library.kind == BlueprintLibraryKind::Template)
             .unwrap_or(false)
     }
 }

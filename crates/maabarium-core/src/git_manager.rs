@@ -1,6 +1,7 @@
 use crate::error::GitError;
 use git2::{BranchType, Repository};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -41,7 +42,7 @@ impl GitManager {
         let branch_name = format!("experiment/iter-{iteration}");
         let branch_clone = branch_name.clone();
         tokio::task::spawn_blocking(move || -> Result<String, GitError> {
-            let repo = Repository::open(&path)?;
+            let repo = discover_repository(&path)?;
             let head = repo.head()?;
             let head_commit = head.peel_to_commit()?;
             // `force = false` so an existing branch returns an error rather than
@@ -66,7 +67,7 @@ impl GitManager {
         let path = self.repo_path.clone();
         let branch = branch.to_owned();
         tokio::task::spawn_blocking(move || -> Result<(), GitError> {
-            let repo = Repository::open(&path)?;
+            let repo = discover_repository(&path)?;
             let branch_ref = repo.find_branch(&branch, BranchType::Local)?;
             let branch_commit = branch_ref.get().peel_to_commit()?;
             let mut main = repo
@@ -84,7 +85,7 @@ impl GitManager {
         let path = self.repo_path.clone();
         let branch = branch.to_owned();
         tokio::task::spawn_blocking(move || -> Result<(), GitError> {
-            let repo = Repository::open(&path)?;
+            let repo = discover_repository(&path)?;
             let mut b = repo.find_branch(&branch, BranchType::Local)?;
             b.delete()?;
             Ok(())
@@ -98,6 +99,7 @@ impl GitManager {
         let branch = branch.to_owned();
         let proposal = proposal.clone();
         tokio::task::spawn_blocking(move || -> Result<(), GitError> {
+            let repo_root = discover_repository_root(&path)?;
             let temp_dir = std::env::temp_dir().join(format!(
                 "maabarium-{}-{}",
                 branch.replace('/', "-"),
@@ -106,7 +108,7 @@ impl GitManager {
             std::fs::create_dir_all(&temp_dir).map_err(GitError::Io)?;
 
             run_git(
-                &path,
+                &repo_root,
                 [
                     "worktree",
                     "add",
@@ -151,7 +153,7 @@ impl GitManager {
                 ],
             );
             let cleanup_result = run_git(
-                &path,
+                &repo_root,
                 [
                     "worktree",
                     "remove",
@@ -169,6 +171,22 @@ impl GitManager {
         .await
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
     }
+}
+
+fn discover_repository(repo_path: &Path) -> Result<Repository, GitError> {
+    Repository::discover(repo_path).map_err(GitError::from)
+}
+
+fn discover_repository_root(repo_path: &Path) -> Result<PathBuf, GitError> {
+    let repo = discover_repository(repo_path)?;
+    if let Some(workdir) = repo.workdir() {
+        return Ok(workdir.to_path_buf());
+    }
+
+    repo.path()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| GitError::Io(std::io::Error::other("Repository root is unavailable")))
 }
 
 fn run_git<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Result<(), GitError> {
