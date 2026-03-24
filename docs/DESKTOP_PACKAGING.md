@@ -72,10 +72,13 @@ Manual distribution is still supported, but a concrete updater path now exists f
 The updater storage endpoint can be backed by Cloudflare R2.
 
 - `MAABARIUM_UPDATE_BASE_URL` should point to the public release origin, ideally an R2-backed custom domain.
+- release builds should provide `MAABARIUM_UPDATE_PUBKEY` during `pnpm tauri build` so the packaged app embeds the updater public key.
 - `latest.json` lives at the root of that release origin.
 - signed updater bundles live under platform-key subdirectories such as `darwin-aarch64/`.
 
 The updater signing public key is not an R2 value. It is the public half of the Tauri updater signing keypair.
+
+For local builds, `MAABARIUM_UPDATE_PUBKEY_FILE` can point at the generated `.pub` file and will be embedded at compile time. A runtime `MAABARIUM_UPDATE_PUBKEY` still overrides the embedded key for development sessions.
 
 See [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md) for the concrete release flow and required variables.
 

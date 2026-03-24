@@ -1615,11 +1615,26 @@ fn update_endpoint_from_env(channel: &str) -> Option<String> {
         .map(|base_url| format!("{base_url}/{channel}/latest.json"))
 }
 
-fn update_pubkey_from_env() -> Option<String> {
-    std::env::var("MAABARIUM_UPDATE_PUBKEY")
-        .ok()
+fn resolved_update_pubkey(
+    runtime_value: Option<String>,
+    compiled_value: Option<&str>,
+) -> Option<String> {
+    runtime_value
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            compiled_value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+fn update_pubkey_from_env() -> Option<String> {
+    resolved_update_pubkey(
+        std::env::var("MAABARIUM_UPDATE_PUBKEY").ok(),
+        option_env!("MAABARIUM_COMPILED_UPDATE_PUBKEY"),
+    )
 }
 
 fn describe_updater_configuration(setup: &DesktopSetupState) -> UpdaterConfigurationState {
@@ -1640,7 +1655,7 @@ fn update_runtime_configuration(setup: &DesktopSetupState) -> Result<UpdateRunti
     let endpoint = update_endpoint_from_env(&channel)
         .ok_or_else(|| "Set MAABARIUM_UPDATE_MANIFEST_URL or MAABARIUM_UPDATE_BASE_URL to enable desktop updates".to_owned())?;
     let pubkey = update_pubkey_from_env()
-        .ok_or_else(|| "Set MAABARIUM_UPDATE_PUBKEY to enable desktop updates".to_owned())?;
+        .ok_or_else(|| "Set MAABARIUM_UPDATE_PUBKEY or embed the updater pubkey at build time to enable desktop updates".to_owned())?;
 
     Ok(UpdateRuntimeConfig {
         channel,
@@ -2766,5 +2781,22 @@ mod tests {
         setup.preferred_update_channel = Some("beta".to_owned());
 
         assert_eq!(resolved_update_channel(Some(&setup)), "beta");
+    }
+
+    #[test]
+    fn resolved_update_pubkey_prefers_runtime_value() {
+        let pubkey = resolved_update_pubkey(
+            Some(" runtime-pubkey ".to_owned()),
+            Some("compiled-pubkey"),
+        );
+
+        assert_eq!(pubkey.as_deref(), Some("runtime-pubkey"));
+    }
+
+    #[test]
+    fn resolved_update_pubkey_falls_back_to_compiled_value() {
+        let pubkey = resolved_update_pubkey(Some("   ".to_owned()), Some(" compiled-pubkey "));
+
+        assert_eq!(pubkey.as_deref(), Some("compiled-pubkey"));
     }
 }

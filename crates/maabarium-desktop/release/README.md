@@ -68,6 +68,7 @@ That produces:
 - a public key file, whose contents become `MAABARIUM_UPDATE_PUBKEY`
 
 Do not commit either key. Only the public key content should be copied into runtime configuration.
+Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
 
 ## Local Release Build
 
@@ -76,6 +77,7 @@ Build signed updater artifacts locally:
 ```bash
 cd crates/maabarium-desktop
 export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/maabarium.key"
+export MAABARIUM_UPDATE_PUBKEY_FILE="$HOME/.tauri/maabarium.key.pub"
 pnpm tauri build
 pnpm build:release-manifest -- --base-url https://downloads.example.com --cli-platform stable/0.1.0/darwin-aarch64/maabarium-cli.tar.gz
 ```
@@ -135,15 +137,18 @@ to Cloudflare R2.
 - optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 - `CLOUDFLARE_R2_ACCESS_KEY_ID`
 - `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
+- optional `MAABARIUM_UPDATE_PUBKEY` if you prefer storing the updater public key as a masked secret instead of a repository variable
 
 ### Required GitHub Variables
 
+- `MAABARIUM_UPDATE_PUBKEY`
 - `MAABARIUM_UPDATE_BASE_URL`
 - `CLOUDFLARE_R2_BUCKET`
 - `CLOUDFLARE_R2_ENDPOINT`
 
 Example values:
 
+- `MAABARIUM_UPDATE_PUBKEY = <contents of ~/.tauri/maabarium.key.pub>`
 - `MAABARIUM_UPDATE_BASE_URL = https://downloads.example.com`
 - `CLOUDFLARE_R2_BUCKET = maabarium-releases`
 - `CLOUDFLARE_R2_ENDPOINT = https://<account-id>.r2.cloudflarestorage.com`

@@ -81,6 +81,8 @@ On first launch, the desktop app can migrate legacy repo-local runtime files for
 
 The desktop bundle also seeds bundled blueprint TOMLs into the app-data blueprint library, and release bundles can ship a standalone CLI resource for desktop installs.
 
+Release desktop builds should provide `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE` during `pnpm tauri build` so packaged installs embed the updater public key.
+
 See [docs/DESKTOP_PACKAGING.md](docs/DESKTOP_PACKAGING.md) for the fuller packaging and updater flow.
 
 ## Quick Start

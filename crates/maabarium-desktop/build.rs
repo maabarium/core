@@ -8,7 +8,40 @@ fn main() {
         panic!("failed to prepare bundled CLI resource: {error}");
     }
 
+    if let Err(error) = configure_embedded_updater_pubkey() {
+        panic!("failed to configure embedded updater public key: {error}");
+    }
+
     tauri_build::build()
+}
+
+fn configure_embedded_updater_pubkey() -> Result<(), String> {
+    println!("cargo:rerun-if-env-changed=MAABARIUM_UPDATE_PUBKEY");
+    println!("cargo:rerun-if-env-changed=MAABARIUM_UPDATE_PUBKEY_FILE");
+
+    let env_pubkey = env::var("MAABARIUM_UPDATE_PUBKEY")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    let file_pubkey = env::var("MAABARIUM_UPDATE_PUBKEY_FILE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|path| {
+            let file_path = PathBuf::from(&path);
+            println!("cargo:rerun-if-changed={}", file_path.display());
+            fs::read_to_string(&file_path)
+                .map_err(|error| format!("failed to read {}: {error}", file_path.display()))
+                .map(|value| value.trim().to_owned())
+        })
+        .transpose()?;
+
+    if let Some(pubkey) = env_pubkey.or(file_pubkey).filter(|value| !value.is_empty()) {
+        println!("cargo:rustc-env=MAABARIUM_COMPILED_UPDATE_PUBKEY={pubkey}");
+    }
+
+    Ok(())
 }
 
 fn prepare_bundled_cli() -> Result<(), String> {
