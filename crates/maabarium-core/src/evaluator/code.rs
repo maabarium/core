@@ -298,7 +298,7 @@ mod tests {
                 description: "Overall quality".into(),
             }],
             vec!["src/**/*.rs".into()],
-            true,
+            false,
             env!("CARGO_MANIFEST_DIR"),
         );
 
