@@ -37,9 +37,13 @@ impl GitManager {
         }
     }
 
-    pub async fn create_experiment_branch(&self, iteration: u64) -> Result<String, GitError> {
+    pub async fn create_experiment_branch(
+        &self,
+        run_id: &str,
+        iteration: u64,
+    ) -> Result<String, GitError> {
         let path = self.repo_path.clone();
-        let branch_name = format!("experiment/iter-{iteration}");
+        let branch_name = format!("experiment-{run_id}/iter-{iteration}");
         let branch_clone = branch_name.clone();
         tokio::task::spawn_blocking(move || -> Result<String, GitError> {
             let repo = discover_repository(&path)?;
@@ -174,6 +178,66 @@ impl GitManager {
         })
         .await
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::{Repository, Signature};
+
+    fn create_test_repo() -> tempfile::TempDir {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let repo = Repository::init(temp_dir.path()).expect("repo should initialize");
+        std::fs::write(temp_dir.path().join("README.md"), "baseline\n")
+            .expect("baseline file should be written");
+
+        let mut index = repo.index().expect("index should open");
+        index
+            .add_path(Path::new("README.md"))
+            .expect("file should be staged");
+        index.write().expect("index should write");
+
+        let tree_id = index.write_tree().expect("tree should write");
+        let tree = repo.find_tree(tree_id).expect("tree should load");
+        let signature = Signature::now("Maabarium", "maabarium@local.invalid")
+            .expect("signature should build");
+
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "init",
+            &tree,
+            &[],
+        )
+        .expect("initial commit should succeed");
+
+        temp_dir
+    }
+
+    #[tokio::test]
+    async fn create_experiment_branch_namespaces_by_run_id() {
+        let temp_dir = create_test_repo();
+        let git = GitManager::new(temp_dir.path());
+
+        let first = git
+            .create_experiment_branch("runaaaa1", 1)
+            .await
+            .expect("first branch should be created");
+        let second = git
+            .create_experiment_branch("runbbbb2", 1)
+            .await
+            .expect("second branch should be created");
+
+        assert_eq!(first, "experiment-runaaaa1/iter-1");
+        assert_eq!(second, "experiment-runbbbb2/iter-1");
+
+        let repo = Repository::discover(temp_dir.path()).expect("repo should be discoverable");
+        repo.find_branch(&first, BranchType::Local)
+            .expect("first branch should exist");
+        repo.find_branch(&second, BranchType::Local)
+            .expect("second branch should exist");
     }
 }
 

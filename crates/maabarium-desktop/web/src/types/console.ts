@@ -272,6 +272,56 @@ export type ReadinessItem = {
   lastCheckedAtEpochMs: number;
 };
 
+export type ExperimentBranchInfo = {
+  name: string;
+  runId: string | null;
+  iteration: number | null;
+  lastCommitAt: string | null;
+  ageDays: number | null;
+  isCurrent: boolean;
+};
+
+export type ExperimentBranchAgeMetrics = {
+  olderThan1Month: number;
+  olderThan3Months: number;
+  olderThan6Months: number;
+};
+
+export type ExperimentBranchInventory = {
+  workspacePath: string;
+  repositoryRoot: string;
+  currentBranch: string | null;
+  totalBranches: number;
+  ageMetrics: ExperimentBranchAgeMetrics;
+  availableThresholdMonths: number[];
+  defaultThresholdMonths: number;
+  branches: ExperimentBranchInfo[];
+};
+
+export type ExperimentBranchCleanupAction =
+  | "delete"
+  | "skip_current"
+  | "skip_error";
+
+export type ExperimentBranchCleanupEntry = {
+  name: string;
+  ageDays: number | null;
+  lastCommitAt: string | null;
+  action: ExperimentBranchCleanupAction;
+  reason: string | null;
+};
+
+export type ExperimentBranchCleanupResult = {
+  thresholdMonths: number;
+  dryRun: boolean;
+  matchedBranchCount: number;
+  deletedBranchCount: number;
+  skippedBranchCount: number;
+  currentBranchProtected: boolean;
+  summary: string;
+  branches: ExperimentBranchCleanupEntry[];
+};
+
 export type OllamaModelInfo = {
   name: string;
   sizeLabel: string | null;
@@ -380,6 +430,7 @@ export type ConsoleState = {
   updater: UpdaterConfigurationState;
   desktopSetup: DesktopSetupState;
   readinessItems: ReadinessItem[];
+  experimentBranchInventory: ExperimentBranchInventory | null;
   ollama: OllamaStatus;
   experiments: PersistedExperiment[];
   proposals: PersistedProposal[];

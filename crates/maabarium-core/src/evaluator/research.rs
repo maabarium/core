@@ -23,6 +23,7 @@ pub struct ResearchEvaluator {
     discovery_provider: Option<DiscoveryProvider>,
     provider_hint: &'static str,
     topic_hint: Option<String>,
+    verify_discovered_urls: bool,
 }
 
 enum DiscoveryProvider {
@@ -61,6 +62,7 @@ struct BraveWebResult {
 }
 
 const RESEARCH_SEARCH_PROVIDER_ENV: &str = "MAABARIUM_RESEARCH_SEARCH_PROVIDER";
+const VERIFY_DISCOVERED_URLS_ENV: &str = "MAABARIUM_VERIFY_DISCOVERED_URLS";
 const SCRAPER_FAILURE_MARKER: &str = "scraper_discovery";
 
 fn mark_discovery_error(provider_name: &str, message: String) -> String {
@@ -131,7 +133,10 @@ impl ResearchEvaluator {
             metrics,
             discovery_provider,
             provider_hint,
-            topic_hint: topic_hint.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+            topic_hint: topic_hint
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            verify_discovered_urls: env_flag_enabled(VERIFY_DISCOVERED_URLS_ENV, true),
         }
     }
 
@@ -177,21 +182,29 @@ impl ResearchEvaluator {
         };
 
         match provider.discover(&query).await {
-            Ok((sources, trace)) => (sources, vec![trace]),
+            Ok((sources, trace)) => {
+                let sources = if self.verify_discovered_urls {
+                    self.verify_discovered_sources(sources).await
+                } else {
+                    sources
+                };
+
+                (sources, vec![trace])
+            }
             Err(message) => {
                 let provider_name = provider.name();
                 let marked_message = mark_discovery_error(provider_name, message);
                 (
-                Vec::new(),
-                vec![ResearchQueryTrace {
-                    provider: provider_name.to_owned(),
-                    query_text: query,
-                    result_count: 0,
-                    top_urls: Vec::new(),
-                    latency_ms: 0,
-                    executed_at: Utc::now().to_rfc3339(),
-                    error: Some(marked_message),
-                }],
+                    Vec::new(),
+                    vec![ResearchQueryTrace {
+                        provider: provider_name.to_owned(),
+                        query_text: query,
+                        result_count: 0,
+                        top_urls: Vec::new(),
+                        latency_ms: 0,
+                        executed_at: Utc::now().to_rfc3339(),
+                        error: Some(marked_message),
+                    }],
                 )
             }
         }
@@ -251,6 +264,18 @@ impl ResearchEvaluator {
         sources
     }
 
+    async fn verify_discovered_sources(
+        &self,
+        discovered_sources: Vec<ResearchSource>,
+    ) -> Vec<ResearchSource> {
+        let mut sources = Vec::with_capacity(discovered_sources.len());
+        for source in discovered_sources {
+            sources.push(self.verify_discovered_source(source).await);
+        }
+
+        sources
+    }
+
     fn merge_sources(
         &self,
         mut verified_sources: Vec<ResearchSource>,
@@ -276,6 +301,27 @@ impl ResearchEvaluator {
             .find_map(|citation| citation.label.clone())
             .filter(|value| !value.trim().is_empty());
         let citation_count = citations.len() as u32;
+
+        self.build_verified_source(url, label, None, citation_count).await
+    }
+
+    async fn verify_discovered_source(&self, source: ResearchSource) -> ResearchSource {
+        self.build_verified_source(
+            &source.url,
+            source.label,
+            source.title,
+            source.citation_count,
+        )
+        .await
+    }
+
+    async fn build_verified_source(
+        &self,
+        url: &str,
+        label: Option<String>,
+        fallback_title: Option<String>,
+        citation_count: u32,
+    ) -> ResearchSource {
         let parsed_url = Url::parse(url).ok();
         let host = parsed_url
             .as_ref()
@@ -310,7 +356,7 @@ impl ResearchEvaluator {
                     final_url,
                     host,
                     label,
-                    title: extract_html_title(&body),
+                    title: extract_html_title(&body).or(fallback_title),
                     citation_count,
                     verified,
                     status_code,
@@ -322,7 +368,7 @@ impl ResearchEvaluator {
                 final_url: None,
                 host,
                 label,
-                title: None,
+                title: fallback_title,
                 citation_count,
                 verified: false,
                 status_code: None,
@@ -333,7 +379,7 @@ impl ResearchEvaluator {
                 final_url: None,
                 host,
                 label,
-                title: None,
+                title: fallback_title,
                 citation_count,
                 verified: false,
                 status_code: None,
@@ -902,6 +948,16 @@ fn extract_html_title(body: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_owned())
 }
 
+fn env_flag_enabled(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            !matches!(value.as_str(), "0" | "false" | "no" | "off")
+        }
+        Err(_) => default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -992,6 +1048,46 @@ mod tests {
         assert!(research.sources.iter().any(|source| {
             source.verified && source.title.as_deref() == Some("Example Source")
         }));
+    }
+
+    #[tokio::test]
+    async fn verifies_discovered_sources_before_merging() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("address should be available");
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buffer = [0_u8; 1024];
+                let _ = stream.read(&mut buffer).await;
+                let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 69\r\n\r\n<html><head><title>Discovered Source</title></head><body>ok</body></html>";
+                let _ = stream.write_all(response).await;
+            }
+        });
+
+        let evaluator = ResearchEvaluator::new(vec![research_metric("source_quality")], None);
+        let discovered_sources = vec![ResearchSource {
+            url: format!("http://{address}/result"),
+            final_url: None,
+            host: Some(address.ip().to_string()),
+            label: Some("Search result summary".to_owned()),
+            title: Some("Fallback Search Title".to_owned()),
+            citation_count: 0,
+            verified: false,
+            status_code: None,
+            fetch_error: None,
+        }];
+
+        let verified_sources = evaluator.verify_discovered_sources(discovered_sources).await;
+
+        assert_eq!(verified_sources.len(), 1);
+        assert!(verified_sources[0].verified);
+        assert_eq!(verified_sources[0].title.as_deref(), Some("Discovered Source"));
+        assert_eq!(verified_sources[0].status_code, Some(200));
     }
 
     #[test]

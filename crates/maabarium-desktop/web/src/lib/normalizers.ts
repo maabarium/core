@@ -2,6 +2,8 @@ import type {
   BlueprintFile,
   ConsoleState,
   DesktopSetupState,
+  ExperimentBranchCleanupResult,
+  ExperimentBranchInventory,
   HardwareSensor,
   HardwareTelemetry,
   LoraArtifacts,
@@ -363,6 +365,94 @@ function normalizeReadinessItems(
     : [];
 }
 
+function normalizeExperimentBranchInventory(
+  inventory: ExperimentBranchInventory | null | undefined,
+): ExperimentBranchInventory | null {
+  if (!inventory) {
+    return null;
+  }
+
+  return {
+    workspacePath: inventory.workspacePath ?? "",
+    repositoryRoot: inventory.repositoryRoot ?? "",
+    currentBranch: inventory.currentBranch ?? null,
+    totalBranches:
+      typeof inventory.totalBranches === "number" ? inventory.totalBranches : 0,
+    ageMetrics: {
+      olderThan1Month:
+        typeof inventory.ageMetrics?.olderThan1Month === "number"
+          ? inventory.ageMetrics.olderThan1Month
+          : 0,
+      olderThan3Months:
+        typeof inventory.ageMetrics?.olderThan3Months === "number"
+          ? inventory.ageMetrics.olderThan3Months
+          : 0,
+      olderThan6Months:
+        typeof inventory.ageMetrics?.olderThan6Months === "number"
+          ? inventory.ageMetrics.olderThan6Months
+          : 0,
+    },
+    availableThresholdMonths: Array.isArray(inventory.availableThresholdMonths)
+      ? inventory.availableThresholdMonths.filter(
+          (value): value is number => typeof value === "number",
+        )
+      : [],
+    defaultThresholdMonths:
+      typeof inventory.defaultThresholdMonths === "number"
+        ? inventory.defaultThresholdMonths
+        : 3,
+    branches: Array.isArray(inventory.branches)
+      ? inventory.branches.map((branch) => ({
+          name: branch.name ?? "",
+          runId: branch.runId ?? null,
+          iteration:
+            typeof branch.iteration === "number" ? branch.iteration : null,
+          lastCommitAt: branch.lastCommitAt ?? null,
+          ageDays: typeof branch.ageDays === "number" ? branch.ageDays : null,
+          isCurrent: Boolean(branch.isCurrent),
+        }))
+      : [],
+  };
+}
+
+export function normalizeExperimentBranchCleanupResult(
+  result: ExperimentBranchCleanupResult,
+): ExperimentBranchCleanupResult {
+  return {
+    thresholdMonths:
+      typeof result.thresholdMonths === "number" ? result.thresholdMonths : 3,
+    dryRun: Boolean(result.dryRun),
+    matchedBranchCount:
+      typeof result.matchedBranchCount === "number"
+        ? result.matchedBranchCount
+        : 0,
+    deletedBranchCount:
+      typeof result.deletedBranchCount === "number"
+        ? result.deletedBranchCount
+        : 0,
+    skippedBranchCount:
+      typeof result.skippedBranchCount === "number"
+        ? result.skippedBranchCount
+        : 0,
+    currentBranchProtected: Boolean(result.currentBranchProtected),
+    summary: result.summary ?? "",
+    branches: Array.isArray(result.branches)
+      ? result.branches.map((branch) => ({
+          name: branch.name ?? "",
+          ageDays: typeof branch.ageDays === "number" ? branch.ageDays : null,
+          lastCommitAt: branch.lastCommitAt ?? null,
+          action:
+            branch.action === "delete" ||
+            branch.action === "skip_current" ||
+            branch.action === "skip_error"
+              ? branch.action
+              : "skip_error",
+          reason: branch.reason ?? null,
+        }))
+      : [],
+  };
+}
+
 function normalizeOllamaStatus(
   ollama: OllamaStatus | null | undefined,
 ): OllamaStatus {
@@ -487,6 +577,9 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
     },
     desktopSetup: normalizeDesktopSetup(snapshot.desktopSetup),
     readinessItems: normalizeReadinessItems(snapshot.readinessItems),
+    experimentBranchInventory: normalizeExperimentBranchInventory(
+      snapshot.experimentBranchInventory,
+    ),
     ollama: normalizeOllamaStatus(snapshot.ollama),
     experiments: Array.isArray(snapshot.experiments)
       ? snapshot.experiments.map((experiment) => ({

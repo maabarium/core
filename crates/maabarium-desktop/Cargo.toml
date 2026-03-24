@@ -27,3 +27,6 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 sysinfo = "0.33"
 url = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { normalizeConsoleState } from "./normalizers";
+import {
+  normalizeConsoleState,
+  normalizeExperimentBranchCleanupResult,
+} from "./normalizers";
 import { listOllamaModelNames } from "./ollama";
 import type {
   BlueprintFile,
   BlueprintWizardRequest,
   ConsoleState,
   DesktopSetupState,
+  ExperimentBranchCleanupResult,
+  ExperimentBranchInventory,
   StartEngineRequest,
   UpdateCheckResult,
   WorkspaceGitStatus,
@@ -67,6 +72,96 @@ function writeMockUpdateCheck(updateCheck: UpdateCheckResult | null) {
 
 function isMockMode() {
   return readMockConsoleState() !== null;
+}
+
+type ExperimentBranchCleanupResponse = {
+  snapshot: ConsoleState;
+  result: ExperimentBranchCleanupResult;
+};
+
+function staleCountForThreshold(
+  inventory: ExperimentBranchInventory,
+  thresholdMonths: number,
+) {
+  switch (thresholdMonths) {
+    case 1:
+      return inventory.ageMetrics.olderThan1Month;
+    case 3:
+      return inventory.ageMetrics.olderThan3Months;
+    case 6:
+      return inventory.ageMetrics.olderThan6Months;
+    default:
+      return inventory.branches.filter(
+        (branch) => (branch.ageDays ?? -1) >= thresholdMonths * 30,
+      ).length;
+  }
+}
+
+function buildMockCleanupResult(
+  inventory: ExperimentBranchInventory,
+  thresholdMonths: number,
+  dryRun: boolean,
+): ExperimentBranchCleanupResult {
+  const thresholdDays = thresholdMonths * 30;
+  const matchedBranches = inventory.branches.filter(
+    (branch) => (branch.ageDays ?? -1) >= thresholdDays,
+  );
+  const deletedEntries = matchedBranches.filter((branch) => !branch.isCurrent);
+  const skippedEntries = matchedBranches.filter((branch) => branch.isCurrent);
+
+  return {
+    thresholdMonths,
+    dryRun,
+    matchedBranchCount: matchedBranches.length,
+    deletedBranchCount: dryRun ? 0 : deletedEntries.length,
+    skippedBranchCount: skippedEntries.length,
+    currentBranchProtected: skippedEntries.length > 0,
+    summary:
+      matchedBranches.length === 0
+        ? `No experiment branches are older than ${thresholdMonths} month(s).`
+        : dryRun
+          ? `Dry run matched ${matchedBranches.length} experiment branch(es) older than ${thresholdMonths} month(s).`
+          : `Deleted ${deletedEntries.length} stale experiment branch(es); ${skippedEntries.length} were skipped.`,
+    branches: matchedBranches.map((branch) => ({
+      name: branch.name,
+      ageDays: branch.ageDays,
+      lastCommitAt: branch.lastCommitAt,
+      action: branch.isCurrent ? "skip_current" : ("delete" as const),
+      reason: branch.isCurrent
+        ? "The currently checked out branch is protected from cleanup."
+        : null,
+    })),
+  };
+}
+
+function inventoryAfterMockCleanup(
+  inventory: ExperimentBranchInventory,
+  thresholdMonths: number,
+) {
+  const thresholdDays = thresholdMonths * 30;
+  const branches = inventory.branches.filter(
+    (branch) => branch.isCurrent || (branch.ageDays ?? -1) < thresholdDays,
+  );
+
+  return {
+    ...inventory,
+    totalBranches: branches.length,
+    ageMetrics: {
+      olderThan1Month: staleCountForThreshold(
+        { ...inventory, branches } as ExperimentBranchInventory,
+        1,
+      ),
+      olderThan3Months: staleCountForThreshold(
+        { ...inventory, branches } as ExperimentBranchInventory,
+        3,
+      ),
+      olderThan6Months: staleCountForThreshold(
+        { ...inventory, branches } as ExperimentBranchInventory,
+        6,
+      ),
+    },
+    branches,
+  } satisfies ExperimentBranchInventory;
 }
 
 export function useDesktopConsole({
@@ -672,6 +767,67 @@ export function useDesktopConsole({
     }
   };
 
+  const runExperimentBranchCleanup = async (
+    thresholdMonths: number,
+    dryRun: boolean,
+  ) => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot?.experimentBranchInventory) {
+        return null;
+      }
+
+      const result = buildMockCleanupResult(
+        snapshot.experimentBranchInventory,
+        thresholdMonths,
+        dryRun,
+      );
+      const nextSnapshot = dryRun
+        ? snapshot
+        : {
+            ...snapshot,
+            experimentBranchInventory: inventoryAfterMockCleanup(
+              snapshot.experimentBranchInventory,
+              thresholdMonths,
+            ),
+          };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return result;
+    }
+
+    try {
+      const response = await invoke<ExperimentBranchCleanupResponse>(
+        "cleanup_experiment_branches_command",
+        {
+          olderThanMonths: thresholdMonths,
+          dryRun,
+        },
+      );
+      applySnapshot(response.snapshot);
+      setDesktopError(null);
+      return normalizeExperimentBranchCleanupResult(response.result);
+    } catch (error) {
+      presentDesktopError(
+        "Branch Maintenance Error",
+        dryRun
+          ? "The cleanup preview could not be generated"
+          : "Stale experiment branches could not be cleaned up",
+        dryRun
+          ? "Review the repository details below, then retry the dry-run preview."
+          : "Review the repository details below before retrying the cleanup action.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const previewExperimentBranchCleanup = async (thresholdMonths: number) =>
+    runExperimentBranchCleanup(thresholdMonths, true);
+
+  const cleanupExperimentBranches = async (thresholdMonths: number) =>
+    runExperimentBranchCleanup(thresholdMonths, false);
+
   return {
     state,
     loading,
@@ -703,5 +859,7 @@ export function useDesktopConsole({
     setProviderApiKey,
     installOllama,
     startOllama,
+    previewExperimentBranchCleanup,
+    cleanupExperimentBranches,
   };
 }

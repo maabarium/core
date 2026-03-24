@@ -172,6 +172,8 @@ export default function App() {
     setProviderApiKey,
     installOllama,
     startOllama,
+    previewExperimentBranchCleanup,
+    cleanupExperimentBranches,
   } = useDesktopConsole();
   const {
     blueprintQuery,
@@ -1649,10 +1651,19 @@ export default function App() {
 
               <ReadinessCenterCard
                 readinessItems={state?.readinessItems ?? []}
+                experimentBranchInventory={
+                  state?.experimentBranchInventory ?? null
+                }
                 ollama={state?.ollama ?? null}
                 onOpenSetup={() => setSetupOpen(true)}
                 onInstallOllama={() => void installOllama()}
                 onStartOllama={() => void startOllama()}
+                onPreviewBranchCleanup={(thresholdMonths) =>
+                  previewExperimentBranchCleanup(thresholdMonths)
+                }
+                onCleanupBranches={(thresholdMonths) =>
+                  cleanupExperimentBranches(thresholdMonths)
+                }
               />
 
               <PersistedStackCard

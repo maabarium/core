@@ -1,0 +1,113 @@
+name: release-prep
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version bump to apply before creating the release tag.
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      draft:
+        description: Create the GitHub Release as a draft instead of publishing immediately.
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the GitHub Release as a prerelease.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate release branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" != "branch" ]]; then
+            echo "release-prep must run from a branch ref" >&2
+            exit 1
+          fi
+
+          git diff --quiet
+          git diff --cached --quiet
+
+      - name: Validate changelog and prepare release notes
+        id: changelog
+        run: |
+          node scripts/release/validate-changelog.mjs \
+            --bump "${{ inputs.bump }}" \
+            --notes-output "$RUNNER_TEMP/release-notes.md" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Bump release version
+        id: bump
+        run: node scripts/release/bump-version.mjs --bump "${{ inputs.bump }}" --github-output "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            crates/maabarium-core/Cargo.toml \
+            crates/maabarium-cli/Cargo.toml \
+            crates/maabarium-desktop/Cargo.toml \
+            crates/maabarium-desktop/package.json \
+            crates/maabarium-desktop/tauri.conf.json
+
+          git commit -m "release: prepare ${{ steps.bump.outputs.release_tag }}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create release tag and GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RELEASE_TAG="${{ steps.bump.outputs.release_tag }}"
+          RELEASE_TITLE="Maabarium Desktop v${{ steps.bump.outputs.next_version }}"
+
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 && {
+            echo "Release $RELEASE_TAG already exists" >&2
+            exit 1
+          }
+
+          args=(
+            release create "$RELEASE_TAG"
+            --target "${{ steps.commit.outputs.head_sha }}"
+            --title "$RELEASE_TITLE"
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          )
+
+          if [[ "${{ inputs.draft }}" == "true" ]]; then
+            args+=(--draft)
+          fi
+
+          if [[ "${{ inputs.prerelease }}" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+
+          gh "${args[@]}"

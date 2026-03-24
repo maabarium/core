@@ -47,6 +47,7 @@ Configure the desktop app with:
 Recommended layout when publishing to R2:
 
 ```text
+https://downloads.example.com/install.sh
 https://downloads.example.com/latest.json
 https://downloads.example.com/darwin-aarch64/Maabarium%20Console.app.tar.gz
 https://downloads.example.com/darwin-aarch64/Maabarium%20Console.app.tar.gz.sig
@@ -85,13 +86,46 @@ The generated manifest is written to:
 crates/maabarium-desktop/release/latest.json
 ```
 
+Generate the matching bootstrap installer script from the same base URL metadata:
+
+```bash
+node scripts/release/generate-install-script.mjs \
+  --base-url https://downloads.example.com \
+  --output crates/maabarium-desktop/release/install.sh
+```
+
 ## GitHub Actions Release Job
 
-The workflow at `.github/workflows/desktop-release-r2.yml` builds a signed macOS updater bundle and publishes:
+The release system now has two layers:
+
+- `.github/workflows/release-prep.yml` is the authoritative manual entry point. It accepts a required semver bump (`patch`, `minor`, or `major`), updates the version-bearing files, commits that change back to the selected branch, and creates the GitHub Release plus the `desktop-v*` tag.
+- `.github/workflows/desktop-release-r2.yml` reacts to published or prereleased GitHub Releases and builds a signed macOS updater bundle from the release tag. It can still be run manually with `workflow_dispatch` when you need to republish an existing tag.
+
+The desktop publishing workflow publishes:
 
 - updater bundle
 - updater signature
 - `latest.json`
+- `install.sh`
+
+and also uploads those artifacts to the matching GitHub Release before syncing the updater files to Cloudflare R2.
+
+### Release-Prep Inputs
+
+- `bump`: required `patch | minor | major`
+- `draft`: optional boolean
+- `prerelease`: optional boolean
+
+The semver level is intentionally explicit. The workflow does not try to infer major, minor, or patch from commit messages or file diffs.
+
+### Release-Prep Flow
+
+1. Run `release-prep` from the branch you want to release.
+2. The workflow validates `CHANGELOG.md`, uses the `Unreleased` section as the GitHub Release notes, and requires explicit `### Breaking Changes` entries for major releases.
+3. The workflow bumps versions in Cargo metadata, the desktop package manifest, and `tauri.conf.json`.
+4. It commits the bump back to the branch.
+5. It creates the GitHub Release, which also creates the `desktop-vX.Y.Z` tag.
+6. Publishing that Release triggers `desktop-release-r2`, which builds and publishes the signed updater artifacts plus the generated `install.sh`.
 
 to Cloudflare R2.
 
@@ -116,17 +150,24 @@ Example values:
 
 ## Triggering a Release
 
-The workflow runs on:
+Recommended path:
 
-- manual dispatch
-- tags matching `desktop-v*`
+1. Run `release-prep` from GitHub Actions.
+2. Update `CHANGELOG.md` under `## [Unreleased]` with the notes for that release.
+3. Choose the semver bump.
+4. Let the created GitHub Release trigger `desktop-release-r2` automatically.
 
-Example:
+Fresh installs can then use:
 
 ```bash
-git tag desktop-v0.1.0
-git push origin desktop-v0.1.0
+curl -fsSL https://downloads.example.com/install.sh | bash
 ```
+
+The generated installer reads `latest.json` at runtime, selects the correct macOS architecture bundle, and installs the downloaded `.app` into `/Applications`.
+
+Manual fallback:
+
+- Run `desktop-release-r2` with `workflow_dispatch` and provide an existing `release_tag` if you need to rebuild or republish a release without generating a new version.
 
 ## Important Limitation
 

@@ -67,6 +67,104 @@ function latestDiscoveryQuery(experiment: PersistedExperiment): string | null {
   return query && query.length > 0 ? query : null;
 }
 
+function isThinResearchSummary(summary: string): boolean {
+  const lowered = summary.toLowerCase();
+
+  return (
+    lowered.includes("no patch") ||
+    lowered.includes("no patch is generated") ||
+    lowered.includes("no patch generated") ||
+    lowered.includes("no existing evidence") ||
+    lowered.includes("insufficient evidence") ||
+    lowered.includes("initial research brief created")
+  );
+}
+
+function buildSourceHighlight(experiment: PersistedExperiment): string | null {
+  const sources = experiment.research?.sources ?? [];
+  if (sources.length === 0) {
+    return null;
+  }
+
+  const preferredSources = sources.some((source) => source.verified)
+    ? sources.filter((source) => source.verified)
+    : sources;
+  const highlights = preferredSources.slice(0, 3).map((source) => {
+    const title = source.title || source.label || formatSourceHost(source);
+    const verificationLabel = source.verified ? "verified" : "discovered";
+    return `${title} (${formatSourceHost(source)}, ${verificationLabel})`;
+  });
+
+  if (highlights.length === 0) {
+    return null;
+  }
+
+  return `Top source signals: ${highlights.join("; ")}.`;
+}
+
+function buildQueryTraceHighlight(
+  experiment: PersistedExperiment,
+): string | null {
+  const traces = experiment.research?.queryTraces ?? [];
+  if (traces.length === 0) {
+    return null;
+  }
+
+  const latestTrace = traces[traces.length - 1];
+  const provider = formatQueryTraceProvider(latestTrace.provider);
+  const base = `${provider} ran ${formatCountLabel(traces.length, "discovery query")}; the latest returned ${formatCountLabel(latestTrace.resultCount, "result")} in ${latestTrace.latencyMs}ms.`;
+  const error = formatQueryTraceError(latestTrace.error);
+
+  return error ? `${base} Latest issue: ${error}.` : base;
+}
+
+function buildResearchBriefing(experiment: PersistedExperiment): string[] {
+  const paragraphs: string[] = [];
+  const proposalSummary = experiment.proposal_summary.trim();
+  const discoveryQuery = latestDiscoveryQuery(experiment);
+  const sources = experiment.research?.sources ?? [];
+  const citations = experiment.research?.citations ?? [];
+  const verifiedCount = sources.filter((source) => source.verified).length;
+
+  if (proposalSummary && !isThinResearchSummary(proposalSummary)) {
+    paragraphs.push(proposalSummary);
+  }
+
+  if (discoveryQuery) {
+    paragraphs.push(`Research focus: ${discoveryQuery}.`);
+  }
+
+  if (sources.length > 0) {
+    const evidenceState =
+      verifiedCount > 0
+        ? `${verifiedCount} of ${sources.length} discovered or cited source URLs were successfully verified during the run.`
+        : `${sources.length} candidate sources were gathered, but none of their URLs were successfully verified during the run.`;
+    paragraphs.push(evidenceState);
+  }
+
+  const sourceHighlight = buildSourceHighlight(experiment);
+  if (sourceHighlight) {
+    paragraphs.push(sourceHighlight);
+  }
+
+  const queryTraceHighlight = buildQueryTraceHighlight(experiment);
+  if (queryTraceHighlight) {
+    paragraphs.push(queryTraceHighlight);
+  }
+
+  if (citations.length === 0 && sources.length > 0) {
+    paragraphs.push(
+      "No inline citations were written into a persisted research note during this run, so the evidence remains exploratory rather than grounded in an applied markdown patch.",
+    );
+  }
+
+  if (proposalSummary && isThinResearchSummary(proposalSummary)) {
+    paragraphs.push(`Run note: ${proposalSummary}`);
+  }
+
+  return paragraphs.length > 0 ? paragraphs : ["No research summary recorded."];
+}
+
 function buildResearchMarkdown(experiment: PersistedExperiment) {
   const createdAt = formatExperimentTimestamp(experiment.created_at);
   const providerSummary = summarizeResearchProviders(experiment);
@@ -74,6 +172,7 @@ function buildResearchMarkdown(experiment: PersistedExperiment) {
     experiment.research?.queryTraces.filter((trace) =>
       isScraperDiscoveryError(trace.error),
     ).length ?? 0;
+  const summaryParagraphs = buildResearchBriefing(experiment);
   const lines = [
     `# Research Experiment ${experiment.id}`,
     "",
@@ -87,8 +186,7 @@ function buildResearchMarkdown(experiment: PersistedExperiment) {
     "",
     "## Summary",
     "",
-    experiment.proposal_summary || "No research summary recorded.",
-    "",
+    ...summaryParagraphs.flatMap((paragraph) => [paragraph, ""]),
   ];
 
   if (experiment.research?.sources.length) {
@@ -171,6 +269,9 @@ export function ResearchEvidenceCard({
   const discoveryQuery = latestResearchExperiment
     ? latestDiscoveryQuery(latestResearchExperiment)
     : null;
+  const summaryParagraphs = latestResearchExperiment
+    ? buildResearchBriefing(latestResearchExperiment)
+    : [];
 
   return (
     <GlassCard title="Research Evidence" icon={Search} className="h-full">
@@ -243,9 +344,15 @@ export function ResearchEvidenceCard({
                 </div>
               </div>
             ) : null}
-            <div className="mt-3 text-sm text-slate-300">
-              {latestResearchExperiment.proposal_summary ||
-                "No research summary recorded."}
+            <div className="mt-3 space-y-2">
+              {summaryParagraphs.map((paragraph, index) => (
+                <div
+                  key={`${latestResearchExperiment.id}-summary-${index}`}
+                  className="text-sm leading-relaxed text-slate-300"
+                >
+                  {paragraph}
+                </div>
+              ))}
             </div>
             <div className="mt-2 text-[11px] text-slate-500">
               Captured{" "}

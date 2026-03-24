@@ -2,12 +2,18 @@ name: desktop-release-r2
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "desktop-v*"
+    inputs:
+      release_tag:
+        description: Optional existing release tag to publish from during a manual run.
+        required: false
+        type: string
+  release:
+    types:
+      - published
+      - prereleased
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   macos-r2-release:
@@ -22,7 +28,28 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
       AWS_EC2_METADATA_DISABLED: "true"
     steps:
+      - name: Resolve release context
+        id: release-context
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+            echo "upload_release=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.release_tag || '' }}" ]]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+            echo "ref=refs/tags/${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+            echo "upload_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            echo "upload_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release-context.outputs.ref }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -107,13 +134,38 @@ jobs:
             --output "$RELEASE_DIR/latest.json" \
             --platform "$PLATFORM_KEY=$PLATFORM_KEY/$BUNDLE_NAME"
 
+      - name: Generate install.sh from updater metadata base URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/scripts/release/generate-install-script.mjs" \
+            --base-url "$MAABARIUM_UPDATE_BASE_URL" \
+            --output "$GITHUB_WORKSPACE/crates/maabarium-desktop/release/install.sh"
+          chmod +x "$GITHUB_WORKSPACE/crates/maabarium-desktop/release/install.sh"
+
       - name: Upload release artifacts to workflow
         uses: actions/upload-artifact@v4
         with:
           name: desktop-release-r2-macos
           path: |
             crates/maabarium-desktop/release/latest.json
+            crates/maabarium-desktop/release/install.sh
             crates/maabarium-desktop/release/staging/**
+
+      - name: Upload desktop artifacts to GitHub Release
+        if: steps.release-context.outputs.upload_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
+          mapfile -t release_assets < <(find "$DESKTOP_DIR/release/staging" -type f | sort)
+          gh release upload "${{ steps.release-context.outputs.tag }}" \
+            "$DESKTOP_DIR/release/latest.json" \
+            "$DESKTOP_DIR/release/install.sh" \
+            "${release_assets[@]}" \
+            --clobber
 
       - name: Publish bundles and latest.json to Cloudflare R2
         shell: bash
@@ -122,3 +174,4 @@ jobs:
           DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
           aws s3 sync "$DESKTOP_DIR/release/staging/" "s3://$R2_BUCKET/" --delete --endpoint-url "$R2_ENDPOINT"
           aws s3 cp "$DESKTOP_DIR/release/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "$DESKTOP_DIR/release/install.sh" "s3://$R2_BUCKET/install.sh" --endpoint-url "$R2_ENDPOINT" --content-type "text/x-shellscript; charset=utf-8"

@@ -28,8 +28,13 @@ use tracing::{error, info, warn};
 use tracing_subscriber::prelude::*;
 use url::Url;
 
+mod maintenance;
 mod setup;
 
+use crate::maintenance::{
+    cleanup_experiment_branches, inspect_experiment_branch_inventory,
+    ExperimentBranchCleanupResult, ExperimentBranchInventory,
+};
 use crate::setup::{
     build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
     load_desktop_setup, save_desktop_setup as persist_desktop_setup,
@@ -260,10 +265,18 @@ struct ConsoleState {
     updater: UpdaterConfigurationState,
     desktop_setup: DesktopSetupState,
     readiness_items: Vec<ReadinessItem>,
+    experiment_branch_inventory: Option<ExperimentBranchInventory>,
     ollama: OllamaStatus,
     experiments: Vec<PersistedExperiment>,
     proposals: Vec<PersistedProposal>,
     logs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExperimentBranchCleanupResponse {
+    snapshot: ConsoleState,
+    result: ExperimentBranchCleanupResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -449,6 +462,7 @@ fn main() {
             set_provider_api_key,
             install_ollama,
             start_ollama,
+            cleanup_experiment_branches_command,
             start_engine,
             stop_engine,
             open_log_file,
@@ -1065,6 +1079,18 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         &state.db_path,
         &state.log_path,
     );
+    let experiment_branch_inventory = resolved_console_workspace_path(
+        &run_state,
+        blueprint_result.as_ref().ok(),
+        &desktop_setup,
+    )
+    .and_then(|workspace_path| match inspect_experiment_branch_inventory(&workspace_path) {
+        Ok(inventory) => Some(inventory),
+        Err(error) => {
+            warn!(workspace = %workspace_path.display(), %error, "Failed to inspect experiment branch inventory");
+            None
+        }
+    });
 
     match blueprint_result {
         Ok(blueprint) => ConsoleState {
@@ -1083,6 +1109,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             updater,
             desktop_setup,
             readiness_items,
+            experiment_branch_inventory: experiment_branch_inventory.clone(),
             ollama,
             experiments,
             proposals,
@@ -1104,6 +1131,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             updater,
             desktop_setup,
             readiness_items,
+            experiment_branch_inventory,
             ollama,
             experiments,
             proposals,
@@ -1653,6 +1681,29 @@ fn current_run_state(state: &AppState) -> LiveRunState {
     }
 }
 
+fn resolved_console_workspace_path(
+    run_state: &LiveRunState,
+    blueprint: Option<&BlueprintFile>,
+    desktop_setup: &DesktopSetupState,
+) -> Option<PathBuf> {
+    run_state
+        .workspace_path
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            desktop_setup
+                .workspace_path
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| {
+            blueprint
+                .map(|blueprint| blueprint.domain.repo_path.trim())
+                .filter(|value| !value.is_empty() && *value != ".")
+        })
+        .map(PathBuf::from)
+}
+
 fn update_run_state<F>(state: &AppState, updater: F)
 where
     F: FnOnce(&mut MutableRunState),
@@ -1905,6 +1956,26 @@ fn install_ollama(state: tauri::State<'_, AppState>) -> Result<ConsoleState, Str
 fn start_ollama(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
     start_ollama_runtime()?;
     Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn cleanup_experiment_branches_command(
+    state: tauri::State<'_, AppState>,
+    older_than_months: u32,
+    dry_run: bool,
+) -> Result<ExperimentBranchCleanupResponse, String> {
+    let blueprint_path = current_blueprint_path(&state);
+    let blueprint = BlueprintFile::load(&blueprint_path).ok();
+    let run_state = current_run_state(&state);
+    let desktop_setup = hydrated_desktop_setup(&state);
+    let workspace_path = resolved_console_workspace_path(&run_state, blueprint.as_ref(), &desktop_setup)
+        .ok_or_else(|| "Choose a git-backed workspace before managing experiment branches".to_owned())?;
+    let result = cleanup_experiment_branches(&workspace_path, older_than_months, dry_run)?;
+
+    Ok(ExperimentBranchCleanupResponse {
+        snapshot: build_console_state(&state),
+        result,
+    })
 }
 
 fn sample_hardware_telemetry(state: &AppState) -> HardwareTelemetry {

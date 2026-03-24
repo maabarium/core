@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, info_span, instrument, warn};
+use uuid::Uuid;
 
 pub type EngineProgressReporter = Arc<dyn Fn(EngineProgressUpdate) + Send + Sync>;
 
@@ -53,6 +54,11 @@ pub struct Engine {
     persistence: Persistence,
     cancel: CancellationToken,
     progress_reporter: Option<EngineProgressReporter>,
+    run_id: String,
+}
+
+fn generate_run_id() -> String {
+    Uuid::new_v4().simple().to_string()[..8].to_owned()
 }
 
 fn build_proposal_context(bp: &BlueprintFile, iteration: u64, baseline: f64) -> String {
@@ -119,6 +125,7 @@ impl Engine {
             persistence,
             cancel,
             progress_reporter: config.progress_reporter.clone(),
+            run_id: generate_run_id(),
             config,
         })
     }
@@ -168,7 +175,8 @@ impl Engine {
             .unwrap_or(0.0);
 
         info!(
-            "Engine starting: blueprint={bp_name}, max_iterations={max_iter}, baseline={baseline:.4}"
+            "Engine starting: blueprint={bp_name}, run_id={}, max_iterations={max_iter}, baseline={baseline:.4}",
+            self.run_id,
         );
         self.report_progress(
             EnginePhase::Starting,
@@ -252,7 +260,7 @@ impl Engine {
 
             let branch = match tokio::select! {
                 _ = self.cancel.cancelled() => Err(EngineError::Cancelled),
-                result = self.git.create_experiment_branch(iteration) => result.map_err(EngineError::from),
+                result = self.git.create_experiment_branch(&self.run_id, iteration) => result.map_err(EngineError::from),
             } {
                 Ok(b) => b,
                 Err(EngineError::Cancelled) => {
