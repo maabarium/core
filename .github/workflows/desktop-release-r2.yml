@@ -1,4 +1,5 @@
 name: desktop-release-r2
+run-name: desktop-release-r2
 
 on:
   workflow_dispatch:
