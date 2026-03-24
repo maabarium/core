@@ -9,6 +9,8 @@ This repository is a Rust workspace for a local-first autonomous research loop. 
 - SQLite persistence and shared tracing/log files
 - blueprint-driven runtime behavior
 
+Review [docs/ROADMAP.md](docs/ROADMAP.md) early if you are proposing a new capability, workflow surface, or product-direction change. It is the clearest public view of where the project should become more useful over time.
+
 If a proposed change would reintroduce stale historical assumptions, update the active docs as part of the change or raise the design decision explicitly.
 
 ## Workspace Layout
@@ -85,8 +87,8 @@ When a change affects project behavior, update the relevant active docs:
 - `README.md` for top-level user/developer workflow changes
 - `docs/ARCHITECTURE.md` for runtime or architecture changes
 - `docs/BLUEPRINT_SPEC.md` for blueprint schema changes
-- `.dev/implementation-parity.md` when parity status changes materially
-- `.dev/implementation-remaining-items.md` when one of the remaining closure items advances, is deferred, or is closed
+- `.dev/complete/implementation-parity.md` when parity status changes materially
+- `.dev/complete/implementation-remaining-items.md` when one of the remaining closure items advances, is deferred, or is closed
 
 ## Adding Evaluators or Providers
 
@@ -110,3 +112,10 @@ For new LLM providers:
 - Call out any documentation updates.
 - Mention validation performed, ideally with the exact commands run.
 - Note follow-up work explicitly instead of leaving hidden TODOs in behavior-critical paths.
+
+## Issue Intake
+
+- Use the GitHub issue templates under `.github/ISSUE_TEMPLATE/` so roadmap ideas and contributor reports arrive with enough context to act on.
+- Use the roadmap idea template for future capabilities, product-direction changes, and UX/workflow proposals.
+- Use the contributor report template for bugs, regressions, and contributor workflow problems.
+- If an issue changes project behavior, keep the linked roadmap and active docs in sync as the work lands.

@@ -1,0 +1,84 @@
+name: Contributor Report
+description: Report a bug, regression, or contributor-facing workflow problem.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for reproducible defects, regressions, or contributor workflow problems.
+
+        Before filing:
+        - Review CONTRIBUTING.md for expected validation commands and documentation responsibilities.
+        - If the issue is really a product idea or future capability request, use the Roadmap Idea template instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken, and why does it matter?
+      placeholder: A concise description of the failure or regression.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Steps
+      description: Provide the smallest reliable set of steps to reproduce the issue.
+      placeholder: |
+        1. Open ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What happened in practice? Include error text, screenshots, or logs when relevant.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of Maabarium is primarily affected?
+      options:
+        - Core engine / evaluators
+        - CLI
+        - Desktop app / Tauri shell
+        - Desktop web UI
+        - Blueprints / workflow templates
+        - Docs / contributor workflow
+        - Packaging / release
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation Attempted
+      description: Which commands or checks did you run while confirming the issue?
+      placeholder: |
+        cargo test
+        cargo test -p maabarium-core --test engine_loop
+        cd crates/maabarium-desktop && pnpm build
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, relevant runtime details, and whether this is local development, CLI, or desktop packaging.
+      placeholder: macOS 15.x, local dev checkout, desktop app in pnpm tauri dev
+  - type: textarea
+    id: docs
+    attributes:
+      label: Docs Impact
+      description: Which docs appear outdated or will likely need updates if this issue is fixed?
+      placeholder: README.md, docs/ARCHITECTURE.md, docs/BLUEPRINT_SPEC.md, .dev/complete/... or none

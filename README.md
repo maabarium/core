@@ -10,6 +10,8 @@
 
 Maabarium is a Rust workspace for running blueprint-driven improvement loops across code, prompts, product work, and research.
 
+The project is inspired by Andrej Karpathy's [Autoresearch](https://github.com/karpathy/autoresearch) pattern and adapts that keep-winner loop into a Rust-first, local-first workflow engine.
+
 At a high level, each run follows the same keep-winner pattern:
 
 1. load a blueprint
@@ -138,10 +140,17 @@ pnpm tauri dev
 - [docs/BLUEPRINT_SPEC.md](docs/BLUEPRINT_SPEC.md)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/DESKTOP_PACKAGING.md](docs/DESKTOP_PACKAGING.md)
+- [docs/ROADMAP.md](docs/ROADMAP.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md)
 - [.dev/complete/implementation-parity.md](.dev/complete/implementation-parity.md)
 - [.dev/complete/implementation-remaining-items.md](.dev/complete/implementation-remaining-items.md)
+
+## Contributors
+
+If you want to contribute to Maabarium, start with [CONTRIBUTING.md](CONTRIBUTING.md). It covers repository scope, validation commands, documentation expectations, and the review standards contributors should follow.
+
+For product direction and future capability ideas, see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Validation
 

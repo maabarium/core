@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contribution Guide
+    url: https://github.com/kabudu/maabarium/blob/main/CONTRIBUTING.md
+    about: Read repository expectations, validation commands, and documentation responsibilities before filing implementation work.
+  - name: Product Roadmap
+    url: https://github.com/kabudu/maabarium/blob/main/docs/ROADMAP.md
+    about: Review current product direction and opportunity areas before proposing major new features.

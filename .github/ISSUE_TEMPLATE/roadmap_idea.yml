@@ -1,0 +1,75 @@
+name: Roadmap Idea
+description: Propose a future capability, workflow improvement, or product direction change.
+title: "[Idea]: "
+labels:
+  - enhancement
+  - roadmap
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for product ideas and future capabilities.
+
+        Before filing:
+        - Review docs/ROADMAP.md to see whether the idea already fits an existing direction.
+        - Review CONTRIBUTING.md if the proposal will require architectural, blueprint, or documentation changes.
+  - type: textarea
+    id: opportunity
+    attributes:
+      label: Opportunity
+      description: What user or operator problem is worth solving?
+      placeholder: Describe the user pain, operational friction, or quality gap.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Capability
+      description: What should Maabarium do?
+      placeholder: Describe the workflow, UI, or runtime capability you want to see.
+    validations:
+      required: true
+  - type: dropdown
+    id: roadmap_area
+    attributes:
+      label: Closest Roadmap Area
+      description: Which roadmap direction does this idea best align with?
+      options:
+        - Guided setup and readiness
+        - Run control and operator confidence
+        - Research quality and source trust
+        - Desktop decision-making UX
+        - Reusable workflow intelligence
+        - Deeper evaluation and quality signals
+        - Collaboration, review, and sharing
+        - Adaptive automation and runtime routing
+        - Trust, safety, and governance
+        - Ecosystem and extension surface
+        - New area not yet captured
+    validations:
+      required: true
+  - type: textarea
+    id: user_value
+    attributes:
+      label: User Value
+      description: Why is this worth building now or soon?
+      placeholder: Explain the expected outcome in quality, speed, trust, or contributor leverage.
+    validations:
+      required: true
+  - type: textarea
+    id: implementation_shape
+    attributes:
+      label: Likely Implementation Shape
+      description: Which areas of the repository would this touch?
+      placeholder: Core engine, desktop UI, blueprints, evaluator registry, docs, packaging, etc.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and Trade-offs
+      description: What complexity, performance, UX, or security risks should be considered?
+  - type: textarea
+    id: success
+    attributes:
+      label: Success Signals
+      description: How would we know the idea delivered value?
+      placeholder: Better setup completion rate, fewer failed runs, clearer review decisions, lower cost, etc.
