@@ -66,9 +66,13 @@ function statusPasses(summary, caseEntry) {
     const uniqueModels = new Set(summary.models);
     return (
       uniqueProviders.has("openai-compat") &&
-      [...uniqueModels].some((model) => model.startsWith("grok-4-1-fast-reasoning")) &&
       [...uniqueModels].some((model) =>
-        model.startsWith(process.env.MAABARIUM_DEEPSEEK_MODEL || "deepseek-chat"),
+        model.startsWith("grok-4-1-fast-reasoning"),
+      ) &&
+      [...uniqueModels].some((model) =>
+        model.startsWith(
+          process.env.MAABARIUM_DEEPSEEK_MODEL || "deepseek-chat",
+        ),
       )
     );
   }
