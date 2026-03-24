@@ -4,6 +4,11 @@
 
 <h1 align="center">Maabarium</h1>
 
+<p align="center">
+	<a href="https://github.com/maabarium/core/actions/workflows/ci.yml"><img src="https://github.com/maabarium/core/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" /></a>
+	<a href="https://www.apache.org/licenses/LICENSE-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0" /></a>
+</p>
+
 <p align="center"><strong>Local-first autonomous research and evaluation workflows in Rust.</strong></p>
 
 <p align="center">Council-driven proposals • Git-isolated experiments • SQLite persistence • Tauri desktop console</p>
