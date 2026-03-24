@@ -527,15 +527,40 @@ export function ensureLocalPrerequisites() {
   }
 }
 
+function hasStoredProviderKey(provider) {
+  const result = spawnSync(
+    "cargo",
+    ["run", "-p", "maabarium-cli", "--", "keys", "get", provider],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      encoding: "utf8",
+    },
+  );
+
+  if (result.status !== 0) {
+    return false;
+  }
+
+  const output = `${result.stdout || ""}${result.stderr || ""}`;
+  return !output.includes(`No API key stored for provider: ${provider}`);
+}
+
 export function ensureRemotePrerequisites() {
-  if (!process.env.XAI_API_KEY || !process.env.XAI_API_KEY.trim()) {
+  if (
+    (!process.env.XAI_API_KEY || !process.env.XAI_API_KEY.trim()) &&
+    !hasStoredProviderKey("xai")
+  ) {
     throw new Error(
-      "XAI_API_KEY must be exported for remote or mixed runtime validation.",
+      "xAI credentials must be available via XAI_API_KEY or `maabarium keys set xai` for remote or mixed runtime validation.",
     );
   }
-  if (!process.env.DEEPSEEK_API_KEY || !process.env.DEEPSEEK_API_KEY.trim()) {
+  if (
+    (!process.env.DEEPSEEK_API_KEY || !process.env.DEEPSEEK_API_KEY.trim()) &&
+    !hasStoredProviderKey("deepseek")
+  ) {
     throw new Error(
-      "DEEPSEEK_API_KEY must be exported for remote or mixed runtime validation.",
+      "DeepSeek credentials must be available via DEEPSEEK_API_KEY or `maabarium keys set deepseek` for remote or mixed runtime validation.",
     );
   }
 }

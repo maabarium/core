@@ -1,6 +1,7 @@
 import { FileText, Search, SlidersHorizontal } from "lucide-react";
 import type { AvailableBlueprint, WizardTemplate } from "../../types/console";
 import { formatBlueprintGroup } from "../../lib/blueprints";
+import { formatCountLabel } from "../../lib/formatters";
 import type {
   BlueprintDensity,
   GroupedBlueprints,
@@ -174,7 +175,9 @@ export function WorkflowLibraryCard({
                       {isCollapsed ? "+" : "-"} {group.group}
                     </button>
                     <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-widest text-slate-600">
-                      <span>{group.blueprints.length} entries</span>
+                      <span>
+                        {formatCountLabel(group.blueprints.length, "entry")}
+                      </span>
                       <span>{isCollapsed ? "collapsed" : "expanded"}</span>
                     </div>
                   </div>

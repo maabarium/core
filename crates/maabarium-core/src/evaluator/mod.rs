@@ -115,6 +115,7 @@ impl EvaluatorRegistry {
             }
             BuiltinEvaluatorKind::Research => Ok(Arc::new(ResearchEvaluator::new(
                 blueprint.metrics.metrics.clone(),
+                Some(blueprint.blueprint.description.clone()),
             ))),
             BuiltinEvaluatorKind::Lora => Ok(Arc::new(LoraEvaluator::new(
                 blueprint.metrics.metrics.clone(),

@@ -41,7 +41,7 @@ Apply the "Design for Scale" and "Operational Rigor" principles used at Big Tech
 - **Security-Sensitive Areas:** Treat sandboxing, subprocess execution, secret storage, updater/release wiring, persistence, git/worktree mutation, and research-provider integration as security-sensitive. Favor explicit error handling, auditability, and least surprise.
 - **Licensing:** The repository is Apache 2.0 licensed. Keep documentation, templates, and package metadata consistent with that license.
 - **Plan Management:** All implementation plans should be placed in the `.dev/` directory with clear naming (e.g., `.dev/implementation.md`) and linked in the relevant code comments. Also ensure that all completed items are marked as completed as the implementation progresses.
-- **Core Principles:** Security, Performance, UX, optimal resource utilization, visual stunningness and Maintainability are the top priorities. Always consider trade-offs in these dimensions when making design decisions.
+- **Core Principles:** Security, Performance, UX, optimal resource utilization, visual stunningness and Maintainability are the top priorities. Always consider trade-offs in these dimensions when making design decisions. When creating charts, use a reliable, battle-tested charting library like Chart.js rather than hand-rolling your own solution.
 
 ## 4. Operational Guardrails
 

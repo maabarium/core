@@ -19,3 +19,6 @@ tracing-appender = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 secrecy = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

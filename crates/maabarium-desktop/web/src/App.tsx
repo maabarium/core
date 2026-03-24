@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -11,7 +11,6 @@ import {
   X,
 } from "lucide-react";
 import appLogo from "../../icons/maabariumLogo.png";
-import { AreaComparisonChart } from "./components/charts/AreaComparisonChart";
 import { MiniSparkline } from "./components/charts/MiniSparkline";
 import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { AboutModal } from "./components/console/AboutModal";
@@ -61,6 +60,11 @@ import type {
 
 const SCRAPER_DISCOVERY_MARKER = "[scraper_discovery]";
 const ABOUT_MENU_EVENT = "maabarium://open-about";
+const AreaComparisonChart = lazy(() =>
+  import("./components/charts/AreaComparisonChart").then((module) => ({
+    default: module.AreaComparisonChart,
+  })),
+);
 
 function isScraperDiscoveryError(error: string | null | undefined): boolean {
   return Boolean(error?.includes(SCRAPER_DISCOVERY_MARKER));
@@ -523,6 +527,10 @@ export default function App() {
         0,
       ),
     }),
+    [selectedAnalytics],
+  );
+  const latestAnalyticsBucket = useMemo(
+    () => selectedAnalytics[selectedAnalytics.length - 1] ?? null,
     [selectedAnalytics],
   );
 
@@ -1491,8 +1499,7 @@ export default function App() {
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div>
                     <div className="text-sm font-semibold text-slate-100">
-                      One chart, two signals: persisted experiments and traced
-                      token usage.
+                      Persisted experiments and traced token usage.
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
                       {analyticsRange === "daily"
@@ -1522,7 +1529,40 @@ export default function App() {
                   </div>
                 </div>
 
-                <AreaComparisonChart buckets={selectedAnalytics} />
+                <div className="-mx-5">
+                  <Suspense
+                    fallback={
+                      <div className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-4">
+                        <div className="h-72 w-full animate-pulse rounded-lg bg-white/5" />
+                      </div>
+                    }
+                  >
+                    <AreaComparisonChart buckets={selectedAnalytics} />
+                  </Suspense>
+                </div>
+
+                {latestAnalyticsBucket ? (
+                  <div className="rounded-lg border border-white/10 bg-slate-950/60 px-4 py-3">
+                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                      Latest Bucket
+                    </div>
+                    <div className="mt-2 flex flex-col gap-2 text-sm text-slate-200 md:flex-row md:items-center md:justify-between">
+                      <div className="font-semibold text-slate-100">
+                        {latestAnalyticsBucket.label}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.16em] text-slate-400">
+                        <span>
+                          {latestAnalyticsBucket.experiments} experiments
+                        </span>
+                        <span>•</span>
+                        <span>
+                          {formatTokenUsage(latestAnalyticsBucket.tokenUsage)}{" "}
+                          tokens
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
@@ -1571,12 +1611,19 @@ export default function App() {
                 onOpenLogFile={() => void openLogFile()}
               />
 
-              <div className="grid grid-cols-1 gap-6 items-stretch xl:grid-cols-3 lg:flex-1">
-                <HardwareHeatCard hardwareTelemetry={hardwareTelemetry} />
+              <div className="lg:flex-1">
                 <ResearchEvidenceCard
                   latestResearchExperiment={latestResearchExperiment}
                 />
-                <LoraEvidenceCard latestLoraExperiment={latestLoraExperiment} />
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 items-stretch xl:grid-cols-3 lg:flex-1">
+                <HardwareHeatCard hardwareTelemetry={hardwareTelemetry} />
+                <div className="xl:col-span-2 h-full">
+                  <LoraEvidenceCard
+                    latestLoraExperiment={latestLoraExperiment}
+                  />
+                </div>
               </div>
             </div>
 

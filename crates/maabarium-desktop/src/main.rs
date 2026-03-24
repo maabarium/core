@@ -1,5 +1,5 @@
 use anyhow::Context;
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate};
 use git2::{IndexAddOption, Repository, Signature};
 use maabarium_core::blueprint::{
     AgentDef, AgentsConfig, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintMeta,
@@ -1037,11 +1037,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             .unwrap_or_else(|_| (Vec::new(), empty_run_analytics(), Vec::new()));
     let logs = read_recent_log_lines_from_path(&state.log_path, 40).unwrap_or_default();
     let updater = describe_updater_configuration(&desktop_setup);
-    let brave_search_configured = SecretStore::new()
-        .get_api_key("brave")
-        .ok()
-        .flatten()
-        .is_some();
+    let brave_search_configured = desktop_setup.brave_search_configured;
     let active_research_workflow = blueprint_result
         .as_ref()
         .ok()
@@ -1143,18 +1139,7 @@ fn merge_saved_local_models_into_ollama(setup: &DesktopSetupState, ollama: &mut 
 }
 
 fn hydrated_desktop_setup(state: &AppState) -> DesktopSetupState {
-    let mut setup = load_desktop_setup(&state.settings_path);
-    let secret_store = SecretStore::new();
-    for provider in &mut setup.remote_providers {
-        let has_secret = secret_store
-            .get_api_key(&provider.provider_id)
-            .ok()
-            .flatten()
-            .is_some();
-        provider.configured = has_secret && provider.model_name.is_some();
-    }
-
-    setup
+    load_desktop_setup(&state.settings_path)
 }
 
 fn describe_plugin_runtime(blueprint: &BlueprintFile) -> Option<PluginRuntimeState> {
@@ -1420,11 +1405,11 @@ fn empty_run_analytics() -> RunAnalytics {
 }
 
 fn build_run_analytics(experiments: &[PersistedExperiment], log_path: &Path) -> RunAnalytics {
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let experiment_dates = experiments
         .iter()
         .filter_map(|experiment| {
-            parse_timestamp(&experiment.created_at).map(|date| date.date_naive())
+            parse_timestamp_local(&experiment.created_at).map(|date| date.date_naive())
         })
         .collect::<Vec<_>>();
     let token_events = read_token_usage_events(log_path);
@@ -1439,7 +1424,7 @@ fn build_run_analytics(experiments: &[PersistedExperiment], log_path: &Path) -> 
 fn build_daily_analytics(
     today: NaiveDate,
     experiment_dates: &[NaiveDate],
-    token_events: &[(DateTime<Utc>, u64)],
+    token_events: &[(DateTime<Local>, u64)],
 ) -> Vec<AnalyticsBucket> {
     (0..7)
         .rev()
@@ -1467,7 +1452,7 @@ fn build_daily_analytics(
 fn build_weekly_analytics(
     today: NaiveDate,
     experiment_dates: &[NaiveDate],
-    token_events: &[(DateTime<Utc>, u64)],
+    token_events: &[(DateTime<Local>, u64)],
 ) -> Vec<AnalyticsBucket> {
     let current_week_start =
         today - ChronoDuration::days(i64::from(today.weekday().num_days_from_monday()));
@@ -1502,7 +1487,7 @@ fn build_weekly_analytics(
 fn build_monthly_analytics(
     today: NaiveDate,
     experiment_dates: &[NaiveDate],
-    token_events: &[(DateTime<Utc>, u64)],
+    token_events: &[(DateTime<Local>, u64)],
 ) -> Vec<AnalyticsBucket> {
     let current_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
         .expect("current month should be valid");
@@ -1544,13 +1529,13 @@ fn shift_month(year: i32, month: u32, delta: i32) -> (i32, u32) {
     (shifted_year, shifted_month as u32)
 }
 
-fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
+fn parse_timestamp_local(value: &str) -> Option<DateTime<Local>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
-        .map(|date| date.with_timezone(&Utc))
+        .map(|date| date.with_timezone(&Local))
 }
 
-fn read_token_usage_events(log_path: &Path) -> Vec<(DateTime<Utc>, u64)> {
+fn read_token_usage_events(log_path: &Path) -> Vec<(DateTime<Local>, u64)> {
     let content = std::fs::read_to_string(log_path).unwrap_or_default();
     content
         .lines()
@@ -1558,8 +1543,8 @@ fn read_token_usage_events(log_path: &Path) -> Vec<(DateTime<Utc>, u64)> {
         .collect()
 }
 
-fn parse_token_usage_event(line: &str) -> Option<(DateTime<Utc>, u64)> {
-    let timestamp = parse_timestamp(line.split_whitespace().next()?)?;
+fn parse_token_usage_event(line: &str) -> Option<(DateTime<Local>, u64)> {
+    let timestamp = parse_timestamp_local(line.split_whitespace().next()?)?;
     let marker = "tokens_used=";
     let start = line.find(marker)? + marker.len();
     let digits = line[start..]
@@ -1846,11 +1831,12 @@ fn save_desktop_setup(
     state: tauri::State<'_, AppState>,
     setup: DesktopSetupState,
 ) -> Result<ConsoleState, String> {
+    let existing = load_desktop_setup(&state.settings_path);
     let mut merged = setup;
     if merged.selected_blueprint_path.is_none() {
-        merged.selected_blueprint_path =
-            load_desktop_setup(&state.settings_path).selected_blueprint_path;
+        merged.selected_blueprint_path = existing.selected_blueprint_path;
     }
+    merged.brave_search_configured = existing.brave_search_configured;
     persist_desktop_setup(&state.settings_path, &merged)?;
     Ok(build_console_state(&state))
 }
@@ -1876,12 +1862,13 @@ fn set_provider_api_key(
     api_key: String,
 ) -> Result<ConsoleState, String> {
     let provider_id = provider_id.trim().to_owned();
+    let has_api_key = !api_key.trim().is_empty();
     if provider_id.is_empty() {
         return Err("Provider id is required".to_owned());
     }
 
     let secret_store = SecretStore::new();
-    if api_key.trim().is_empty() {
+    if !has_api_key {
         secret_store.delete_api_key(&provider_id).map_err(|error| {
             format!("Failed to clear API key for provider '{provider_id}': {error}")
         })?;
@@ -1892,6 +1879,18 @@ fn set_provider_api_key(
                 format!("Failed to store API key for provider '{provider_id}': {error}")
             })?;
     }
+
+    let mut setup = load_desktop_setup(&state.settings_path);
+    if provider_id == "brave" {
+        setup.brave_search_configured = has_api_key;
+    } else if let Some(provider) = setup
+        .remote_providers
+        .iter_mut()
+        .find(|provider| provider.provider_id == provider_id)
+    {
+        provider.configured = has_api_key && provider.model_name.is_some();
+    }
+    persist_desktop_setup(&state.settings_path, &setup)?;
 
     Ok(build_console_state(&state))
 }

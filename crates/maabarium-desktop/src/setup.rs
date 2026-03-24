@@ -47,6 +47,8 @@ pub struct DesktopSetupState {
     pub onboarding_completed: bool,
     pub runtime_strategy: Option<RuntimeStrategy>,
     pub research_search_mode: ResearchSearchMode,
+    #[serde(default)]
+    pub brave_search_configured: bool,
     pub workspace_path: Option<String>,
     pub selected_blueprint_path: Option<String>,
     pub selected_local_models: Vec<String>,
@@ -65,6 +67,7 @@ impl Default for DesktopSetupState {
             onboarding_completed: false,
             runtime_strategy: None,
             research_search_mode: ResearchSearchMode::DuckduckgoScrape,
+            brave_search_configured: false,
             workspace_path: None,
             selected_blueprint_path: None,
             selected_local_models: Vec::new(),

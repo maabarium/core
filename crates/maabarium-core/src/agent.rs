@@ -12,6 +12,8 @@ use crate::llm::{CompletionRequest, LLMProvider};
 
 const MAX_CONTEXT_FILES: usize = 3;
 const MAX_FILE_CHARS: usize = 4_000;
+const DEFAULT_PROPOSAL_MAX_TOKENS: u32 = 768;
+const COMPLEX_PROPOSAL_MAX_TOKENS: u32 = 1_536;
 
 #[derive(Debug, Clone)]
 struct FileContext {
@@ -58,6 +60,14 @@ fn research_patch_guidance(language: &str) -> &'static str {
     }
 }
 
+fn proposal_max_tokens(language: &str) -> u32 {
+    if language.eq_ignore_ascii_case("research") || language.eq_ignore_ascii_case("lora") {
+        COMPLEX_PROPOSAL_MAX_TOKENS
+    } else {
+        DEFAULT_PROPOSAL_MAX_TOKENS
+    }
+}
+
 impl Agent {
     pub fn new(def: AgentDef, llm: Arc<dyn LLMProvider>) -> Self {
         Self { def, llm }
@@ -90,8 +100,20 @@ impl Agent {
             .iter()
             .map(|file| file.path.clone())
             .collect::<HashSet<_>>();
+        let suggested_create_paths = suggest_create_paths(target_files, language);
         let files_desc = if file_contexts.is_empty() {
-            "No existing target files were found. Return an empty file_patches array and explain why in summary.".to_owned()
+            if language.eq_ignore_ascii_case("research") && !suggested_create_paths.is_empty() {
+                format!(
+                    "No existing target files were found. Create a new markdown file instead of returning an empty patch. Safe relative paths:\n{}",
+                    suggested_create_paths
+                        .iter()
+                        .map(|path| format!("- {path}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            } else {
+                "No existing target files were found. Return an empty file_patches array and explain why in summary.".to_owned()
+            }
         } else {
             file_contexts
                 .iter()
@@ -119,7 +141,7 @@ impl Agent {
             system: self.def.system_prompt.clone(),
             prompt,
             temperature: 0.2,
-            max_tokens: 512,
+            max_tokens: proposal_max_tokens(language),
         };
         let resp = self.llm.complete(&req).await?;
         parse_proposal_payload(&resp.content, &file_contexts, &allowed_paths, target_files)
@@ -759,6 +781,47 @@ fn collect_file_contexts(
     Ok(contexts)
 }
 
+fn suggest_create_paths(target_files: &[String], language: &str) -> Vec<String> {
+    let mut suggestions = Vec::new();
+
+    for pattern in target_files {
+        let Some(path) = suggest_create_path(pattern, language) else {
+            continue;
+        };
+
+        if !suggestions.contains(&path) {
+            suggestions.push(path);
+        }
+    }
+
+    suggestions
+}
+
+fn suggest_create_path(pattern: &str, language: &str) -> Option<String> {
+    let normalized = pattern.trim().replace('\\', "/");
+    let prefix = normalized
+        .split("**")
+        .next()
+        .unwrap_or(normalized.as_str())
+        .split('*')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .trim_end_matches('/');
+
+    if prefix.is_empty() {
+        return None;
+    }
+
+    let file_name = match language.to_ascii_lowercase().as_str() {
+        "research" => "research-brief.md",
+        "markdown" | "prompt" => "draft.md",
+        "lora" => "run-report.json",
+        _ => return None,
+    };
+
+    Some(format!("{prefix}/{file_name}"))
+}
+
 fn resolve_repo_root(repo_path: &str) -> Result<PathBuf, LLMError> {
     let path = PathBuf::from(repo_path);
     let resolved = if path.is_absolute() {
@@ -934,6 +997,22 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn suggests_research_creation_paths_from_targets() {
+        let suggestions = suggest_create_paths(
+            &["docs/**/*.md".into(), "research/**/*.md".into()],
+            "research",
+        );
+
+        assert_eq!(
+            suggestions,
+            vec![
+                "docs/research-brief.md".to_owned(),
+                "research/research-brief.md".to_owned()
+            ]
+        );
     }
 
     #[test]

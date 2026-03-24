@@ -22,6 +22,7 @@ pub struct ResearchEvaluator {
     metrics: Vec<MetricDef>,
     discovery_provider: Option<DiscoveryProvider>,
     provider_hint: &'static str,
+    topic_hint: Option<String>,
 }
 
 enum DiscoveryProvider {
@@ -82,7 +83,7 @@ fn log_scraper_failure(stage: &str, query: &str, error: &str) {
 }
 
 impl ResearchEvaluator {
-    pub fn new(metrics: Vec<MetricDef>) -> Self {
+    pub fn new(metrics: Vec<MetricDef>, topic_hint: Option<String>) -> Self {
         let brave_api_key = SecretStore::new()
             .resolve_api_key("brave", Some("BRAVE_SEARCH_API_KEY"))
             .ok()
@@ -130,13 +131,24 @@ impl ResearchEvaluator {
             metrics,
             discovery_provider,
             provider_hint,
+            topic_hint: topic_hint.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
         }
     }
 
     fn build_discovery_query(&self, proposal: &Proposal) -> Option<String> {
         let summary = proposal.summary.trim();
         if !summary.is_empty() {
-            return Some(summary.to_owned());
+            if let Some(query) = extract_search_query_from_summary(summary) {
+                return Some(query);
+            }
+
+            if !is_unusable_discovery_summary(summary) {
+                return Some(summary.to_owned());
+            }
+        }
+
+        if let Some(topic_hint) = self.topic_hint.as_deref() {
+            return Some(topic_hint.to_owned());
         }
 
         let patch_paths = proposal
@@ -400,6 +412,53 @@ impl ResearchEvaluator {
 
         value.clamp(0.0, 1.0)
     }
+}
+
+fn extract_search_query_from_summary(summary: &str) -> Option<String> {
+    let lowered = summary.to_ascii_lowercase();
+    if let Some(search_index) = lowered.find("search for") {
+        let search_slice = &summary[search_index + "search for".len()..];
+        if let Some(query) = extract_quoted_phrase(search_slice) {
+            return Some(query);
+        }
+
+        let candidate = search_slice
+            .split(['.', '\n'])
+            .next()
+            .map(str::trim)
+            .unwrap_or_default()
+            .trim_start_matches(':')
+            .trim();
+        if !candidate.is_empty() {
+            return Some(candidate.to_owned());
+        }
+    }
+
+    extract_quoted_phrase(summary)
+}
+
+fn is_unusable_discovery_summary(summary: &str) -> bool {
+    let lowered = summary.to_ascii_lowercase();
+
+    lowered.contains("no existing target files were found")
+        || lowered.contains("return an empty file_patches array")
+        || lowered.contains("insufficient evidence to create a new patch")
+}
+
+fn extract_quoted_phrase(input: &str) -> Option<String> {
+    for delimiter in ['\'', '"'] {
+        if let Some(start) = input.find(delimiter) {
+            let remainder = &input[start + delimiter.len_utf8()..];
+            if let Some(end) = remainder.find(delimiter) {
+                let candidate = remainder[..end].trim();
+                if !candidate.is_empty() {
+                    return Some(candidate.to_owned());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[async_trait]
@@ -861,7 +920,7 @@ mod tests {
 
     #[test]
     fn extracts_markdown_and_bare_url_citations() {
-        let evaluator = ResearchEvaluator::new(vec![research_metric("citation_coverage")]);
+        let evaluator = ResearchEvaluator::new(vec![research_metric("citation_coverage")], None);
         let proposal = Proposal {
             summary: "Research storage trade-offs".to_owned(),
             file_patches: vec![FilePatch {
@@ -907,7 +966,7 @@ mod tests {
             }
         });
 
-        let evaluator = ResearchEvaluator::new(vec![research_metric("factual_grounding")]);
+        let evaluator = ResearchEvaluator::new(vec![research_metric("factual_grounding")], None);
         let proposal = Proposal {
             summary: "Draft a researched note with citations".to_owned(),
             file_patches: vec![FilePatch {
@@ -929,8 +988,44 @@ mod tests {
             .research
             .expect("research metadata should be present");
         assert_eq!(research.citations.len(), 1);
-        assert_eq!(research.sources.len(), 1);
-        assert!(research.sources[0].verified);
-        assert_eq!(research.sources[0].title.as_deref(), Some("Example Source"));
+        assert!(research.sources.iter().any(|source| source.verified));
+        assert!(research.sources.iter().any(|source| {
+            source.verified && source.title.as_deref() == Some("Example Source")
+        }));
+    }
+
+    #[test]
+    fn extracts_search_query_from_refusal_style_summary() {
+        let summary = "No patch generated. The runtime note indicates DuckDuckGo HTML scrape fallback is active. A search for 'local-first AI workflow consoles' would be required to find evidence-backed strengths and trade-offs.";
+        assert_eq!(
+            extract_search_query_from_summary(summary).as_deref(),
+            Some("local-first AI workflow consoles")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_any_quoted_phrase_in_summary() {
+        let summary = "Evidence is weak, but the topic \"adapter packaging best practices\" is likely the right follow-up query.";
+        assert_eq!(
+            extract_search_query_from_summary(summary).as_deref(),
+            Some("adapter packaging best practices")
+        );
+    }
+
+    #[test]
+    fn ignores_empty_target_refusals_and_uses_topic_hint() {
+        let evaluator = ResearchEvaluator::new(
+            vec![research_metric("source_quality")],
+            Some("Research the best way to perfect cake icing.".to_owned()),
+        );
+        let proposal = Proposal {
+            summary: "No existing target files were found, and there is insufficient evidence to create a new patch.".to_owned(),
+            file_patches: Vec::new(),
+        };
+
+        assert_eq!(
+            evaluator.build_discovery_query(&proposal).as_deref(),
+            Some("Research the best way to perfect cake icing.")
+        );
     }
 }

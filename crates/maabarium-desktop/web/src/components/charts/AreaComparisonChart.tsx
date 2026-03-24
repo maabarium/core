@@ -1,3 +1,7 @@
+import { type ChartData, type ChartOptions, type TooltipItem } from "chart.js";
+import { Line } from "react-chartjs-2";
+import "../../lib/chartjs";
+import { formatCountLabel, formatTokenUsage } from "../../lib/formatters";
 import type { AnalyticsBucket } from "../../types/console";
 
 export function AreaComparisonChart({
@@ -13,120 +17,164 @@ export function AreaComparisonChart({
     );
   }
 
-  const experimentMax = Math.max(
-    1,
-    ...buckets.map((bucket) => bucket.experiments),
-  );
-  const tokenMax = Math.max(1, ...buckets.map((bucket) => bucket.tokenUsage));
-  const width = 100;
-  const height = 100;
-
-  const buildPoints = (series: number[], max: number) =>
-    series.map((value, index) => {
-      const x =
-        buckets.length === 1
-          ? width / 2
-          : (index / Math.max(buckets.length - 1, 1)) * width;
-      const y = height - (value / max) * 78 - 8;
-      return [x, y] as const;
-    });
-
-  const buildLinePath = (points: ReadonlyArray<readonly [number, number]>) =>
-    points
-      .map(
-        ([x, y], index) =>
-          `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`,
-      )
-      .join(" ");
-
-  const buildAreaPath = (points: ReadonlyArray<readonly [number, number]>) => {
-    const line = buildLinePath(points);
-    const firstX = points[0]?.[0] ?? 0;
-    const lastX = points[points.length - 1]?.[0] ?? width;
-    return `${line} L${lastX.toFixed(2)},${height} L${firstX.toFixed(2)},${height} Z`;
+  const data: ChartData<"line"> = {
+    labels: buckets.map((bucket) => bucket.label),
+    datasets: [
+      {
+        label: "Experiments",
+        data: buckets.map((bucket) => bucket.experiments),
+        yAxisID: "experiments",
+        borderColor: "#2dd4bf",
+        backgroundColor: "rgba(45, 212, 191, 0.18)",
+        pointBackgroundColor: "#2dd4bf",
+        pointBorderColor: "#0f172a",
+        pointBorderWidth: 2,
+        pointRadius: 3.5,
+        pointHoverRadius: 5,
+        borderWidth: 2.5,
+        tension: 0.34,
+        fill: true,
+      },
+      {
+        label: "Tokens",
+        data: buckets.map((bucket) => bucket.tokenUsage),
+        yAxisID: "tokens",
+        borderColor: "#fbbf24",
+        backgroundColor: "rgba(251, 191, 36, 0.12)",
+        pointBackgroundColor: "#fbbf24",
+        pointBorderColor: "#0f172a",
+        pointBorderWidth: 2,
+        pointRadius: 3,
+        pointHoverRadius: 4.5,
+        borderWidth: 2,
+        tension: 0.34,
+        fill: true,
+      },
+    ],
   };
 
-  const experimentPoints = buildPoints(
-    buckets.map((bucket) => bucket.experiments),
-    experimentMax,
-  );
-  const tokenPoints = buildPoints(
-    buckets.map((bucket) => bucket.tokenUsage),
-    tokenMax,
-  );
+  const options: ChartOptions<"line"> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    layout: {
+      padding: {
+        top: 8,
+        left: 8,
+        right: 8,
+        bottom: 0,
+      },
+    },
+    plugins: {
+      legend: {
+        position: "top",
+        align: "start",
+        labels: {
+          color: "#94a3b8",
+          usePointStyle: true,
+          pointStyle: "circle",
+          boxWidth: 8,
+          boxHeight: 8,
+          padding: 18,
+          font: {
+            size: 10,
+            weight: 700,
+          },
+        },
+      },
+      tooltip: {
+        backgroundColor: "rgba(2, 6, 23, 0.94)",
+        borderColor: "rgba(148, 163, 184, 0.16)",
+        borderWidth: 1,
+        titleColor: "#e2e8f0",
+        bodyColor: "#cbd5e1",
+        padding: 12,
+        displayColors: true,
+        callbacks: {
+          title(items) {
+            return items[0]?.label ?? "";
+          },
+          label(context: TooltipItem<"line">) {
+            const bucket = buckets[context.dataIndex];
+            if (!bucket) {
+              return context.dataset.label ?? "";
+            }
+
+            if (context.dataset.yAxisID === "experiments") {
+              return `${formatCountLabel(bucket.experiments, "experiment")}`;
+            }
+
+            return `${formatTokenUsage(bucket.tokenUsage)} tokens`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        ticks: {
+          color: "#94a3b8",
+          maxRotation: 0,
+          minRotation: 0,
+          autoSkip: false,
+          padding: 10,
+          font: {
+            size: 10,
+            weight: 700,
+          },
+        },
+        border: {
+          display: false,
+        },
+      },
+      experiments: {
+        position: "left",
+        beginAtZero: true,
+        grace: "12%",
+        ticks: {
+          display: false,
+        },
+        grid: {
+          color: "rgba(148, 163, 184, 0.16)",
+          drawTicks: false,
+        },
+        border: {
+          display: false,
+        },
+      },
+      tokens: {
+        position: "right",
+        beginAtZero: true,
+        grace: "12%",
+        ticks: {
+          display: false,
+        },
+        grid: {
+          display: false,
+          drawTicks: false,
+        },
+        border: {
+          display: false,
+        },
+      },
+    },
+    elements: {
+      line: {
+        capBezierPoints: true,
+      },
+    },
+  };
 
   return (
     <div className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-4">
-      <svg viewBox="0 0 100 100" className="h-56 w-full overflow-visible">
-        <defs>
-          <linearGradient
-            id="analytics-experiments-fill"
-            x1="0%"
-            y1="0%"
-            x2="0%"
-            y2="100%"
-          >
-            <stop offset="0%" stopColor="#2dd4bf" stopOpacity="0.42" />
-            <stop offset="100%" stopColor="#2dd4bf" stopOpacity="0.02" />
-          </linearGradient>
-          <linearGradient
-            id="analytics-tokens-fill"
-            x1="0%"
-            y1="0%"
-            x2="0%"
-            y2="100%"
-          >
-            <stop offset="0%" stopColor="#fbbf24" stopOpacity="0.22" />
-            <stop offset="100%" stopColor="#fbbf24" stopOpacity="0.01" />
-          </linearGradient>
-        </defs>
-        {[20, 40, 60, 80].map((line) => (
-          <line
-            key={line}
-            x1="0"
-            y1={line}
-            x2="100"
-            y2={line}
-            stroke="rgba(148,163,184,0.16)"
-            strokeDasharray="2 3"
-            strokeWidth="0.6"
-          />
-        ))}
-        <path
-          d={buildAreaPath(tokenPoints)}
-          fill="url(#analytics-tokens-fill)"
-        />
-        <path
-          d={buildAreaPath(experimentPoints)}
-          fill="url(#analytics-experiments-fill)"
-        />
-        <path
-          d={buildLinePath(tokenPoints)}
-          fill="none"
-          stroke="#fbbf24"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-        <path
-          d={buildLinePath(experimentPoints)}
-          fill="none"
-          stroke="#2dd4bf"
-          strokeWidth="2.2"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-        {experimentPoints.map(([x, y], index) => (
-          <circle key={`exp-${index}`} cx={x} cy={y} r="1.4" fill="#2dd4bf" />
-        ))}
-      </svg>
-
-      <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500 sm:grid-cols-7">
-        {buckets.map((bucket) => (
-          <div key={bucket.label} className="truncate text-center">
-            {bucket.label}
-          </div>
-        ))}
+      <div className="h-72 w-full">
+        <Line data={data} options={options} />
       </div>
     </div>
   );

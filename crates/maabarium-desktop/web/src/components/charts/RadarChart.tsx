@@ -1,67 +1,83 @@
-export function RadarChart({ values }: { values: number[] }) {
-  const axisCount = Math.max(values.length, 3);
-  const points = values
-    .map((value, index) => {
-      const angle = (Math.PI * 2 * index) / axisCount - Math.PI / 2;
-      const x = 50 + Math.cos(angle) * 40 * value;
-      const y = 50 + Math.sin(angle) * 40 * value;
-      return `${x},${y}`;
-    })
-    .join(" ");
+import { type ChartData, type ChartOptions } from "chart.js";
+import { Radar } from "react-chartjs-2";
+import "../../lib/chartjs";
+import { RADAR_METRIC_COLORS } from "../../lib/chartPalette";
+
+export function RadarChart({
+  values,
+  labels,
+  pointColors = RADAR_METRIC_COLORS,
+}: {
+  values: number[];
+  labels: string[];
+  pointColors?: readonly string[];
+}) {
+  const normalizedLabels = values.map(
+    (_, index) => labels[index] ?? `Metric ${index + 1}`,
+  );
+  const data: ChartData<"radar"> = {
+    labels: normalizedLabels,
+    datasets: [
+      {
+        label: "Metrics",
+        data: values,
+        borderColor: "rgba(94, 234, 212, 0.95)",
+        backgroundColor: "rgba(45, 212, 191, 0.16)",
+        pointBackgroundColor: values.map(
+          (_, index) =>
+            pointColors[index % pointColors.length] ?? RADAR_METRIC_COLORS[0],
+        ),
+        pointBorderColor: "#020617",
+        pointBorderWidth: 2,
+        pointRadius: 3.5,
+        pointHoverRadius: 4.5,
+        borderWidth: 2,
+      },
+    ],
+  };
+
+  const options: ChartOptions<"radar"> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: "rgba(2, 6, 23, 0.94)",
+        borderColor: "rgba(148, 163, 184, 0.16)",
+        borderWidth: 1,
+        titleColor: "#e2e8f0",
+        bodyColor: "#cbd5e1",
+        padding: 10,
+      },
+    },
+    scales: {
+      r: {
+        beginAtZero: true,
+        min: 0,
+        max: 1,
+        angleLines: {
+          color: "rgba(148, 163, 184, 0.16)",
+        },
+        grid: {
+          color: "rgba(148, 163, 184, 0.16)",
+        },
+        pointLabels: {
+          display: false,
+        },
+        ticks: {
+          display: false,
+          stepSize: 0.25,
+        },
+      },
+    },
+  };
 
   return (
-    <div className="relative w-40 h-40 mx-auto">
-      <svg viewBox="0 0 100 100" className="w-full h-full opacity-40">
-        <circle
-          cx="50"
-          cy="50"
-          r="40"
-          fill="none"
-          stroke="white"
-          strokeWidth="0.5"
-          strokeDasharray="2 2"
-        />
-        <circle
-          cx="50"
-          cy="50"
-          r="25"
-          fill="none"
-          stroke="white"
-          strokeWidth="0.5"
-          strokeDasharray="2 2"
-        />
-        <path
-          d="M50 10 L50 90 M10 50 L90 50"
-          stroke="white"
-          strokeWidth="0.5"
-          strokeDasharray="2 2"
-        />
-      </svg>
-      <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
-        <defs>
-          <linearGradient
-            id="desktop-radar-gradient"
-            x1="0%"
-            y1="0%"
-            x2="100%"
-            y2="100%"
-          >
-            <stop offset="0%" stopColor="#2dd4bf" />
-            <stop offset="100%" stopColor="#fbbf24" />
-          </linearGradient>
-        </defs>
-        <polygon
-          points={points}
-          fill="url(#desktop-radar-gradient)"
-          fillOpacity="0.22"
-          stroke="url(#desktop-radar-gradient)"
-          strokeWidth="1.5"
-        />
-        {points.split(" ").map((point, index) => {
-          const [x, y] = point.split(",");
-          return <circle key={index} cx={x} cy={y} r="1.8" fill="#2dd4bf" />;
-        })}
-      </svg>
+    <div className="mx-auto h-44 w-full max-w-[18rem]">
+      <Radar data={data} options={options} />
     </div>
   );
 }

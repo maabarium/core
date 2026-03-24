@@ -66,11 +66,13 @@ impl LoraEvaluator {
         Self { metrics }
     }
 
+    fn is_run_manifest_path(path: &str) -> bool {
+        matches!(path, "maabarium-lora-run.json" | "lora-run.json")
+    }
+
     fn load_run_manifest(&self, proposal: &Proposal) -> Result<Option<LoraRunManifest>, EvalError> {
         let Some(content) = proposal.file_patches.iter().find_map(|patch| {
-            if patch.path.ends_with("maabarium-lora-run.json")
-                || patch.path.ends_with("lora-run.json")
-            {
+            if Self::is_run_manifest_path(&patch.path) {
                 patch.content.as_deref()
             } else {
                 None
@@ -110,7 +112,7 @@ impl LoraEvaluator {
         let has_run_manifest = proposal
             .file_patches
             .iter()
-            .any(|patch| patch.path.ends_with("maabarium-lora-run.json"));
+            .any(|patch| Self::is_run_manifest_path(&patch.path));
         match (has_model_card, has_run_manifest) {
             (true, true) => 1.0,
             (true, false) => 0.7,
@@ -555,5 +557,39 @@ mod tests {
             .expect_err("evaluation should reject malformed manifests");
 
         assert!(error.to_string().contains("Invalid LoRA run manifest"));
+    }
+
+    #[tokio::test]
+    async fn ignores_nested_lora_run_json_files() {
+        let evaluator = LoraEvaluator::new(vec![MetricDef {
+            name: "lora_quality".into(),
+            weight: 1.0,
+            direction: "maximize".into(),
+            description: "LoRA adapter packaging quality".into(),
+        }]);
+
+        let result = evaluator
+            .evaluate(
+                &Proposal {
+                    summary: "Package adapter metadata without a canonical root manifest".into(),
+                    file_patches: vec![
+                        FilePatch {
+                            path: "README.md".into(),
+                            operation: FilePatchOperation::Modify,
+                            content: Some("# Adapter\n".into()),
+                        },
+                        FilePatch {
+                            path: "adapters/lora-run.json".into(),
+                            operation: FilePatchOperation::Create,
+                            content: Some("{\"note\":\"not the canonical manifest\"}".into()),
+                        },
+                    ],
+                },
+                1,
+            )
+            .await
+            .expect("nested lora-run.json should not be treated as the canonical manifest");
+
+        assert!(result.weighted_total > 0.0);
     }
 }

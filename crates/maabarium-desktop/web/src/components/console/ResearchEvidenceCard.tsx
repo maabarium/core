@@ -1,5 +1,6 @@
 import { Download, Search } from "lucide-react";
 import {
+  formatCountLabel,
   formatExperimentTimestamp,
   formatSourceHost,
 } from "../../lib/formatters";
@@ -49,6 +50,21 @@ function formatQueryTraceError(error: string | null): string | null {
   }
 
   return error.replace(SCRAPER_DISCOVERY_MARKER, "").trim();
+}
+
+function summarizeVerifiedSources(experiment: PersistedExperiment): string {
+  const totalSourceCount = experiment.research?.sources.length ?? 0;
+  const verifiedSourceCount =
+    experiment.research?.sources.filter((source) => source.verified).length ??
+    0;
+
+  return `${verifiedSourceCount}/${totalSourceCount} verified sources`;
+}
+
+function latestDiscoveryQuery(experiment: PersistedExperiment): string | null {
+  const traces = experiment.research?.queryTraces ?? [];
+  const query = traces[traces.length - 1]?.queryText?.trim();
+  return query && query.length > 0 ? query : null;
 }
 
 function buildResearchMarkdown(experiment: PersistedExperiment) {
@@ -152,6 +168,9 @@ export function ResearchEvidenceCard({
     latestResearchExperiment?.research?.queryTraces.filter((trace) =>
       isScraperDiscoveryError(trace.error),
     ).length ?? 0;
+  const discoveryQuery = latestResearchExperiment
+    ? latestDiscoveryQuery(latestResearchExperiment)
+    : null;
 
   return (
     <GlassCard title="Research Evidence" icon={Search} className="h-full">
@@ -172,33 +191,33 @@ export function ResearchEvidenceCard({
                       : "rose"
                   }
                 >
-                  {
-                    latestResearchExperiment.research.sources.filter(
-                      (source) => source.verified,
-                    ).length
-                  }
-                  /{latestResearchExperiment.research.sources.length} verified
+                  {summarizeVerifiedSources(latestResearchExperiment)}
                 </Badge>
                 <Badge color="slate">
-                  {
+                  {formatCountLabel(
                     new Set(
                       latestResearchExperiment.research.sources
                         .map((source) => source.host)
                         .filter((host): host is string => Boolean(host)),
-                    ).size
-                  }{" "}
-                  hosts
+                    ).size,
+                    "host",
+                  )}
                 </Badge>
                 <Badge color="slate">
-                  {latestResearchExperiment.research.queryTraces.length} queries
+                  {formatCountLabel(
+                    latestResearchExperiment.research.queryTraces.length,
+                    "query",
+                  )}
                 </Badge>
                 {providerSummary ? (
                   <Badge color="slate">{providerSummary}</Badge>
                 ) : null}
                 {scraperDiscoveryFailures > 0 ? (
                   <Badge color="rose">
-                    {scraperDiscoveryFailures} scraper issue
-                    {scraperDiscoveryFailures === 1 ? "" : "s"}
+                    {formatCountLabel(
+                      scraperDiscoveryFailures,
+                      "scraper issue",
+                    )}
                   </Badge>
                 ) : null}
               </div>
@@ -213,6 +232,17 @@ export function ResearchEvidenceCard({
                 Export Markdown
               </button>
             </div>
+            {discoveryQuery ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2">
+                <Badge color="blue">Discovery Query</Badge>
+                <div
+                  className="min-w-0 flex-1 truncate text-xs text-slate-300"
+                  title={discoveryQuery}
+                >
+                  {discoveryQuery}
+                </div>
+              </div>
+            ) : null}
             <div className="mt-3 text-sm text-slate-300">
               {latestResearchExperiment.proposal_summary ||
                 "No research summary recorded."}
@@ -245,13 +275,25 @@ export function ResearchEvidenceCard({
                           {formatSourceHost(source)}
                         </div>
                       </div>
-                      <Badge color={source.verified ? "emerald" : "rose"}>
-                        {source.verified ? "Verified" : "Failed"}
+                      <Badge
+                        color={
+                          source.verified
+                            ? "emerald"
+                            : source.fetchError
+                              ? "rose"
+                              : "slate"
+                        }
+                      >
+                        {source.verified
+                          ? "Verified"
+                          : source.fetchError
+                            ? "Failed"
+                            : "Unverified"}
                       </Badge>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Badge color="slate">
-                        {source.citationCount} citations
+                        {formatCountLabel(source.citationCount, "citation")}
                       </Badge>
                       {source.statusCode !== null ? (
                         <Badge color="slate">HTTP {source.statusCode}</Badge>
