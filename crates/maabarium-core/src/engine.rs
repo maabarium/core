@@ -1,5 +1,5 @@
 use crate::agent::{Agent, Council};
-use crate::blueprint::BlueprintFile;
+use crate::blueprint::{BlueprintFile, ModelAssignment};
 use crate::error::EngineError;
 use crate::evaluator::{Evaluator, ExperimentResult};
 use crate::git_manager::GitManager;
@@ -432,13 +432,21 @@ impl Engine {
 fn build_council(blueprint: &BlueprintFile) -> Result<Council, EngineError> {
     let mut agents = Vec::new();
 
+    let shared_provider = if blueprint.models.assignment == ModelAssignment::RoundRobin {
+        Some(provider_from_models(&blueprint.models, None)?)
+    } else {
+        None
+    };
+
     for agent_def in blueprint
         .agents
         .agents
         .iter()
         .take(blueprint.agents.council_size as usize)
     {
-        let provider = provider_from_models(&blueprint.models, Some(&agent_def.model))?;
+        let provider = shared_provider
+            .clone()
+            .unwrap_or(provider_from_models(&blueprint.models, Some(&agent_def.model))?);
         agents.push(Agent::new(agent_def.clone(), provider));
     }
 

@@ -112,7 +112,6 @@ impl GitManager {
                 [
                     "worktree",
                     "add",
-                    "--detach",
                     temp_dir.to_str().unwrap_or_default(),
                     &branch,
                 ],
@@ -142,6 +141,7 @@ impl GitManager {
             }
 
             let add_result = run_git(&temp_dir, ["add", "--all"]);
+            let staged_changes = run_git_status(&temp_dir, ["diff", "--cached", "--quiet"]);
             let commit_result = run_git(
                 &temp_dir,
                 [
@@ -164,6 +164,10 @@ impl GitManager {
             let _ = std::fs::remove_dir_all(&temp_dir);
 
             add_result?;
+            if matches!(staged_changes, Ok(0)) {
+                cleanup_result?;
+                return Ok(());
+            }
             commit_result?;
             cleanup_result?;
             Ok(())
@@ -190,6 +194,30 @@ fn discover_repository_root(repo_path: &Path) -> Result<PathBuf, GitError> {
 }
 
 fn run_git<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Result<(), GitError> {
+    match run_git_status(repo_path, args) {
+        Ok(0) => Ok(()),
+        Ok(_) | Err(_) => {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(repo_path)
+                .args(args)
+                .output()
+                .map_err(GitError::Io)?;
+
+            if output.status.success() {
+                return Ok(());
+            }
+
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            Err(GitError::Io(std::io::Error::other(
+                if !stderr.is_empty() { stderr } else { stdout },
+            )))
+        }
+    }
+}
+
+fn run_git_status<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Result<i32, GitError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_path)
@@ -197,11 +225,5 @@ fn run_git<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Resu
         .output()
         .map_err(GitError::Io)?;
 
-    if output.status.success() {
-        return Ok(());
-    }
-
-    Err(GitError::Io(std::io::Error::other(
-        String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-    )))
+    Ok(output.status.code().unwrap_or(1))
 }

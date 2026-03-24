@@ -105,16 +105,20 @@ impl Agent {
              Existing file contents:\n{files_desc}\n\n\
              Return valid JSON with this exact shape and no markdown fences:\n\
               {{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{ \"path\": \"relative/path\", \"operation\": \"modify\", \"unified_diff\": \"@@ -1,1 +1,2 @@\\n old line\\n+new line\" }}\n  ]\n}}\n\n\
+              The strings \"old line\" and \"new line\" are placeholders only. Replace them with exact file content from Existing file contents if you emit a diff.\n\
               Use operation=create for new files, modify for existing files, delete for removals.\n\
               For create/delete, still provide a unified diff against the empty or prior file.\n\
+              For markdown or JSON targets, if exact diffing is difficult, you may place the final file content in unified_diff and it will be treated as a whole-file replacement.\n\
               Each patch must target exactly one safe relative path.\n\
               Do not return full-file replacements. Do not invent paths outside the target patterns.\n\
-               Keep changes narrow and preserve valid {language} syntax.{research_guidance}"
+               Keep changes narrow and preserve valid {language} syntax.\n\
+               If you are not confident that the JSON or unified diff will be exact, return an empty file_patches array and explain the limitation in summary.\n\
+               A correct empty patch is better than malformed JSON or an invalid diff.{research_guidance}"
         );
         let req = CompletionRequest {
             system: self.def.system_prompt.clone(),
             prompt,
-            temperature: 0.7,
+            temperature: 0.2,
             max_tokens: 512,
         };
         let resp = self.llm.complete(&req).await?;
@@ -261,11 +265,20 @@ fn parse_proposal_payload(
         }
 
         let file_exists = allowed_paths.contains(&patch.path);
-        match patch.operation {
+        let operation = if patch.operation == FilePatchOperation::Modify
+            && !file_exists
+            && path_matches_targets(target_files, &patch.path)
+        {
+            FilePatchOperation::Create
+        } else {
+            patch.operation
+        };
+
+        match operation {
             FilePatchOperation::Modify | FilePatchOperation::Delete if !file_exists => {
                 return Err(LLMError::InvalidResponse(format!(
                     "Proposal patch path '{}' must already exist for {:?} operations",
-                    patch.path, patch.operation
+                    patch.path, operation
                 )));
             }
             FilePatchOperation::Create if file_exists => {
@@ -290,16 +303,46 @@ fn parse_proposal_payload(
             ))
         })?;
         let original_content = file_lookup.get(patch.path.as_str()).copied();
-        let result =
-            apply_unified_diff(original_content, diff, patch.operation).map_err(|error| {
+        let result = if looks_like_unified_diff(diff) {
+            match apply_unified_diff(original_content, diff, operation) {
+                Ok(result) => result,
+                Err(error) if supports_raw_content_fallback(&patch.path, operation) => {
+                    let recovered = recover_text_from_diffish_payload(diff).ok_or_else(|| {
+                        LLMError::InvalidResponse(format!(
+                            "Unified diff validation failed for '{}': {error}",
+                            patch.path
+                        ))
+                    })?;
+                    apply_raw_content_fallback(&recovered, operation).map_err(|fallback_error| {
+                        LLMError::InvalidResponse(format!(
+                            "Unified diff validation failed for '{}': {error}; raw fallback failed: {fallback_error}",
+                            patch.path
+                        ))
+                    })?
+                }
+                Err(error) => {
+                    return Err(LLMError::InvalidResponse(format!(
+                        "Unified diff validation failed for '{}': {error}",
+                        patch.path
+                    )));
+                }
+            }
+        } else if supports_raw_content_fallback(&patch.path, operation) {
+            apply_raw_content_fallback(diff, operation).map_err(|error| {
                 LLMError::InvalidResponse(format!(
-                    "Unified diff validation failed for '{}': {error}",
+                    "Raw content fallback failed for '{}': {error}",
                     patch.path
                 ))
-            })?;
+            })?
+        } else {
+            return Err(LLMError::InvalidResponse(format!(
+                "Proposal patch '{}' must provide a unified diff for this file type",
+                patch.path
+            )));
+        };
         file_patches.push(FilePatch {
             path: patch.path.clone(),
-            operation: patch.operation,
+            operation,
             content: result.content,
         });
     }
@@ -342,6 +385,13 @@ fn apply_unified_diff(
             return Err("diff hunks overlap or go backwards".to_owned());
         }
         while source_index < target_index {
+            if source_index >= original_lines.len() {
+                return Err(format!(
+                    "hunk header references line {} beyond end of file ({})",
+                    target_index + 1,
+                    original_lines.len()
+                ));
+            }
             output.push(original_lines[source_index].clone());
             source_index += 1;
         }
@@ -369,6 +419,10 @@ fn apply_unified_diff(
                 last_line_had_no_newline = true;
                 line_index += 1;
                 continue;
+            }
+
+            if hunk_line.is_empty() {
+                return Err("encountered an empty unified diff line without a prefix".to_owned());
             }
 
             let (prefix, text) = hunk_line.split_at(1);
@@ -498,6 +552,85 @@ fn apply_unified_diff(
         content,
         had_trailing_newline: result_has_trailing_newline,
     })
+}
+
+fn looks_like_unified_diff(diff: &str) -> bool {
+    let trimmed = diff.trim_start();
+    trimmed.starts_with("@@")
+        || trimmed.starts_with("--- ")
+        || trimmed.starts_with("+++ ")
+        || trimmed.starts_with("diff --git")
+}
+
+fn supports_raw_content_fallback(path: &str, operation: FilePatchOperation) -> bool {
+    if matches!(operation, FilePatchOperation::Delete) {
+        return false;
+    }
+
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".json")
+        || lower.ends_with(".txt")
+        || lower.ends_with("readme")
+        || lower.ends_with("readme.md")
+}
+
+fn apply_raw_content_fallback(
+    content: &str,
+    operation: FilePatchOperation,
+) -> Result<DiffApplyResult, String> {
+    if matches!(operation, FilePatchOperation::Delete) {
+        return Err("raw content fallback is not supported for delete patches".to_owned());
+    }
+
+    if content.trim().is_empty() {
+        return Err("raw content fallback cannot be empty".to_owned());
+    }
+
+    Ok(DiffApplyResult {
+        content: Some(content.to_owned()),
+        had_trailing_newline: content.ends_with('\n'),
+    })
+}
+
+fn recover_text_from_diffish_payload(diff: &str) -> Option<String> {
+    let mut recovered = Vec::new();
+
+    for line in diff.lines() {
+        if line.starts_with("@@")
+            || line.starts_with("--- ")
+            || line.starts_with("+++ ")
+            || line.starts_with("diff --git")
+        {
+            continue;
+        }
+
+        if line == "\\ No newline at end of file" {
+            continue;
+        }
+
+        if let Some(stripped) = line.strip_prefix('+') {
+            recovered.push(stripped.to_owned());
+            continue;
+        }
+
+        if let Some(stripped) = line.strip_prefix(' ') {
+            recovered.push(stripped.to_owned());
+            continue;
+        }
+
+        if line.starts_with('-') {
+            continue;
+        }
+
+        recovered.push(line.to_owned());
+    }
+
+    if recovered.is_empty() {
+        None
+    } else {
+        Some(format!("{}\n", recovered.join("\n")))
+    }
 }
 
 fn split_preserving_eof(content: &str) -> (Vec<String>, bool) {
@@ -866,4 +999,91 @@ mod tests {
 
         assert!(error.contains("newline marker must follow a diff line"));
     }
+
+        #[test]
+        fn accepts_raw_markdown_content_for_text_targets() {
+                let proposal = parse_proposal_payload(
+                        r##"{
+    "summary": "Rewrite the note with a clearer structure.",
+    "file_patches": [
+        {
+            "path": "docs/notes.md",
+            "operation": "modify",
+            "unified_diff": "# Runtime validation fixture\n\nThis note is clearer now.\n"
+        }
+    ]
+}"##,
+                        &[FileContext {
+                                path: "docs/notes.md".into(),
+                                content: "# Runtime validation fixture\n\nOld content.\n".into(),
+                        }],
+                        &HashSet::from(["docs/notes.md".to_owned()]),
+                        &["docs/**/*.md".into()],
+                )
+                .expect("raw markdown fallback should parse");
+
+                assert_eq!(proposal.file_patches.len(), 1);
+                assert_eq!(proposal.file_patches[0].operation, FilePatchOperation::Modify);
+                assert_eq!(
+                        proposal.file_patches[0].content.as_deref(),
+                        Some("# Runtime validation fixture\n\nThis note is clearer now.\n")
+                );
+        }
+
+        #[test]
+        fn upgrades_missing_modify_targets_to_create_for_allowed_text_paths() {
+                let proposal = parse_proposal_payload(
+                        r##"{
+    "summary": "Create a focused research note.",
+    "file_patches": [
+        {
+            "path": "notes/local-first-ai-workflow.md",
+            "operation": "modify",
+            "unified_diff": "# Local-first AI workflow\n\nA starter note.\n"
+        }
+    ]
+}"##,
+                        &[],
+                        &HashSet::new(),
+                        &["notes/**/*.md".into()],
+                )
+                .expect("missing markdown targets should be upgraded to create");
+
+                assert_eq!(proposal.file_patches.len(), 1);
+                assert_eq!(proposal.file_patches[0].operation, FilePatchOperation::Create);
+                assert_eq!(
+                        proposal.file_patches[0].content.as_deref(),
+                        Some("# Local-first AI workflow\n\nA starter note.\n")
+                );
+        }
+
+            #[test]
+            fn recovers_text_from_malformed_diffish_markdown() {
+                let proposal = parse_proposal_payload(
+                    r##"{
+          "summary": "Rewrite the product brief with clearer sections.",
+          "file_patches": [
+            {
+              "path": "docs/product-brief.md",
+              "operation": "modify",
+              "unified_diff": "@@ -1,2 +1,4 @@\n\n# Product Brief\n\nClarify the app value and release shape."
+            }
+          ]
+        }"##,
+                    &[FileContext {
+                        path: "docs/product-brief.md".into(),
+                        content: "# Product Brief\n\nOld brief.\n".into(),
+                    }],
+                    &HashSet::from(["docs/product-brief.md".to_owned()]),
+                    &["docs/**/*.md".into()],
+                )
+                .expect("diffish markdown should recover through raw fallback");
+
+                assert_eq!(proposal.file_patches.len(), 1);
+                assert!(proposal.file_patches[0]
+                    .content
+                    .as_deref()
+                    .expect("recovered content should exist")
+                    .contains("Clarify the app value and release shape."));
+            }
 }

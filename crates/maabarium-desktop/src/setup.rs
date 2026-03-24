@@ -170,6 +170,14 @@ pub fn default_remote_provider_setups() -> Vec<RemoteProviderSetup> {
             configured: false,
         },
         RemoteProviderSetup {
+            provider_id: "xai".to_owned(),
+            label: "xAI".to_owned(),
+            endpoint: Some("https://api.x.ai/v1".to_owned()),
+            model_name: None,
+            fallback_only: false,
+            configured: false,
+        },
+        RemoteProviderSetup {
             provider_id: "custom".to_owned(),
             label: "OpenAI-Compatible Custom".to_owned(),
             endpoint: None,
