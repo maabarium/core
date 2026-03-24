@@ -7,6 +7,7 @@ const repoRoot = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
   "../..",
 );
+const defaultChangelogPath = path.join(repoRoot, "CHANGELOG.md");
 
 const releaseTargets = [
   {
@@ -37,6 +38,7 @@ function parseArgs(argv) {
   const options = {
     bump: null,
     dryRun: false,
+    changelogPath: defaultChangelogPath,
     githubOutput: process.env.GITHUB_OUTPUT ?? null,
   };
 
@@ -50,6 +52,15 @@ function parseArgs(argv) {
 
     if (value === "--dry-run") {
       options.dryRun = true;
+      continue;
+    }
+
+    if (value === "--changelog") {
+      options.changelogPath = path.resolve(
+        process.cwd(),
+        argv[index + 1] ?? "",
+      );
+      index += 1;
       continue;
     }
 
@@ -104,6 +115,79 @@ function readFile(relativePath) {
 
 function writeFile(relativePath, content) {
   fs.writeFileSync(path.join(repoRoot, relativePath), content);
+}
+
+function normalizeSectionLines(lines) {
+  const trimmed = [...lines];
+  while (trimmed.length > 0 && trimmed[0].trim() === "") {
+    trimmed.shift();
+  }
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1].trim() === "") {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function rolloverChangelog(changelogPath, nextVersion, releaseDate) {
+  const content = fs.readFileSync(changelogPath, "utf8");
+  const lines = content.split(/\r?\n/);
+  const unreleasedIndex = lines.findIndex((line) =>
+    /^##\s+\[Unreleased\]\s*$/i.test(line.trim()),
+  );
+
+  if (unreleasedIndex === -1) {
+    throw new Error("CHANGELOG.md must contain a `## [Unreleased]` section.");
+  }
+
+  let nextHeadingIndex = lines.length;
+  for (let index = unreleasedIndex + 1; index < lines.length; index += 1) {
+    if (/^##\s+/.test(lines[index].trim())) {
+      nextHeadingIndex = index;
+      break;
+    }
+  }
+
+  const unreleasedBody = normalizeSectionLines(
+    lines.slice(unreleasedIndex + 1, nextHeadingIndex),
+  );
+  const newUnreleasedBody = [
+    "",
+    "### Added",
+    "",
+    "- None.",
+    "",
+    "### Changed",
+    "",
+    "- None.",
+    "",
+    "### Fixed",
+    "",
+    "- None.",
+    "",
+    "### Breaking Changes",
+    "",
+    "- None.",
+    "",
+  ];
+
+  const rolledLines = [
+    ...lines.slice(0, unreleasedIndex),
+    "## [Unreleased]",
+    ...newUnreleasedBody,
+    `## [${nextVersion}] - ${releaseDate}`,
+    "",
+    ...unreleasedBody,
+    "",
+    ...lines.slice(nextHeadingIndex),
+  ];
+
+  fs.writeFileSync(
+    changelogPath,
+    `${rolledLines
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd()}\n`,
+  );
 }
 
 function readTargetVersion(target) {
@@ -168,17 +252,20 @@ function main() {
   }
 
   const nextVersion = bumpVersion(currentVersion, options.bump);
+  const releaseDate = new Date().toISOString().slice(0, 10);
 
   if (!options.dryRun) {
     for (const target of releaseTargets) {
       updateTargetVersion(target, nextVersion);
     }
+    rolloverChangelog(options.changelogPath, nextVersion, releaseDate);
   }
 
   appendGithubOutput(options.githubOutput, {
     current_version: currentVersion,
     next_version: nextVersion,
     release_tag: `desktop-v${nextVersion}`,
+    release_date: releaseDate,
   });
 
   process.stdout.write(`${nextVersion}\n`);
