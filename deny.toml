@@ -6,15 +6,13 @@
 # Deny crates with known security vulnerabilities
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
+unmaintained = "none"
 yanked = "deny"
-notice = "warn"
 ignore = []
+unused-ignored-advisory = "warn"
 
 [licenses]
 # Only allow permissive/copyleft-compatible licenses
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -27,14 +25,11 @@ allow = [
     "Zlib",
     "CC0-1.0",
 ]
-copyleft = "warn"
-allow-osi-fsf-free = "neither"
-default = "deny"
+unused-allowed-license = "warn"
 confidence-threshold = 0.8
 
 [[licenses.clarify]]
-name = "ring"
-version = "*"
+crate = "ring"
 expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 

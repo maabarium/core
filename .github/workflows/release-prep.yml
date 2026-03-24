@@ -23,6 +23,7 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
@@ -38,6 +39,31 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Require successful CI on branch HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runs_endpoint="repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&branch=${GITHUB_REF_NAME}&event=push&status=completed&per_page=100"
+
+          latest_ci_conclusion="$({ gh api "$runs_endpoint" --jq '.workflow_runs | map(select(.name == "ci")) | .[0].conclusion // ""'; } 2>/dev/null)"
+          latest_ci_url="$({ gh api "$runs_endpoint" --jq '.workflow_runs | map(select(.name == "ci")) | .[0].html_url // ""'; } 2>/dev/null)"
+          successful_ci_url="$({ gh api "$runs_endpoint" --jq '.workflow_runs | map(select(.name == "ci" and .conclusion == "success")) | .[0].html_url // ""'; } 2>/dev/null)"
+
+          if [[ -z "$successful_ci_url" ]]; then
+            if [[ -n "$latest_ci_conclusion" ]]; then
+              echo "release-prep requires a successful completed ci push run for ${GITHUB_SHA}. Latest ci conclusion: ${latest_ci_conclusion}." >&2
+              if [[ -n "$latest_ci_url" ]]; then
+                echo "Latest ci run: $latest_ci_url" >&2
+              fi
+            else
+              echo "release-prep requires a successful completed ci push run for ${GITHUB_SHA}, but no completed ci push run was found for branch ${GITHUB_REF_NAME}." >&2
+            fi
+            exit 1
+          fi
+
+          echo "Using successful ci run: $successful_ci_url"
 
       - name: Validate release branch state
         shell: bash

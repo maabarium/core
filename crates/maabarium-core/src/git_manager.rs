@@ -149,6 +149,10 @@ impl GitManager {
             let commit_result = run_git(
                 &temp_dir,
                 [
+                    "-c",
+                    "user.name=Maabarium",
+                    "-c",
+                    "user.email=maabarium@local.invalid",
                     "commit",
                     "-m",
                     &format!("experiment: {}", proposal.summary),

@@ -123,11 +123,12 @@ The semver level is intentionally explicit. The workflow does not try to infer m
 ### Release-Prep Flow
 
 1. Run `release-prep` from the branch you want to release.
-2. The workflow validates `CHANGELOG.md`, uses the `Unreleased` section as the GitHub Release notes, and requires explicit `### Breaking Changes` entries for major releases.
-3. The workflow bumps versions in Cargo metadata, the desktop package manifest, and `tauri.conf.json`.
-4. It commits the bump back to the branch.
-5. It creates the GitHub Release, which also creates the `desktop-vX.Y.Z` tag.
-6. Publishing that Release triggers `desktop-release-r2`, which builds and publishes the signed updater artifacts plus the generated `install.sh`.
+2. The workflow requires a successful completed `ci` push run for the current branch HEAD before it will prepare a release.
+3. The workflow validates `CHANGELOG.md`, uses the `Unreleased` section as the GitHub Release notes, and requires explicit `### Breaking Changes` entries for major releases.
+4. The workflow bumps versions in Cargo metadata, the desktop package manifest, and `tauri.conf.json`.
+5. It commits the bump back to the branch.
+6. It creates the GitHub Release, which also creates the `desktop-vX.Y.Z` tag.
+7. Publishing that Release triggers `desktop-release-r2`, which builds and publishes the signed updater artifacts plus the generated `install.sh`.
 
 to Cloudflare R2.
 
