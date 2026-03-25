@@ -81,4 +81,4 @@ body:
     attributes:
       label: Docs Impact
       description: Which docs appear outdated or will likely need updates if this issue is fixed?
-      placeholder: README.md, docs/ARCHITECTURE.md, docs/BLUEPRINT_SPEC.md, .dev/complete/... or none
+      placeholder: README.md, docs/ARCHITECTURE.md, docs/BLUEPRINT_SPEC.md or none

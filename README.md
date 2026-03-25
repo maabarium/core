@@ -56,11 +56,6 @@ Current repository capabilities include:
 - desktop onboarding/setup persistence for runtime strategy, local and remote providers, workspace defaults, and research search mode
 - desktop packaging and updater support for the Tauri app shell
 
-Remaining closure work and historical parity notes live under:
-
-- [`.dev/complete/implementation-parity.md`](.dev/complete/implementation-parity.md)
-- [`.dev/complete/implementation-remaining-items.md`](.dev/complete/implementation-remaining-items.md)
-
 ## Desktop Packaging
 
 The desktop application is the Tauri project in `crates/maabarium-desktop`, shipped as **Maabarium Console**.
@@ -171,8 +166,6 @@ pnpm tauri dev
 - [docs/ROADMAP.md](docs/ROADMAP.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md)
-- [.dev/complete/implementation-parity.md](.dev/complete/implementation-parity.md)
-- [.dev/complete/implementation-remaining-items.md](.dev/complete/implementation-remaining-items.md)
 
 ## Contributors
 

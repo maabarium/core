@@ -173,5 +173,4 @@ If you want to build toward any of these areas:
 
 - align proposals with the current architecture in [ARCHITECTURE.md](ARCHITECTURE.md)
 - keep blueprint-related changes aligned with [BLUEPRINT_SPEC.md](BLUEPRINT_SPEC.md)
-- document meaningful roadmap movement in the active `.dev/complete/` parity and closure docs when appropriate
 - use [CONTRIBUTING.md](../CONTRIBUTING.md) for repository contribution expectations

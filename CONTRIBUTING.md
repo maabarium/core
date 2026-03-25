@@ -87,8 +87,6 @@ When a change affects project behavior, update the relevant active docs:
 - `README.md` for top-level user/developer workflow changes
 - `docs/ARCHITECTURE.md` for runtime or architecture changes
 - `docs/BLUEPRINT_SPEC.md` for blueprint schema changes
-- `.dev/complete/implementation-parity.md` when parity status changes materially
-- `.dev/complete/implementation-remaining-items.md` when one of the remaining closure items advances, is deferred, or is closed
 
 ## Adding Evaluators or Providers
 
