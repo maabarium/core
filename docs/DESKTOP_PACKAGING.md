@@ -191,7 +191,7 @@ These are packaging enhancements, not current requirements for the supported des
 ## Validation Checklist
 
 - build: `cd crates/maabarium-desktop && pnpm tauri build`
-- manifest: `cd crates/maabarium-desktop && pnpm build:release-manifest -- --base-url https://downloads.example.com`
+- manifest: `cd crates/maabarium-desktop && pnpm build:release-manifest -- --base-url https://downloads.maabarium.com`
 - bundle exists under `target/release/bundle/`
 - app launch tested manually when a GUI session is available
 - app can create and read its app-specific runtime database and log files

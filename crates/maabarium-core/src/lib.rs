@@ -19,15 +19,21 @@ pub mod updater;
 pub use blueprint::{
     BlueprintFile, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintTemplateKind,
 };
-pub use engine::{Engine, EngineConfig, EnginePhase, EngineProgressReporter, EngineProgressUpdate};
+pub use engine::{
+    Engine, EngineConfig, EnginePhase, EnginePhaseTiming, EngineProgressReporter,
+    EngineProgressUpdate, EngineTimingSummary,
+};
 pub use error::CoreError;
 pub use evaluator::{
-    BuiltinEvaluatorKind, CodeEvaluator, EvaluatorRegistry, LoraArtifacts, LoraEvaluator,
-    LoraStageArtifact, ProcessPluginEvaluator, ProcessPluginManifest, PromptEvaluator,
-    ResearchArtifacts, ResearchCitation, ResearchEvaluator, ResearchQueryTrace, ResearchSource,
+    BuiltinEvaluatorKind, CodeEvaluator, EvaluationContext, EvaluatorRegistry, LoraArtifacts,
+    LoraEvaluator, LoraStageArtifact, ProcessPluginEvaluator, ProcessPluginManifest,
+    PromptEvaluator, ResearchArtifacts, ResearchCitation, ResearchEvaluator, ResearchQueryTrace,
+    ResearchSource,
 };
 pub use logging::{default_log_path, read_recent_log_lines, read_recent_log_lines_from_path};
-pub use persistence::{ExportFormat, PersistedProposal, Persistence, default_db_path};
+pub use persistence::{
+    ExportFormat, PersistedProposal, Persistence, PromotionOutcome, default_db_path,
+};
 pub use secrets::{ApiKeyStore, SecretStore};
 pub use updater::{
     CliArtifactManifest, CliReleaseArtifact, ReleaseManifest, UpdaterConfiguration,

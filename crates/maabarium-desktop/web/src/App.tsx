@@ -126,6 +126,7 @@ function ConfirmationToggle({
 
 export default function App() {
   const allowWindowCloseRef = useRef(false);
+  const cpuInfoPopoverRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
   const [cpuInfoOpen, setCpuInfoOpen] = useState(false);
   const [analyticsRange, setAnalyticsRange] = useState<AnalyticsRange>("daily");
@@ -298,6 +299,12 @@ export default function App() {
   const dashboard = useMemo(() => {
     const experiments = state?.experiments ?? [];
     const successful = experiments.filter((experiment) => !experiment.error);
+    const promotedSuccessful = successful.filter(
+      (experiment) => experiment.promotion_outcome === "promoted",
+    );
+    const legacySuccessful = successful.filter(
+      (experiment) => experiment.promotion_outcome === "unknown",
+    );
     const logs = state?.logs ?? [];
     const tokenSamples = logs
       .map(parseTokenUsage)
@@ -305,12 +312,40 @@ export default function App() {
 
     const current = successful[0];
     const previous = successful[1];
+    const winner =
+      promotedSuccessful[0] ??
+      legacySuccessful.reduce<(typeof successful)[number] | null>(
+        (best, experiment) => {
+          if (!best || experiment.weighted_total > best.weighted_total) {
+            return experiment;
+          }
+          return best;
+        },
+        null,
+      );
+    const previousWinner =
+      promotedSuccessful.length > 1 ? promotedSuccessful[1] : null;
     const currentScoreSeries = successful
       .slice(0, 6)
       .map((experiment) =>
         Math.max(0, Math.min(100, experiment.weighted_total * 100)),
       )
       .reverse();
+    const winnerScoreSeries =
+      promotedSuccessful.length > 0
+        ? promotedSuccessful
+            .slice(0, 6)
+            .map((experiment) =>
+              Math.max(0, Math.min(100, experiment.weighted_total * 100)),
+            )
+            .reverse()
+        : legacySuccessful
+            .slice()
+            .sort((left, right) => left.id - right.id)
+            .slice(-6)
+            .map((experiment) =>
+              Math.max(0, Math.min(100, experiment.weighted_total * 100)),
+            );
     const avgDurationSeries = successful
       .slice(0, 6)
       .map((experiment) => experiment.duration_ms / 1000)
@@ -345,7 +380,7 @@ export default function App() {
           : "--";
 
     return {
-      currentScoreLabel: liveRunActive ? "Live Iteration" : "Current Score",
+      currentScoreLabel: liveRunActive ? "Live Iteration" : "Latest Score",
       currentScore: liveScoreValue,
       currentScoreTrend: liveRunActive
         ? `${runIterationLabel} • ${runPhaseLabel}`
@@ -358,6 +393,20 @@ export default function App() {
             ? "Single run"
             : "No persisted runs",
       currentScoreSeries: currentScoreSeries,
+      winnerScoreLabel: "Winner Score",
+      winnerScore: winner ? winner.weighted_total.toFixed(2) : "--",
+      winnerScoreTrend:
+        promotedSuccessful.length > 1 && winner && previousWinner
+          ? formatPercentageDelta(
+              winner.weighted_total,
+              previousWinner.weighted_total,
+            )
+          : promotedSuccessful.length === 1
+            ? `Retained via experiment #${winner?.id ?? "--"}`
+            : legacySuccessful.length > 0
+              ? "Legacy winner inferred"
+              : "No retained winner",
+      winnerScoreSeries,
       avgIterationLabel: liveRunActive ? "Iteration Elapsed" : "Avg Iteration",
       avgIteration: liveDurationValue,
       avgIterationTrend: liveRunActive
@@ -576,6 +625,39 @@ export default function App() {
       window.removeEventListener("scroll", updateScrollState);
     };
   }, []);
+
+  useEffect(() => {
+    if (!cpuInfoOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (cpuInfoPopoverRef.current?.contains(target)) {
+        return;
+      }
+
+      setCpuInfoOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCpuInfoOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [cpuInfoOpen]);
 
   useEffect(() => {
     let removeCloseListener: (() => void) | undefined;
@@ -1163,7 +1245,7 @@ export default function App() {
 
           <div className="hidden items-center gap-2 rounded-xl border border-white/5 bg-white/5 p-1 shadow-inner md:flex">
             <button
-              onClick={() => scrollToSection("overview-section")}
+              onClick={handleScrollToTop}
               className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
               type="button"
             >
@@ -1182,6 +1264,13 @@ export default function App() {
               type="button"
             >
               Blueprints
+            </button>
+            <button
+              onClick={() => scrollToSection("maintenance-section")}
+              className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
+              type="button"
+            >
+              Maintenance
             </button>
           </div>
 
@@ -1254,7 +1343,7 @@ export default function App() {
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <section
             id="overview-section"
-            className="grid grid-cols-1 md:grid-cols-4 gap-4"
+            className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5"
           >
             {[
               {
@@ -1279,6 +1368,13 @@ export default function App() {
                             : ("emerald" as const),
                       }
                     : null,
+              },
+              {
+                label: dashboard.winnerScoreLabel,
+                val: dashboard.winnerScore,
+                trend: dashboard.winnerScoreTrend,
+                color: "blue",
+                data: dashboard.winnerScoreSeries,
               },
               {
                 label: dashboard.avgIterationLabel,
@@ -1329,7 +1425,7 @@ export default function App() {
               </GlassCard>
             ))}
 
-            <GlassCard className="relative min-h-[10.75rem] overflow-hidden">
+            <GlassCard className="relative min-h-[10.75rem]" allowOverflow>
               <div className="flex h-full flex-col justify-between gap-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -1342,12 +1438,17 @@ export default function App() {
                       )}
                     </h2>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div
+                    ref={cpuInfoPopoverRef}
+                    className="relative flex items-center gap-2"
+                  >
                     <button
                       type="button"
                       onClick={() => setCpuInfoOpen((current) => !current)}
                       className="rounded-full border border-white/10 bg-white/5 p-1 text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
                       aria-label="Explain CPU telemetry"
+                      aria-expanded={cpuInfoOpen}
+                      aria-haspopup="dialog"
                     >
                       <AlertCircle size={14} />
                     </button>
@@ -1358,30 +1459,30 @@ export default function App() {
                     >
                       {cpuSensor?.status ?? "unavailable"}
                     </Badge>
+
+                    {cpuInfoOpen ? (
+                      <div className="absolute right-0 top-full z-30 mt-3 w-80 rounded-lg border border-white/10 bg-slate-950/95 px-3 py-3 text-left text-xs leading-relaxed text-slate-300 shadow-2xl shadow-black/40 backdrop-blur-xl">
+                        <div className="font-black uppercase tracking-[0.16em] text-slate-400">
+                          CPU Telemetry
+                        </div>
+                        <div className="mt-2">
+                          {cpuSensor?.statusDetail ??
+                            "Telemetry is unavailable in the current build."}
+                        </div>
+                        <div className="mt-3 space-y-1 text-slate-500">
+                          {(hardwareTelemetry?.notes.length
+                            ? hardwareTelemetry.notes
+                            : [
+                                "The desktop app samples CPU utilization locally and does not use privileged macOS APIs.",
+                              ]
+                          ).map((note) => (
+                            <p key={note}>{note}</p>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-
-                {cpuInfoOpen ? (
-                  <div className="absolute right-5 top-14 z-20 w-72 rounded-lg border border-white/10 bg-slate-950/95 px-3 py-3 text-xs leading-relaxed text-slate-300 shadow-2xl">
-                    <div className="font-black uppercase tracking-[0.16em] text-slate-400">
-                      CPU Telemetry
-                    </div>
-                    <div className="mt-2">
-                      {cpuSensor?.statusDetail ??
-                        "Telemetry is unavailable in the current build."}
-                    </div>
-                    <div className="mt-3 space-y-1 text-slate-500">
-                      {(hardwareTelemetry?.notes.length
-                        ? hardwareTelemetry.notes
-                        : [
-                            "The desktop app samples CPU utilization locally and does not use privileged macOS APIs.",
-                          ]
-                      ).map((note) => (
-                        <p key={note}>{note}</p>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
 
                 <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-900/80">
                   <div
@@ -1649,30 +1750,6 @@ export default function App() {
                 />
               </div>
 
-              <ReadinessCenterCard
-                readinessItems={state?.readinessItems ?? []}
-                experimentBranchInventory={
-                  state?.experimentBranchInventory ?? null
-                }
-                ollama={state?.ollama ?? null}
-                onOpenSetup={() => setSetupOpen(true)}
-                onInstallOllama={() => void installOllama()}
-                onStartOllama={() => void startOllama()}
-                onPreviewBranchCleanup={(thresholdMonths) =>
-                  previewExperimentBranchCleanup(thresholdMonths)
-                }
-                onCleanupBranches={(thresholdMonths) =>
-                  cleanupExperimentBranches(thresholdMonths)
-                }
-              />
-
-              <PersistedStackCard
-                experimentCount={state?.experiments.length ?? 0}
-                proposalCount={state?.proposals.length ?? 0}
-                logCount={state?.logs.length ?? 0}
-                onOpenPanel={openPersistedPanel}
-              />
-
               <UpdatesCard
                 updater={state?.updater}
                 desktopSetup={state?.desktopSetup}
@@ -1717,6 +1794,37 @@ export default function App() {
               onEditBlueprint={(path) => void handleEditBlueprintInWizard(path)}
               onOpenTemplateWizard={openTemplateWizard}
             />
+          </section>
+
+          <section id="maintenance-section" className="pt-2">
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+              <div className="xl:col-span-8">
+                <ReadinessCenterCard
+                  readinessItems={state?.readinessItems ?? []}
+                  experimentBranchInventory={
+                    state?.experimentBranchInventory ?? null
+                  }
+                  ollama={state?.ollama ?? null}
+                  onOpenSetup={() => setSetupOpen(true)}
+                  onInstallOllama={() => void installOllama()}
+                  onStartOllama={() => void startOllama()}
+                  onPreviewBranchCleanup={(thresholdMonths) =>
+                    previewExperimentBranchCleanup(thresholdMonths)
+                  }
+                  onCleanupBranches={(thresholdMonths) =>
+                    cleanupExperimentBranches(thresholdMonths)
+                  }
+                />
+              </div>
+              <div className="xl:col-span-4">
+                <PersistedStackCard
+                  experimentCount={state?.experiments.length ?? 0}
+                  proposalCount={state?.proposals.length ?? 0}
+                  logCount={state?.logs.length ?? 0}
+                  onOpenPanel={openPersistedPanel}
+                />
+              </div>
+            </div>
           </section>
 
           <BlueprintWizardModal

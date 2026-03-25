@@ -1,7 +1,7 @@
 use maabarium_core::Persistence;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::process::Command;
+use std::process::{Command, Output};
 use uuid::Uuid;
 
 fn temp_test_dir() -> PathBuf {
@@ -73,6 +73,17 @@ fn run_cli_workflow(temp_dir: &Path, database_path: &Path) -> ExitStatus {
         .expect("CLI should launch successfully")
 }
 
+fn run_cli_status(database_path: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_maabarium"))
+        .args([
+            "status",
+            "--db",
+            database_path.to_str().expect("utf-8 path"),
+        ])
+        .output()
+        .expect("CLI status should launch successfully")
+}
+
 #[test]
 fn cli_runs_process_plugin_workflow_end_to_end() {
     let temp_dir = temp_test_dir();
@@ -97,6 +108,12 @@ fn cli_runs_process_plugin_workflow_end_to_end() {
     assert_eq!(latest.blueprint_name, "temp-process-plugin");
     assert!(latest.error.is_none(), "latest experiment should succeed");
     assert!((latest.weighted_total - 0.91).abs() < f64::EPSILON);
+
+    let status_output = run_cli_status(&database_path);
+    assert!(status_output.status.success(), "CLI status should succeed");
+    let status_stdout =
+        String::from_utf8(status_output.stdout).expect("status stdout should be utf-8");
+    assert!(status_stdout.contains("outcome=promoted"));
 
     let _ = std::fs::remove_dir_all(temp_dir);
 }

@@ -12,6 +12,16 @@ use crate::evaluator::{
 };
 use crate::git_manager::FilePatch;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromotionOutcome {
+    Unknown,
+    Promoted,
+    Rejected,
+    Cancelled,
+    PromotionFailed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedExperiment {
     pub id: i64,
@@ -21,6 +31,7 @@ pub struct PersistedExperiment {
     pub weighted_total: f64,
     pub duration_ms: u64,
     pub error: Option<String>,
+    pub promotion_outcome: PromotionOutcome,
     pub created_at: String,
     pub metrics: Vec<MetricScore>,
     pub research: Option<ResearchArtifacts>,
@@ -46,6 +57,32 @@ pub struct Persistence {
     conn: Connection,
 }
 
+impl PromotionOutcome {
+    fn as_db_value(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Promoted => "promoted",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+            Self::PromotionFailed => "promotion_failed",
+        }
+    }
+
+    fn from_db_value(value: &str) -> Self {
+        match value {
+            "promoted" => Self::Promoted,
+            "rejected" => Self::Rejected,
+            "cancelled" => Self::Cancelled,
+            "promotion_failed" => Self::PromotionFailed,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn as_db_value_for_display(self) -> &'static str {
+        self.as_db_value()
+    }
+}
+
 pub fn default_db_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/maabarium.db")
 }
@@ -63,6 +100,7 @@ impl Persistence {
                 weighted_total REAL NOT NULL,
                 duration_ms INTEGER NOT NULL,
                 error TEXT,
+                promotion_outcome TEXT NOT NULL DEFAULT 'unknown',
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS metrics (
@@ -142,6 +180,10 @@ impl Persistence {
             "ALTER TABLE proposals ADD COLUMN file_patches_json TEXT NOT NULL DEFAULT '[]'",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE experiments ADD COLUMN promotion_outcome TEXT NOT NULL DEFAULT 'unknown'",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -149,17 +191,19 @@ impl Persistence {
         &self,
         blueprint_name: &str,
         result: &ExperimentResult,
+        promotion_outcome: PromotionOutcome,
     ) -> Result<i64, PersistError> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)",
             params![
                 result.iteration as i64,
                 blueprint_name,
                 result.proposal.summary,
                 result.weighted_total,
                 result.duration_ms as i64,
+                promotion_outcome.as_db_value(),
                 now,
             ],
         )?;
@@ -192,8 +236,8 @@ impl Persistence {
     ) -> Result<(), PersistError> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at)
-             VALUES (?1, ?2, '', 0.0, 0, ?3, ?4)",
+            "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, created_at)
+             VALUES (?1, ?2, '', 0.0, 0, ?3, 'unknown', ?4)",
             params![iteration as i64, blueprint_name, error, now],
         )?;
         Ok(())
@@ -218,7 +262,7 @@ impl Persistence {
         limit: usize,
     ) -> Result<Vec<PersistedExperiment>, PersistError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, created_at
              FROM experiments
              ORDER BY id DESC
              LIMIT ?1",
@@ -234,6 +278,7 @@ impl Persistence {
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
 
@@ -247,6 +292,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms,
                 error,
+                promotion_outcome,
                 created_at,
             ) = row?;
             let metrics = self.load_metrics(id)?;
@@ -258,6 +304,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms: duration_ms as u64,
                 error,
+                promotion_outcome: PromotionOutcome::from_db_value(&promotion_outcome),
                 created_at,
                 metrics,
                 research: self.load_research_artifacts(id)?,
@@ -274,7 +321,7 @@ impl Persistence {
         limit: usize,
     ) -> Result<Vec<PersistedExperiment>, PersistError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, created_at
              FROM experiments
              WHERE blueprint_name = ?1
              ORDER BY id DESC
@@ -291,6 +338,7 @@ impl Persistence {
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
 
@@ -304,6 +352,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms,
                 error,
+                promotion_outcome,
                 created_at,
             ) = row?;
             let metrics = self.load_metrics(id)?;
@@ -315,6 +364,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms: duration_ms as u64,
                 error,
+                promotion_outcome: PromotionOutcome::from_db_value(&promotion_outcome),
                 created_at,
                 metrics,
                 research: self.load_research_artifacts(id)?,
@@ -418,7 +468,7 @@ impl Persistence {
         writer.write_all(b"[\n")?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, created_at
              FROM experiments
              ORDER BY id DESC",
         )?;
@@ -432,6 +482,7 @@ impl Persistence {
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
 
@@ -445,6 +496,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms,
                 error,
+                promotion_outcome,
                 created_at,
             ) = row?;
             let record = PersistedExperiment {
@@ -455,6 +507,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms: duration_ms as u64,
                 error,
+                promotion_outcome: PromotionOutcome::from_db_value(&promotion_outcome),
                 created_at,
                 metrics: self.load_metrics(id)?,
                 research: self.load_research_artifacts(id)?,
@@ -473,7 +526,7 @@ impl Persistence {
     pub fn export_csv(&self, output: impl AsRef<Path>) -> Result<(), PersistError> {
         let mut writer = csv::Writer::from_path(output)?;
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, created_at
              FROM experiments
              ORDER BY id DESC",
         )?;
@@ -487,6 +540,7 @@ impl Persistence {
                 row.get::<_, i64>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })?;
 
@@ -499,6 +553,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms,
                 error,
+                promotion_outcome,
                 created_at,
             ) = row?;
             let metrics_json = serde_json::to_string(&self.load_metrics(id)?)?;
@@ -511,6 +566,7 @@ impl Persistence {
                 weighted_total,
                 duration_ms as u64,
                 error.unwrap_or_default(),
+                PromotionOutcome::from_db_value(&promotion_outcome).as_db_value(),
                 created_at,
                 metrics_json,
                 research_json,
@@ -809,7 +865,7 @@ mod tests {
             Persistence::open(db_path.to_str().expect("temp db path should be valid"))
                 .expect("db should open");
         persistence
-            .log_experiment("example", &sample_result())
+            .log_experiment("example", &sample_result(), PromotionOutcome::Promoted)
             .expect("experiment should be logged");
 
         persistence
@@ -823,8 +879,10 @@ mod tests {
         let csv = std::fs::read_to_string(&csv_path).expect("csv export should exist");
 
         assert!(json.contains("\"blueprint_name\": \"example\""));
+        assert!(json.contains("\"promotion_outcome\": \"promoted\""));
         assert!(json.contains("sqlite.org"));
         assert!(csv.contains("example"));
+        assert!(csv.contains("promoted"));
         assert!(csv.contains("sqlite.org"));
 
         let proposals = persistence
@@ -837,6 +895,7 @@ mod tests {
         let experiments = persistence
             .recent_experiments(1)
             .expect("experiments should load");
+        assert_eq!(experiments[0].promotion_outcome, PromotionOutcome::Promoted);
         let research = experiments[0]
             .research
             .as_ref()
@@ -865,7 +924,11 @@ mod tests {
                 .expect("db should open");
 
         persistence
-            .log_experiment("general-research-test", &sample_result())
+            .log_experiment(
+                "general-research-test",
+                &sample_result(),
+                PromotionOutcome::Rejected,
+            )
             .expect("workflow experiment should be logged");
         persistence
             .log_failure(
@@ -875,7 +938,7 @@ mod tests {
             )
             .expect("workflow failure should be logged");
         persistence
-            .log_experiment("example", &sample_result())
+            .log_experiment("example", &sample_result(), PromotionOutcome::Promoted)
             .expect("other workflow experiment should be logged");
 
         let workflow_experiments = persistence
@@ -889,11 +952,47 @@ mod tests {
             workflow_experiments[0].error.as_deref(),
             Some("Git operation failed: could not find repository")
         );
+        assert_eq!(workflow_experiments[1].promotion_outcome, PromotionOutcome::Rejected);
 
         let workflow_proposals = persistence
             .recent_proposals_for_blueprint("general-research-test", 10)
             .expect("workflow proposals should load");
         assert_eq!(workflow_proposals.len(), 1);
+
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn legacy_rows_default_to_unknown_promotion_outcome() {
+        let db_path = std::env::temp_dir().join(format!(
+            "maabarium-legacy-history-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+
+        let persistence =
+            Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+                .expect("db should open");
+
+        persistence
+            .conn
+            .execute(
+                "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                params![
+                    1_i64,
+                    "legacy",
+                    "legacy row",
+                    0.75_f64,
+                    1_i64,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .expect("legacy row should insert");
+
+        let experiments = persistence
+            .recent_experiments(1)
+            .expect("experiments should load");
+        assert_eq!(experiments[0].promotion_outcome, PromotionOutcome::Unknown);
 
         let _ = std::fs::remove_file(db_path);
     }

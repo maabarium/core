@@ -10,7 +10,7 @@ use crate::blueprint::{BlueprintFile, MetricDef};
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
 
-use super::{Evaluator, ExperimentResult, MetricScore, ResearchArtifacts};
+use super::{EvaluationContext, Evaluator, ExperimentResult, MetricScore, ResearchArtifacts};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProcessPluginManifest {
@@ -106,6 +106,7 @@ impl Evaluator for ProcessPluginEvaluator {
         &self,
         proposal: &Proposal,
         iteration: u64,
+        _context: &EvaluationContext,
     ) -> Result<ExperimentResult, EvalError> {
         let started = std::time::Instant::now();
         let request = PluginEvaluationRequest {

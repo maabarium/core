@@ -4,6 +4,7 @@ use crate::git_manager::Proposal;
 use crate::llm::provider_from_models;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod code;
@@ -84,6 +85,17 @@ pub struct LoraArtifacts {
 }
 
 pub struct EvaluatorRegistry;
+
+#[derive(Debug, Clone, Default)]
+pub struct EvaluationContext {
+    pub workspace_path: Option<PathBuf>,
+}
+
+impl EvaluationContext {
+    pub fn workspace_path(&self) -> Option<&Path> {
+        self.workspace_path.as_deref()
+    }
+}
 
 impl EvaluatorRegistry {
     pub fn resolve_builtin(blueprint: &BlueprintFile) -> BuiltinEvaluatorKind {
@@ -271,6 +283,7 @@ pub trait Evaluator: Send + Sync {
         &self,
         proposal: &Proposal,
         iteration: u64,
+        context: &EvaluationContext,
     ) -> Result<ExperimentResult, EvalError>;
 }
 

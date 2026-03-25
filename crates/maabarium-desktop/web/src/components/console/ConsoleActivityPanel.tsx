@@ -7,6 +7,18 @@ import type {
 } from "../../types/console";
 import { Badge } from "../ui/Badge";
 
+const historyBadge: Record<
+  HistoryRow["status"],
+  { color: "blue" | "emerald" | "rose" | "slate"; label: string }
+> = {
+  promoted: { color: "emerald", label: "Promoted" },
+  rejected: { color: "rose", label: "Rejected" },
+  cancelled: { color: "slate", label: "Cancelled" },
+  promotion_failed: { color: "rose", label: "Promotion Failed" },
+  unknown: { color: "blue", label: "Legacy" },
+  failed: { color: "rose", label: "Failed" },
+};
+
 export function ConsoleActivityPanel({
   activeTab,
   history,
@@ -70,25 +82,17 @@ export function ConsoleActivityPanel({
                             {entry.delta.toFixed(2)}
                           </span>
                         ) : (
-                          <span className="text-rose-400">failed</span>
+                          <span className="text-slate-500">
+                            {entry.status === "failed"
+                              ? "failed"
+                              : "first scored run"}
+                          </span>
                         )}
                       </div>
                     </td>
                     <td className="p-4">
-                      <Badge
-                        color={
-                          entry.status === "promoted"
-                            ? "emerald"
-                            : entry.status === "rejected"
-                              ? "slate"
-                              : "rose"
-                        }
-                      >
-                        {entry.status === "promoted"
-                          ? "Promoted"
-                          : entry.status === "rejected"
-                            ? "Rejected"
-                            : "Failed"}
+                      <Badge color={historyBadge[entry.status].color}>
+                        {historyBadge[entry.status].label}
                       </Badge>
                     </td>
                     <td className="p-4 text-slate-500 italic truncate max-w-[180px]">

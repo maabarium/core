@@ -30,7 +30,7 @@ If a legacy desktop session previously used repository-relative files under `dat
 
 ## What Is R2-Based vs Tauri-Based
 
-- `MAABARIUM_UPDATE_BASE_URL` can point at a public Cloudflare R2 bucket URL or, preferably, an R2-backed custom domain such as `https://downloads.example.com`.
+- `MAABARIUM_UPDATE_BASE_URL` can point at a public Cloudflare R2 bucket URL or, preferably, an R2-backed custom domain such as `https://downloads.maabarium.com`.
 - `latest.json` and the signed updater bundles can be published to that R2 bucket.
 - `MAABARIUM_UPDATE_PUBKEY` is not a Cloudflare value. It is the public half of the Tauri updater signing keypair.
 
@@ -47,10 +47,10 @@ Configure the desktop app with:
 Recommended layout when publishing to R2:
 
 ```text
-https://downloads.example.com/install.sh
-https://downloads.example.com/latest.json
-https://downloads.example.com/darwin-aarch64/Maabarium%20Console.app.tar.gz
-https://downloads.example.com/darwin-aarch64/Maabarium%20Console.app.tar.gz.sig
+https://downloads.maabarium.com/install.sh
+https://downloads.maabarium.com/latest.json
+https://downloads.maabarium.com/darwin-aarch64/Maabarium%20Console.app.tar.gz
+https://downloads.maabarium.com/darwin-aarch64/Maabarium%20Console.app.tar.gz.sig
 ```
 
 ## Generating the Tauri Signing Keypair
@@ -79,7 +79,7 @@ cd crates/maabarium-desktop
 export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/maabarium.key"
 export MAABARIUM_UPDATE_PUBKEY_FILE="$HOME/.tauri/maabarium.key.pub"
 pnpm tauri build
-pnpm build:release-manifest -- --base-url https://downloads.example.com --cli-platform stable/0.1.0/darwin-aarch64/maabarium-cli.tar.gz
+pnpm build:release-manifest -- --base-url https://downloads.maabarium.com --cli-platform stable/0.1.0/darwin-aarch64/maabarium-cli.tar.gz
 ```
 
 The generated manifest is written to:
@@ -92,7 +92,7 @@ Generate the matching bootstrap installer script from the same base URL metadata
 
 ```bash
 node scripts/release/generate-install-script.mjs \
-  --base-url https://downloads.example.com \
+  --base-url https://downloads.maabarium.com \
   --output crates/maabarium-desktop/release/install.sh
 ```
 
@@ -150,7 +150,7 @@ to Cloudflare R2.
 Example values:
 
 - `MAABARIUM_UPDATE_PUBKEY = <contents of ~/.tauri/maabarium.key.pub>`
-- `MAABARIUM_UPDATE_BASE_URL = https://downloads.example.com`
+- `MAABARIUM_UPDATE_BASE_URL = https://downloads.maabarium.com`
 - `CLOUDFLARE_R2_BUCKET = maabarium-releases`
 - `CLOUDFLARE_R2_ENDPOINT = https://<account-id>.r2.cloudflarestorage.com`
 
@@ -166,7 +166,7 @@ Recommended path:
 Fresh installs can then use:
 
 ```bash
-curl -fsSL https://downloads.example.com/install.sh | bash
+curl -fsSL https://downloads.maabarium.com/install.sh | bash
 ```
 
 The generated installer reads `latest.json` at runtime, selects the correct macOS architecture bundle, and installs the downloaded `.app` into `/Applications`.

@@ -6,7 +6,7 @@ Maabarium is a Rust-native, local-first continuous improvement engine inspired b
 
 ## Design Principles
 
-1. **Local-first, private, free** — Ollama + Metal on Apple Silicon, no cloud required by default
+1. **Local-first, private, free** — native Rust orchestration with strong support for local runtimes such as Ollama on Apple Silicon; no cloud required by default
 2. **Pure Rust control plane** — Tokio async runtime, no Python in the orchestration layer
 3. **Autoresearch keep-winner loop** — propose → apply → evaluate → keep/revert
 4. **Generalized domains** — pluggable Evaluator trait, not ML-only
@@ -29,16 +29,19 @@ The workspace is split so that `maabarium-core` can be built and tested independ
 
 ```text
 for iteration in 1..=max_iterations {
-    branch = git.create_experiment_branch(iteration)
+    branch = experiment_branch_name(iteration)
     proposal = council.propose(context, metrics)
-    git.apply_proposal(branch, proposal)
-    result = timeout(evaluator.evaluate(proposal))
+    workspace = git.apply_proposal(branch, proposal, reusable_workspace)
+    result = timeout(evaluator.evaluate(proposal, EvaluationContext { workspace_path: workspace }))
     if result.weighted_total > baseline + min_improvement:
+        git.create_branch_at_workspace_head(workspace, branch)
         git.promote_branch(branch)   // fast-forward main
         baseline = result.weighted_total
+        outcome = promoted
     else:
-        git.delete_branch(branch)   // discard
-    persistence.log_experiment(result)
+        git.detach_experiment_workspace(workspace)
+        outcome = rejected
+    persistence.log_experiment(result, outcome)
 }
 ```
 
@@ -47,7 +50,10 @@ Key design decisions:
 - `CancellationToken` (from `tokio-util`) drives graceful shutdown on Ctrl-C
 - Every fallible step uses `continue` with a `tracing::warn!` — no panics in production paths
 - `tokio::time::timeout` enforces per-experiment wall-clock limits
-- All results persist to SQLite before branch promotion/deletion
+- All results persist to SQLite with the engine's explicit promotion outcome
+- Detached experiment worktrees are reused across iterations when safe, then cleaned up once at the end of the run
+- Experiment branch refs are materialized only on promoted iterations; rejected runs stay as detached worktree state and never create branch history
+- The CLI prints an end-of-run timing summary aggregated from per-phase engine instrumentation
 
 ## Module Guide
 
@@ -56,7 +62,7 @@ Key design decisions:
 | `blueprint`   | TOML config parsing + validation                                                                 |
 | `engine`      | Keep-winner loop orchestration                                                                   |
 | `agent`       | Single Agent + Council (multi-agent debate)                                                      |
-| `git_manager` | git2 operations, all wrapped in `spawn_blocking`                                                 |
+| `git_manager` | git2 operations, reusable detached experiment worktrees, all wrapped in `spawn_blocking`         |
 | `llm/`        | LLMProvider trait, Ollama backend, OpenAI-compat backend, ModelPool with routing + rate limiting |
 | `evaluator/`  | Evaluator trait, ExperimentResult, PromptEvaluator                                               |
 | `metrics`     | Weighted scoring, improvement detection, normalization                                           |
@@ -95,7 +101,7 @@ When blueprints use `assignment = "explicit"`, each agent receives a pool contai
 ```rust
 #[async_trait]
 pub trait Evaluator: Send + Sync {
-    async fn evaluate(&self, proposal: &Proposal, iteration: u64) -> Result<ExperimentResult, EvalError>;
+    async fn evaluate(&self, proposal: &Proposal, iteration: u64, context: &EvaluationContext) -> Result<ExperimentResult, EvalError>;
 }
 ```
 
@@ -120,15 +126,13 @@ The Tauri desktop console reads both sources to render live score, duration, and
 
 ## Security Model
 
-| Threat                          | Mitigation                                                                            |
-| ------------------------------- | ------------------------------------------------------------------------------------- |
-| Agent writes to arbitrary paths | Sandbox repo snapshots plus path sanitization and Wasmtime-backed policy validation   |
-| Untrusted code execution        | Subprocess-based evaluator execution inside copied sandbox roots                      |
-| API key leakage                 | `keyring` crate → OS keychain. Never logged, never serialized to disk                 |
-| Runaway resource usage          | Per-experiment timeout via `tokio::time::timeout` + `max_iterations` cap in blueprint |
-| Supply chain attacks            | `deny.toml` for `cargo-deny`: audit CVEs, licenses, duplicate crates                  |
-| Git history pollution           | Experiment branches under `experiment/` prefix; auto-cleanup still planned            |
-| SQL injection                   | All queries use `rusqlite::params![]` parameterised binding                           |
+- Agent writes to arbitrary paths: reused git worktrees or sandbox snapshots plus path sanitization and Wasmtime-backed policy validation
+- Untrusted code execution: subprocess-based evaluator execution inside isolated worktrees or fallback sandbox roots
+- API key leakage: `keyring` crate → OS keychain. Never logged, never serialized to disk
+- Runaway resource usage: per-experiment timeout via `tokio::time::timeout` + `max_iterations` cap in blueprint
+- Supply chain attacks: `deny.toml` for `cargo-deny` audits CVEs, licenses, and duplicate crates
+- Git history pollution: experiment branches under the `experiment/` prefix with explicit cleanup paths
+- SQL injection: all queries use `rusqlite::params![]` parameterised binding
 
 ## Current Status
 
@@ -144,6 +148,7 @@ Implemented in the current repository:
 - blueprint-driven multi-model routing with per-model pacing
 - tracing spans on engine, pool, evaluator, and sandbox hot paths
 - Wasmtime-backed sandbox policy validation and subprocess-based code evaluation
+- reusable experiment worktrees plus CLI run timing summaries for profiling and operator visibility
 
 ## Closure Status
 

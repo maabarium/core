@@ -137,6 +137,12 @@ export type PersistedExperiment = {
   weighted_total: number;
   duration_ms: number;
   error: string | null;
+  promotion_outcome:
+    | "unknown"
+    | "promoted"
+    | "rejected"
+    | "cancelled"
+    | "promotion_failed";
   created_at: string;
   metrics: MetricScore[];
   research: ResearchArtifacts | null;
@@ -368,7 +374,13 @@ export type HistoryRow = {
   score: number | null;
   delta: number | null;
   summary: string;
-  status: "promoted" | "rejected" | "failed";
+  status:
+    | "promoted"
+    | "rejected"
+    | "cancelled"
+    | "promotion_failed"
+    | "unknown"
+    | "failed";
 };
 
 export type WorkspaceGitStatus = {

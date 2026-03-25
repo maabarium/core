@@ -1,10 +1,13 @@
 use async_trait::async_trait;
 use chrono::Utc;
+use futures::stream::{self, StreamExt};
 use reqwest::{Client, Url};
 use secrecy::ExposeSecret;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{Mutex, Semaphore};
 use tracing::{instrument, warn};
 
 use crate::blueprint::MetricDef;
@@ -13,7 +16,7 @@ use crate::git_manager::{FilePatchOperation, Proposal};
 use crate::secrets::SecretStore;
 
 use super::{
-    Evaluator, ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation,
+    EvaluationContext, Evaluator, ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation,
     ResearchQueryTrace, ResearchSource,
 };
 
@@ -64,6 +67,17 @@ struct BraveWebResult {
 const RESEARCH_SEARCH_PROVIDER_ENV: &str = "MAABARIUM_RESEARCH_SEARCH_PROVIDER";
 const VERIFY_DISCOVERED_URLS_ENV: &str = "MAABARIUM_VERIFY_DISCOVERED_URLS";
 const SCRAPER_FAILURE_MARKER: &str = "scraper_discovery";
+const MAX_SOURCE_VERIFICATION_CONCURRENCY: usize = 6;
+const MAX_SOURCE_VERIFICATION_PER_HOST: usize = 2;
+
+#[derive(Clone)]
+struct SourceVerificationRequest {
+    url: String,
+    label: Option<String>,
+    fallback_title: Option<String>,
+    citation_count: u32,
+    host_key: String,
+}
 
 fn mark_discovery_error(provider_name: &str, message: String) -> String {
     if provider_name == "duckduckgo_html" {
@@ -256,24 +270,42 @@ impl ResearchEvaluator {
                 .push(citation);
         }
 
-        let mut sources = Vec::with_capacity(grouped.len());
-        for (url, records) in grouped {
-            sources.push(self.verify_source(&url, &records).await);
-        }
+        let requests = grouped
+            .into_iter()
+            .map(|(url, records)| {
+                let label = records
+                    .iter()
+                    .find_map(|citation| citation.label.clone())
+                    .filter(|value| !value.trim().is_empty());
+                SourceVerificationRequest {
+                    host_key: source_host_key(&url),
+                    url,
+                    label,
+                    fallback_title: None,
+                    citation_count: records.len() as u32,
+                }
+            })
+            .collect::<Vec<_>>();
 
-        sources
+        self.verify_source_requests(requests).await
     }
 
     async fn verify_discovered_sources(
         &self,
         discovered_sources: Vec<ResearchSource>,
     ) -> Vec<ResearchSource> {
-        let mut sources = Vec::with_capacity(discovered_sources.len());
-        for source in discovered_sources {
-            sources.push(self.verify_discovered_source(source).await);
-        }
+        let requests = discovered_sources
+            .into_iter()
+            .map(|source| SourceVerificationRequest {
+                host_key: source_host_key(&source.url),
+                url: source.url,
+                label: source.label,
+                fallback_title: source.title,
+                citation_count: source.citation_count,
+            })
+            .collect::<Vec<_>>();
 
-        sources
+        self.verify_source_requests(requests).await
     }
 
     fn merge_sources(
@@ -295,23 +327,49 @@ impl ResearchEvaluator {
         verified_sources
     }
 
-    async fn verify_source(&self, url: &str, citations: &[&ResearchCitation]) -> ResearchSource {
-        let label = citations
-            .iter()
-            .find_map(|citation| citation.label.clone())
-            .filter(|value| !value.trim().is_empty());
-        let citation_count = citations.len() as u32;
+    async fn verify_source_requests(
+        &self,
+        requests: Vec<SourceVerificationRequest>,
+    ) -> Vec<ResearchSource> {
+        let total_limit = Arc::new(Semaphore::new(MAX_SOURCE_VERIFICATION_CONCURRENCY));
+        let host_limits = Arc::new(Mutex::new(
+            HashMap::<String, Arc<Semaphore>>::new(),
+        ));
 
-        self.build_verified_source(url, label, None, citation_count).await
-    }
+        stream::iter(requests.into_iter().map(|request| {
+            let total_limit = Arc::clone(&total_limit);
+            let host_limits = Arc::clone(&host_limits);
 
-    async fn verify_discovered_source(&self, source: ResearchSource) -> ResearchSource {
-        self.build_verified_source(
-            &source.url,
-            source.label,
-            source.title,
-            source.citation_count,
-        )
+            async move {
+                let _total_permit = total_limit
+                    .acquire_owned()
+                    .await
+                    .expect("source verification semaphore should remain open");
+                let host_limit = {
+                    let mut limits = host_limits.lock().await;
+                    limits
+                        .entry(request.host_key.clone())
+                        .or_insert_with(|| {
+                            Arc::new(Semaphore::new(MAX_SOURCE_VERIFICATION_PER_HOST))
+                        })
+                        .clone()
+                };
+                let _host_permit = host_limit
+                    .acquire_owned()
+                    .await
+                    .expect("host verification semaphore should remain open");
+
+                self.build_verified_source(
+                    &request.url,
+                    request.label,
+                    request.fallback_title,
+                    request.citation_count,
+                )
+                .await
+            }
+        }))
+        .buffered(MAX_SOURCE_VERIFICATION_CONCURRENCY)
+        .collect()
         .await
     }
 
@@ -460,6 +518,13 @@ impl ResearchEvaluator {
     }
 }
 
+fn source_host_key(url: &str) -> String {
+    Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown-host".to_owned())
+}
+
 fn extract_search_query_from_summary(summary: &str) -> Option<String> {
     let lowered = summary.to_ascii_lowercase();
     if let Some(search_index) = lowered.find("search for") {
@@ -518,6 +583,7 @@ impl Evaluator for ResearchEvaluator {
         &self,
         proposal: &Proposal,
         iteration: u64,
+        _context: &EvaluationContext,
     ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let citations = self.collect_citations(proposal);
@@ -1036,7 +1102,7 @@ mod tests {
         };
 
         let result = evaluator
-            .evaluate(&proposal, 1)
+            .evaluate(&proposal, 1, &EvaluationContext::default())
             .await
             .expect("research evaluation should succeed");
 

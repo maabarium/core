@@ -236,45 +236,73 @@ impl SandboxWorkspace {
 
     #[instrument(name = "sandbox_wasmtime_policy", skip(self), fields(max_files = self.policy.max_files, max_total_bytes = self.policy.max_total_bytes))]
     fn validate_with_wasmtime(&self, summary: &SandboxSummary) -> Result<(), EvalError> {
-        let runtime = cached_policy_runtime()?;
-        let mut store = Store::new(&runtime.engine, ());
-        let instance = runtime
-            .instance_pre
-            .instantiate(&mut store)
-            .map_err(|error| {
-                EvalError::Sandbox(format!("failed to instantiate wasmtime policy: {error}"))
-            })?;
-        let validate = instance
-            .get_typed_func::<(i32, i64, i32, i64), i32>(&mut store, "validate")
-            .map_err(|error| {
-                EvalError::Sandbox(format!("failed to bind wasmtime policy: {error}"))
-            })?;
-        let accepted = validate
-            .call(
-                &mut store,
-                (
-                    summary.file_count as i32,
-                    summary.total_bytes as i64,
-                    self.policy.max_files as i32,
-                    self.policy.max_total_bytes as i64,
-                ),
-            )
-            .map_err(|error| {
-                EvalError::Sandbox(format!("wasmtime policy execution failed: {error}"))
-            })?;
+        validate_summary_with_wasmtime(summary, self.policy)
+    }
+}
 
-        if accepted == 1 {
-            Ok(())
-        } else {
-            Err(EvalError::Sandbox(format!(
-                "wasmtime isolation policy rejected sandbox output: file_count={} total_bytes={} limits=({}, {})",
-                summary.file_count,
-                summary.total_bytes,
-                self.policy.max_files,
-                self.policy.max_total_bytes,
-            )))
+fn validate_summary_with_wasmtime(
+    summary: &SandboxSummary,
+    policy: WasmtimeIsolationPolicy,
+) -> Result<(), EvalError> {
+    let runtime = cached_policy_runtime()?;
+    let mut store = Store::new(&runtime.engine, ());
+    let instance = runtime
+        .instance_pre
+        .instantiate(&mut store)
+        .map_err(|error| {
+            EvalError::Sandbox(format!("failed to instantiate wasmtime policy: {error}"))
+        })?;
+    let validate = instance
+        .get_typed_func::<(i32, i64, i32, i64), i32>(&mut store, "validate")
+        .map_err(|error| {
+            EvalError::Sandbox(format!("failed to bind wasmtime policy: {error}"))
+        })?;
+    let accepted = validate
+        .call(
+            &mut store,
+            (
+                summary.file_count as i32,
+                summary.total_bytes as i64,
+                policy.max_files as i32,
+                policy.max_total_bytes as i64,
+            ),
+        )
+        .map_err(|error| {
+            EvalError::Sandbox(format!("wasmtime policy execution failed: {error}"))
+        })?;
+
+    if accepted == 1 {
+        Ok(())
+    } else {
+        Err(EvalError::Sandbox(format!(
+            "wasmtime isolation policy rejected sandbox output: file_count={} total_bytes={} limits=({}, {})",
+            summary.file_count,
+            summary.total_bytes,
+            policy.max_files,
+            policy.max_total_bytes,
+        )))
+    }
+}
+
+pub fn summarize_existing_workspace(
+    root: &Path,
+    proposal: &Proposal,
+) -> Result<SandboxSummary, EvalError> {
+    let mut total_bytes = 0usize;
+    for patch in &proposal.file_patches {
+        let _ = sanitize_relative_path(&patch.path)?;
+        if let Some(content) = patch.content.as_deref() {
+            total_bytes += content.len();
         }
     }
+
+    let summary = SandboxSummary {
+        file_count: proposal.file_patches.len(),
+        total_bytes,
+        root: root.to_path_buf(),
+    };
+    validate_summary_with_wasmtime(&summary, WasmtimeIsolationPolicy::default())?;
+    Ok(summary)
 }
 
 fn copy_repo_snapshot(source_root: &Path, destination_root: &Path) -> Result<(), EvalError> {
@@ -301,7 +329,7 @@ fn copy_repo_snapshot(source_root: &Path, destination_root: &Path) -> Result<(),
             })?;
             copy_repo_snapshot(&path, &destination)?;
         } else if metadata.is_file() {
-            std::fs::copy(&path, &destination).map_err(|error| {
+            copy_snapshot_file(&path, &destination).map_err(|error| {
                 EvalError::Sandbox(format!(
                     "failed to copy snapshot file '{}': {error}",
                     path.display()
@@ -311,6 +339,45 @@ fn copy_repo_snapshot(source_root: &Path, destination_root: &Path) -> Result<(),
     }
 
     Ok(())
+}
+
+fn copy_snapshot_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if try_clone_snapshot_file(source, destination)? {
+            return Ok(());
+        }
+    }
+
+    std::fs::copy(source, destination).map(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+fn try_clone_snapshot_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int};
+    use std::os::unix::ffi::OsStrExt;
+
+    unsafe extern "C" {
+        fn clonefile(src: *const c_char, dst: *const c_char, flags: c_int) -> c_int;
+    }
+
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "source path contains NUL"))?;
+    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "destination path contains NUL")
+    })?;
+
+    let result = unsafe { clonefile(source.as_ptr(), destination.as_ptr(), 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(18 | 22 | 45 | 78) => Ok(false),
+        _ => Err(error),
+    }
 }
 
 impl Drop for SandboxWorkspace {

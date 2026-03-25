@@ -2,8 +2,11 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
+use futures::future::join_all;
 use serde::Deserialize;
+use tracing::{debug, info, warn};
 
 use crate::blueprint::{AgentDef, MetricDef};
 use crate::error::LLMError;
@@ -182,6 +185,12 @@ pub struct Council {
     debate_rounds: u32,
 }
 
+struct CouncilProposal {
+    agent_index: usize,
+    agent_name: String,
+    proposal: Proposal,
+}
+
 impl Council {
     pub fn new(agents: Vec<Agent>, debate_rounds: u32) -> Self {
         Self {
@@ -202,48 +211,97 @@ impl Council {
             return Err(LLMError::Provider("Council has no agents".into()));
         }
 
+        let proposal_round_started = Instant::now();
+        let proposal_results = join_all(
+            self.agents
+                .iter()
+                .enumerate()
+                .map(|(agent_index, agent)| async move {
+                    let started = Instant::now();
+                    let result = agent
+                        .propose(context, repo_path, target_files, language, metrics)
+                        .await;
+                    (
+                        agent_index,
+                        agent.name().to_owned(),
+                        started.elapsed(),
+                        result,
+                    )
+                }),
+        )
+        .await;
+
         let mut proposals = Vec::new();
-        for agent in &self.agents {
-            match agent
-                .propose(context, repo_path, target_files, language, metrics)
-                .await
-            {
-                Ok(p) => proposals.push(p),
-                Err(e) => {
-                    tracing::warn!("Agent '{}' failed to propose: {e}", agent.name());
+        for (agent_index, agent_name, duration, result) in proposal_results {
+            match result {
+                Ok(proposal) => {
+                    info!(
+                        agent = %agent_name,
+                        duration_ms = duration.as_millis() as u64,
+                        "Council proposal completed"
+                    );
+                    proposals.push(CouncilProposal {
+                        agent_index,
+                        agent_name,
+                        proposal,
+                    });
                 }
-            }
-        }
-
-        if proposals.is_empty() {
-            return Err(LLMError::Provider("All agents failed to propose".into()));
-        }
-
-        for _round in 0..self.debate_rounds {
-            for (i, agent) in self.agents.iter().enumerate() {
-                if i >= proposals.len() {
-                    break;
-                }
-                let others: Vec<Proposal> = proposals
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, p)| p.clone())
-                    .collect();
-                // The debate critique is logged via tracing but does not currently
-                // mutate the proposal. In Phase 2 this will feed back into a
-                // synthesis step that produces a refined consensus proposal.
-                if let Ok(critique) = agent.debate(&proposals[i], &others).await {
-                    tracing::debug!(
-                        agent = agent.name(),
-                        critique = %critique,
-                        "Debate round critique"
+                Err(error) => {
+                    warn!(
+                        agent = %agent_name,
+                        duration_ms = duration.as_millis() as u64,
+                        error = %error,
+                        "Council proposal failed"
                     );
                 }
             }
         }
 
-        Ok(proposals.remove(0))
+        info!(
+            duration_ms = proposal_round_started.elapsed().as_millis() as u64,
+            requested_agents = self.agents.len(),
+            successful_proposals = proposals.len(),
+            "Council proposal round finished"
+        );
+
+        if proposals.is_empty() {
+            return Err(LLMError::Provider("All agents failed to propose".into()));
+        }
+
+        for round in 0..self.debate_rounds {
+            let round_started = Instant::now();
+            for (proposal_index, proposal_entry) in proposals.iter().enumerate() {
+                let agent = &self.agents[proposal_entry.agent_index];
+                let others: Vec<Proposal> = proposals
+                    .iter()
+                    .enumerate()
+                    .filter(|(other_index, _)| *other_index != proposal_index)
+                    .map(|(_, proposal)| proposal.proposal.clone())
+                    .collect();
+                // The debate critique is logged via tracing but does not currently
+                // mutate the proposal. In Phase 2 this will feed back into a
+                // synthesis step that produces a refined consensus proposal.
+                let debate_started = Instant::now();
+                if let Ok(critique) = agent.debate(&proposal_entry.proposal, &others).await {
+                    debug!(
+                        agent = %proposal_entry.agent_name,
+                        round = round + 1,
+                        duration_ms = debate_started.elapsed().as_millis() as u64,
+                        critique = %critique,
+                        "Debate round critique"
+                    );
+                }
+            }
+
+            info!(
+                round = round + 1,
+                duration_ms = round_started.elapsed().as_millis() as u64,
+                active_agents = proposals.len(),
+                "Council debate round finished"
+            );
+        }
+
+        Ok(proposals.remove(0).proposal)
     }
 }
 
@@ -946,7 +1004,42 @@ fn is_text_path(path: &str, language: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use crate::llm::MockProvider;
+    use crate::llm::{CompletionRequest, CompletionResponse, LLMProvider};
+    use tokio::sync::Barrier;
+    use tokio::time::{Duration, timeout};
+
+    struct BarrierProvider {
+        model: String,
+        barrier: Arc<Barrier>,
+    }
+
+    #[async_trait]
+    impl LLMProvider for BarrierProvider {
+        async fn complete(
+            &self,
+            _request: &CompletionRequest,
+        ) -> Result<CompletionResponse, LLMError> {
+            self.barrier.wait().await;
+            Ok(CompletionResponse {
+                content: format!(
+                    "{{\n  \"summary\": \"{} proposal\",\n  \"file_patches\": [\n    {{\n      \"path\": \"src/lib.rs\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -1,1 +1,1 @@\\n-pub fn baseline() {{}}\\n+pub fn {}() {{}}\\n\"\n    }}\n  ]\n}}",
+                    self.model, self.model,
+                ),
+                tokens_used: 8,
+                latency: Duration::from_millis(1),
+            })
+        }
+
+        fn provider_name(&self) -> &str {
+            "barrier"
+        }
+
+        fn model_name(&self) -> &str {
+            &self.model
+        }
+    }
 
     #[tokio::test]
     async fn parses_structured_llm_patch_payload() {
@@ -995,6 +1088,70 @@ mod tests {
                 .expect("content should exist")
                 .contains("maabarium_improvement")
         );
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[tokio::test]
+    async fn runs_council_proposals_concurrently() {
+        let repo_root =
+            std::env::temp_dir().join(format!("maabarium-council-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(repo_root.join("src")).expect("temp repo should be created");
+        fs::write(repo_root.join("src/lib.rs"), "pub fn baseline() {}\n")
+            .expect("source file should be written");
+
+        let barrier = Arc::new(Barrier::new(2));
+        let council = Council::new(
+            vec![
+                Agent::new(
+                    AgentDef {
+                        name: "alpha".into(),
+                        role: "engineer".into(),
+                        system_prompt: "Return valid patch payloads".into(),
+                        model: "alpha".into(),
+                    },
+                    Arc::new(BarrierProvider {
+                        model: "alpha".into(),
+                        barrier: Arc::clone(&barrier),
+                    }),
+                ),
+                Agent::new(
+                    AgentDef {
+                        name: "beta".into(),
+                        role: "engineer".into(),
+                        system_prompt: "Return valid patch payloads".into(),
+                        model: "beta".into(),
+                    },
+                    Arc::new(BarrierProvider {
+                        model: "beta".into(),
+                        barrier,
+                    }),
+                ),
+            ],
+            0,
+        );
+
+        let proposal = timeout(
+            Duration::from_millis(200),
+            council.run(
+                "Improve the baseline function",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["src/**/*.rs".into()],
+                "rust",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            ),
+        )
+        .await
+        .expect("proposal generation should not serialize across agents")
+        .expect("proposal generation should succeed");
+
+        assert_eq!(proposal.summary, "alpha proposal");
+        assert_eq!(proposal.file_patches[0].path, "src/lib.rs");
 
         let _ = fs::remove_dir_all(repo_root);
     }

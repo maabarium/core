@@ -1,4 +1,4 @@
-use super::{Evaluator, ExperimentResult, MetricScore};
+use super::{EvaluationContext, Evaluator, ExperimentResult, MetricScore};
 use crate::blueprint::MetricDef;
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
@@ -29,6 +29,7 @@ impl Evaluator for PromptEvaluator {
         &self,
         proposal: &Proposal,
         iteration: u64,
+        _context: &EvaluationContext,
     ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let mut scores = Vec::new();

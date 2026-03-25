@@ -42,7 +42,7 @@ export function PersistedStackCard({
             {
               id: "history" as const,
               label: "Open History",
-              copy: "Review promoted and rejected persisted experiments.",
+              copy: "Review recent persisted experiments and their actual promotion outcomes.",
             },
             {
               id: "diff" as const,

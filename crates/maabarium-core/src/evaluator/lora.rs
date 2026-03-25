@@ -367,6 +367,7 @@ impl Evaluator for LoraEvaluator {
         &self,
         proposal: &Proposal,
         iteration: u64,
+        _context: &super::EvaluationContext,
     ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let sandbox = SandboxWorkspace::new()?;
@@ -496,6 +497,7 @@ mod tests {
                     ],
                 },
                 1,
+                &crate::evaluator::EvaluationContext::default(),
             )
             .await
             .expect("evaluation should succeed");
@@ -525,6 +527,7 @@ mod tests {
                     }],
                 },
                 1,
+                &crate::evaluator::EvaluationContext::default(),
             )
             .await
             .expect_err("evaluation should fail when the LoRA subprocess exits non-zero");
@@ -552,6 +555,7 @@ mod tests {
                     }],
                 },
                 1,
+                &crate::evaluator::EvaluationContext::default(),
             )
             .await
             .expect_err("evaluation should reject malformed manifests");
@@ -586,6 +590,7 @@ mod tests {
                     ],
                 },
                 1,
+                &crate::evaluator::EvaluationContext::default(),
             )
             .await
             .expect("nested lora-run.json should not be treated as the canonical manifest");

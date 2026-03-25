@@ -50,7 +50,7 @@ function printHelp() {
 
 Usage:
   node scripts/release/generate-install-script.mjs \
-    --base-url https://downloads.example.com \
+    --base-url https://downloads.maabarium.com \
     --output crates/maabarium-desktop/release/install.sh
 `);
 }

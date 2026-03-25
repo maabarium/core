@@ -479,6 +479,17 @@ function normalizeOllamaStatus(
   };
 }
 
+function normalizePromotionOutcome(
+  outcome: string | null | undefined,
+): "unknown" | "promoted" | "rejected" | "cancelled" | "promotion_failed" {
+  return outcome === "promoted" ||
+    outcome === "rejected" ||
+    outcome === "cancelled" ||
+    outcome === "promotion_failed"
+    ? outcome
+    : "unknown";
+}
+
 export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
   return {
     engineRunning: Boolean(snapshot.engineRunning),
@@ -584,6 +595,9 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
     experiments: Array.isArray(snapshot.experiments)
       ? snapshot.experiments.map((experiment) => ({
           ...experiment,
+          promotion_outcome: normalizePromotionOutcome(
+            experiment.promotion_outcome,
+          ),
           metrics: Array.isArray(experiment.metrics) ? experiment.metrics : [],
           research: normalizeResearchArtifacts(experiment.research),
           lora: normalizeLoraArtifacts(experiment.lora),

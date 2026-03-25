@@ -1,0 +1,18 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "cargo test maabarium-core",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test",
+				"-p",
+				"maabarium-core"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		}
+	]
+}

@@ -7,14 +7,38 @@ use crate::blueprint::MetricDef;
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
 
-use super::sandbox::{SandboxSummary, SandboxWorkspace, SubprocessRunner};
-use super::{Evaluator, ExperimentResult, MetricScore};
+use super::sandbox::{SandboxSummary, SandboxWorkspace, SubprocessRunner, summarize_existing_workspace};
+use super::{EvaluationContext, Evaluator, ExperimentResult, MetricScore};
 
 pub struct CodeEvaluator {
     metrics: Vec<MetricDef>,
     target_files: Vec<String>,
     require_tests_pass: bool,
-    repo_path: PathBuf,
+    resolved_paths: ResolvedCodePaths,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedCodePaths {
+    evaluation_root: PathBuf,
+    execution_subdir: Option<PathBuf>,
+}
+
+impl ResolvedCodePaths {
+    fn new(repo_path: impl Into<PathBuf>) -> Self {
+        let repo_path = repo_path.into();
+        let repo_anchor = canonicalize_workspace_anchor(&repo_path).unwrap_or(repo_path.clone());
+        let execution_anchor =
+            canonicalize_execution_anchor(&repo_path).unwrap_or_else(|| repo_anchor.clone());
+        let evaluation_root =
+            resolve_workspace_root_from_anchor(&repo_anchor).unwrap_or_else(|| repo_anchor.clone());
+        let execution_subdir =
+            resolve_execution_subdir_from_anchor(&execution_anchor, &evaluation_root);
+
+        Self {
+            evaluation_root,
+            execution_subdir,
+        }
+    }
 }
 
 impl CodeEvaluator {
@@ -28,7 +52,7 @@ impl CodeEvaluator {
             metrics,
             target_files,
             require_tests_pass,
-            repo_path: repo_path.into(),
+            resolved_paths: ResolvedCodePaths::new(repo_path),
         }
     }
 
@@ -59,15 +83,16 @@ impl CodeEvaluator {
     }
 
     fn evaluation_root(&self) -> PathBuf {
-        resolve_workspace_root(&self.repo_path).unwrap_or_else(|| self.repo_path.clone())
+        self.resolved_paths.evaluation_root.clone()
     }
 
     fn execution_dir(
         &self,
-        evaluation_root: &std::path::Path,
         sandbox_root: &std::path::Path,
     ) -> PathBuf {
-        resolve_execution_subdir(&self.repo_path, evaluation_root)
+        self.resolved_paths
+            .execution_subdir
+            .as_ref()
             .map(|relative| sandbox_root.join(relative))
             .unwrap_or_else(|| sandbox_root.to_path_buf())
     }
@@ -142,16 +167,24 @@ impl Evaluator for CodeEvaluator {
         &self,
         proposal: &Proposal,
         iteration: u64,
+        context: &EvaluationContext,
     ) -> Result<ExperimentResult, EvalError> {
         let start = std::time::Instant::now();
         let evaluation_root = self.evaluation_root();
-        let sandbox = if evaluation_root.exists() {
-            SandboxWorkspace::from_repo(&evaluation_root)?
+        let sandbox_summary = if let Some(workspace_path) = context.workspace_path() {
+            summarize_existing_workspace(workspace_path, proposal)?
         } else {
-            SandboxWorkspace::new()?
+            let sandbox = if evaluation_root.exists() {
+                SandboxWorkspace::from_repo(&evaluation_root)?
+            } else {
+                SandboxWorkspace::new()?
+            };
+            sandbox.materialize(proposal)?
         };
-        let sandbox_summary = sandbox.materialize(proposal)?;
-        let execution_dir = self.execution_dir(&evaluation_root, sandbox.root());
+        let execution_root = context
+            .workspace_path()
+            .unwrap_or_else(|| sandbox_summary.root.as_path());
+        let execution_dir = self.execution_dir(execution_root);
         if let Some(runner) = self.test_runner(&execution_dir, &evaluation_root) {
             let output = runner.run(&execution_dir).await?;
             if output.status_code != Some(0) {
@@ -186,13 +219,35 @@ impl Evaluator for CodeEvaluator {
     }
 }
 
-fn resolve_workspace_root(repo_path: &std::path::Path) -> Option<PathBuf> {
-    let mut current = repo_path.canonicalize().ok()?;
-    if current.is_file() {
-        current = current.parent()?.to_path_buf();
+fn canonicalize_workspace_anchor(repo_path: &std::path::Path) -> Option<PathBuf> {
+    let canonical = repo_path.canonicalize().ok()?;
+    if canonical.is_file() {
+        canonical.parent().map(|path| path.to_path_buf())
+    } else {
+        Some(canonical)
     }
+}
 
-    let mut cursor = Some(current.as_path());
+fn canonicalize_execution_anchor(repo_path: &std::path::Path) -> Option<PathBuf> {
+    let canonical = repo_path.canonicalize().ok()?;
+    if canonical.is_file() {
+        canonical
+            .parent()
+            .and_then(|path| path.parent())
+            .map(|path| path.to_path_buf())
+    } else {
+        Some(canonical)
+    }
+}
+
+#[cfg(test)]
+fn resolve_workspace_root(repo_path: &std::path::Path) -> Option<PathBuf> {
+    let current = canonicalize_workspace_anchor(repo_path)?;
+    resolve_workspace_root_from_anchor(&current)
+}
+
+fn resolve_workspace_root_from_anchor(current: &std::path::Path) -> Option<PathBuf> {
+    let mut cursor = Some(current);
     while let Some(path) = cursor {
         let cargo_toml = path.join("Cargo.toml");
         if cargo_toml.exists() {
@@ -204,18 +259,22 @@ fn resolve_workspace_root(repo_path: &std::path::Path) -> Option<PathBuf> {
         cursor = path.parent();
     }
 
-    Some(current)
+    Some(current.to_path_buf())
 }
 
+#[cfg(test)]
 fn resolve_execution_subdir(
     repo_path: &std::path::Path,
     evaluation_root: &std::path::Path,
 ) -> Option<PathBuf> {
-    let mut current = repo_path.canonicalize().ok()?;
-    if current.is_file() {
-        current = current.parent()?.parent()?.to_path_buf();
-    }
+    let current = canonicalize_execution_anchor(repo_path)?;
+    resolve_execution_subdir_from_anchor(&current, evaluation_root)
+}
 
+fn resolve_execution_subdir_from_anchor(
+    current: &std::path::Path,
+    evaluation_root: &std::path::Path,
+) -> Option<PathBuf> {
     current
         .strip_prefix(evaluation_root)
         .ok()
@@ -313,6 +372,7 @@ mod tests {
                     }],
                 },
                 1,
+                &EvaluationContext::default(),
             )
             .await
             .expect("evaluation should succeed");

@@ -1,7 +1,7 @@
 #[cfg(unix)]
 mod tests {
     use maabarium_core::git_manager::{FilePatch, FilePatchOperation, Proposal};
-    use maabarium_core::{BlueprintFile, EvaluatorRegistry};
+    use maabarium_core::{BlueprintFile, EvaluationContext, EvaluatorRegistry};
     use std::path::PathBuf;
 
     fn fixture_directory() -> PathBuf {
@@ -56,7 +56,7 @@ mod tests {
         };
 
         let result = evaluator
-            .evaluate(&proposal, 1)
+            .evaluate(&proposal, 1, &EvaluationContext::default())
             .await
             .expect("fixture plugin should return a valid evaluation response");
 

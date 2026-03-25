@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::{
-    ApiKeyStore, BlueprintFile, Engine, EngineConfig, EvaluatorRegistry, ExportFormat, Persistence,
-    SecretStore, UpdaterConfiguration, check_for_cli_update, default_db_path, default_log_path,
-    install_cli_update,
+    ApiKeyStore, BlueprintFile, Engine, EngineConfig, EngineTimingSummary, EvaluatorRegistry,
+    ExportFormat, Persistence, PromotionOutcome, SecretStore, UpdaterConfiguration,
+    check_for_cli_update, default_db_path, default_log_path, install_cli_update,
 };
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
@@ -123,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
                 .run()
                 .await
                 .map_err(|e| anyhow::anyhow!("Engine error: {e}"))?;
+            println!("{}", render_timing_summary(&engine.timing_summary()));
         }
         Commands::Status { db } => {
             let persistence = Persistence::open(&normalize_db_path(&db))?;
@@ -132,14 +133,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 println!("Recent experiments from {db}:");
                 for experiment in experiments {
-                    println!(
-                        "- iter={} blueprint={} score={:.3} duration={}ms error={}",
-                        experiment.iteration,
-                        experiment.blueprint_name,
-                        experiment.weighted_total,
-                        experiment.duration_ms,
-                        experiment.error.unwrap_or_else(|| "none".into())
-                    );
+                    println!("{}", render_experiment_status_line(&experiment));
                 }
             }
         }
@@ -300,6 +294,70 @@ fn prompt_for_api_key(provider: &str) -> anyhow::Result<String> {
     Ok(value)
 }
 
+fn render_experiment_status_line(
+    experiment: &maabarium_core::persistence::PersistedExperiment,
+) -> String {
+    format!(
+        "- iter={} blueprint={} score={:.3} duration={}ms outcome={} error={}",
+        experiment.iteration,
+        experiment.blueprint_name,
+        experiment.weighted_total,
+        experiment.duration_ms,
+        format_promotion_outcome(experiment.promotion_outcome),
+        experiment.error.clone().unwrap_or_else(|| "none".into())
+    )
+}
+
+fn format_promotion_outcome(outcome: PromotionOutcome) -> &'static str {
+    match outcome {
+        PromotionOutcome::Unknown => "unknown",
+        PromotionOutcome::Promoted => "promoted",
+        PromotionOutcome::Rejected => "rejected",
+        PromotionOutcome::Cancelled => "cancelled",
+        PromotionOutcome::PromotionFailed => "promotion_failed",
+    }
+}
+
+fn render_timing_summary(summary: &EngineTimingSummary) -> String {
+    if summary.phase_totals.is_empty() {
+        return "Run timing summary: unavailable".to_owned();
+    }
+
+    let mut lines = vec![format!(
+        "Run timing summary (run_id={}, iterations={})",
+        summary.run_id, summary.completed_iterations,
+    )];
+
+    for (phase, timing) in &summary.phase_totals {
+        let average_ms = if timing.count == 0 {
+            0
+        } else {
+            timing.total_ms / timing.count
+        };
+        lines.push(format!(
+            "- phase={} total={}ms avg={}ms max={}ms count={}",
+            phase, timing.total_ms, average_ms, timing.max_ms, timing.count,
+        ));
+    }
+
+    if !summary.iteration_durations_ms.is_empty() {
+        let total_iterations_ms: u64 = summary.iteration_durations_ms.iter().sum();
+        let average_iteration_ms = total_iterations_ms / summary.iteration_durations_ms.len() as u64;
+        let max_iteration_ms = summary
+            .iteration_durations_ms
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        lines.push(format!(
+            "- iterations total={}ms avg={}ms max={}ms",
+            total_iterations_ms, average_iteration_ms, max_iteration_ms,
+        ));
+    }
+
+    lines.join("\n")
+}
+
 fn mask_secret(value: &str) -> String {
     let visible = value
         .chars()
@@ -342,7 +400,11 @@ fn render_delete_key_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maabarium_core::error::SecretError;
+    use maabarium_core::{
+        error::SecretError,
+        evaluator::MetricScore,
+        persistence::{PersistedExperiment, PromotionOutcome},
+    };
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -396,5 +458,65 @@ mod tests {
             .expect("secret should be stored");
         let deleted = render_delete_key_message(&store, "openai").expect("message should render");
         assert_eq!(deleted, "Deleted API key for provider: openai");
+    }
+
+    #[test]
+    fn renders_status_lines_with_promotion_outcome() {
+        let line = render_experiment_status_line(&PersistedExperiment {
+            id: 42,
+            iteration: 7,
+            blueprint_name: "status-demo".into(),
+            proposal_summary: "summary".into(),
+            weighted_total: 0.912,
+            duration_ms: 14,
+            error: None,
+            promotion_outcome: PromotionOutcome::Promoted,
+            created_at: "2026-03-25T00:00:00Z".into(),
+            metrics: vec![MetricScore {
+                name: "quality".into(),
+                value: 0.912,
+                weight: 1.0,
+            }],
+            research: None,
+            lora: None,
+        });
+
+        assert!(line.contains("outcome=promoted"));
+        assert!(line.contains("error=none"));
+    }
+
+    #[test]
+    fn formats_all_known_promotion_outcomes() {
+        assert_eq!(format_promotion_outcome(PromotionOutcome::Unknown), "unknown");
+        assert_eq!(format_promotion_outcome(PromotionOutcome::Promoted), "promoted");
+        assert_eq!(format_promotion_outcome(PromotionOutcome::Rejected), "rejected");
+        assert_eq!(format_promotion_outcome(PromotionOutcome::Cancelled), "cancelled");
+        assert_eq!(
+            format_promotion_outcome(PromotionOutcome::PromotionFailed),
+            "promotion_failed"
+        );
+    }
+
+    #[test]
+    fn renders_timing_summary_for_cli_output() {
+        let mut summary = EngineTimingSummary {
+            run_id: "abc12345".into(),
+            completed_iterations: 2,
+            ..EngineTimingSummary::default()
+        };
+        summary.phase_totals.insert(
+            "applying".into(),
+            maabarium_core::EnginePhaseTiming {
+                count: 2,
+                total_ms: 120,
+                max_ms: 80,
+            },
+        );
+        summary.iteration_durations_ms = vec![99, 83];
+
+        let rendered = render_timing_summary(&summary);
+        assert!(rendered.contains("run_id=abc12345"));
+        assert!(rendered.contains("phase=applying total=120ms avg=60ms max=80ms count=2"));
+        assert!(rendered.contains("iterations total=182ms avg=91ms max=99ms"));
     }
 }

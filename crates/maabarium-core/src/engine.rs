@@ -1,11 +1,12 @@
 use crate::agent::{Agent, Council};
 use crate::blueprint::{BlueprintFile, ModelAssignment};
 use crate::error::EngineError;
-use crate::evaluator::{Evaluator, ExperimentResult};
-use crate::git_manager::GitManager;
+use crate::evaluator::{EvaluationContext, Evaluator, ExperimentResult};
+use crate::git_manager::{AppliedProposal, ExperimentWorkspace, GitManager};
 use crate::llm::provider_from_models;
-use crate::persistence::Persistence;
-use std::sync::Arc;
+use crate::persistence::{Persistence, PromotionOutcome};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -40,6 +41,21 @@ pub struct EngineProgressUpdate {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct EnginePhaseTiming {
+    pub count: u64,
+    pub total_ms: u64,
+    pub max_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EngineTimingSummary {
+    pub run_id: String,
+    pub completed_iterations: u64,
+    pub phase_totals: BTreeMap<String, EnginePhaseTiming>,
+    pub iteration_durations_ms: Vec<u64>,
+}
+
 pub struct EngineConfig {
     pub blueprint: BlueprintFile,
     pub db_path: String,
@@ -55,6 +71,7 @@ pub struct Engine {
     cancel: CancellationToken,
     progress_reporter: Option<EngineProgressReporter>,
     run_id: String,
+    timing_summary: Mutex<EngineTimingSummary>,
 }
 
 fn generate_run_id() -> String {
@@ -126,6 +143,7 @@ impl Engine {
             cancel,
             progress_reporter: config.progress_reporter.clone(),
             run_id: generate_run_id(),
+            timing_summary: Mutex::new(EngineTimingSummary::default()),
             config,
         })
     }
@@ -152,6 +170,53 @@ impl Engine {
         }
     }
 
+    fn log_phase_timing(&self, iteration: u64, phase: &'static str, started_at: std::time::Instant) {
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+        self.log_phase_duration(iteration, phase, duration_ms);
+    }
+
+    fn log_phase_duration(&self, iteration: u64, phase: &'static str, duration_ms: u64) {
+        if let Ok(mut summary) = self.timing_summary.lock() {
+            let phase_entry = summary
+                .phase_totals
+                .entry(phase.to_owned())
+                .or_default();
+            phase_entry.count += 1;
+            phase_entry.total_ms += duration_ms;
+            phase_entry.max_ms = phase_entry.max_ms.max(duration_ms);
+        }
+        info!(
+            run_id = %self.run_id,
+            iteration,
+            phase,
+            duration_ms,
+            "Engine phase completed"
+        );
+    }
+
+    fn record_iteration_timing(&self, duration_ms: u64) {
+        if let Ok(mut summary) = self.timing_summary.lock() {
+            summary.completed_iterations += 1;
+            summary.iteration_durations_ms.push(duration_ms);
+        }
+    }
+
+    fn reset_timing_summary(&self) {
+        if let Ok(mut summary) = self.timing_summary.lock() {
+            *summary = EngineTimingSummary {
+                run_id: self.run_id.clone(),
+                ..EngineTimingSummary::default()
+            };
+        }
+    }
+
+    pub fn timing_summary(&self) -> EngineTimingSummary {
+        self.timing_summary
+            .lock()
+            .map(|summary| summary.clone())
+            .unwrap_or_default()
+    }
+
     #[instrument(
         name = "engine_run",
         skip(self),
@@ -161,6 +226,7 @@ impl Engine {
         )
     )]
     pub async fn run(&self) -> Result<(), EngineError> {
+        self.reset_timing_summary();
         let bp = &self.config.blueprint;
         let max_iter = bp.constraints.max_iterations;
         let timeout_secs = bp.constraints.timeout_seconds;
@@ -186,6 +252,8 @@ impl Engine {
             Some("Preparing engine run".to_owned()),
         );
 
+        let mut reusable_workspace: Option<ExperimentWorkspace> = None;
+
         for iteration in 1..=max_iter {
             let iteration_span = info_span!(
                 "engine_iteration",
@@ -193,6 +261,7 @@ impl Engine {
                 baseline = baseline
             );
             let _iteration_guard = iteration_span.enter();
+            let iteration_started = std::time::Instant::now();
 
             if self.cancel.is_cancelled() {
                 self.report_progress(
@@ -218,6 +287,7 @@ impl Engine {
             );
 
             let proposal_context = build_proposal_context(bp, iteration, baseline);
+            let planning_started = std::time::Instant::now();
 
             let proposal = match tokio::select! {
                 _ = self.cancel.cancelled() => Err(EngineError::Cancelled),
@@ -249,39 +319,31 @@ impl Engine {
                     continue;
                 }
             };
+            self.log_phase_timing(iteration, "planning", planning_started);
 
             self.report_progress(
                 EnginePhase::Branching,
                 Some(iteration),
                 Some(baseline),
                 None,
-                Some("Creating an experiment branch".to_owned()),
+                Some("Preparing experiment branch metadata".to_owned()),
             );
-
-            let branch = match tokio::select! {
-                _ = self.cancel.cancelled() => Err(EngineError::Cancelled),
-                result = self.git.create_experiment_branch(&self.run_id, iteration) => result.map_err(EngineError::from),
-            } {
-                Ok(b) => b,
-                Err(EngineError::Cancelled) => {
-                    self.report_progress(
-                        EnginePhase::Cancelled,
-                        Some(iteration),
-                        Some(baseline),
-                        None,
-                        Some(format!("Cancellation requested before branch creation completed for iteration {iteration}")),
-                    );
-                    info!("Engine cancelled while creating branch for iteration {iteration}");
-                    return Err(EngineError::Cancelled);
-                }
-                Err(e) => {
-                    warn!("Failed to create branch for iteration {iteration}: {e}");
-                    let _ = self
-                        .persistence
-                        .log_failure(&bp_name, iteration, &e.to_string());
-                    continue;
-                }
-            };
+            let branching_started = std::time::Instant::now();
+            if self.cancel.is_cancelled() {
+                self.report_progress(
+                    EnginePhase::Cancelled,
+                    Some(iteration),
+                    Some(baseline),
+                    None,
+                    Some(format!(
+                        "Cancellation requested before branch preparation completed for iteration {iteration}"
+                    )),
+                );
+                info!("Engine cancelled while preparing branch metadata for iteration {iteration}");
+                return Err(EngineError::Cancelled);
+            }
+            let branch = GitManager::experiment_branch_name(&self.run_id, iteration);
+            self.log_phase_timing(iteration, "branching", branching_started);
 
             self.report_progress(
                 EnginePhase::Applying,
@@ -290,12 +352,23 @@ impl Engine {
                 None,
                 Some("Applying the proposal to an isolated git worktree".to_owned()),
             );
+            info!(
+                run_id = %self.run_id,
+                iteration,
+                has_reusable_workspace = reusable_workspace.is_some(),
+                reusable_workspace_path = reusable_workspace
+                    .as_ref()
+                    .map(|workspace| workspace.path.display().to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                "Preparing to apply proposal"
+            );
+            let applying_started = std::time::Instant::now();
 
-            match tokio::select! {
+            let applied_proposal = match tokio::select! {
                 _ = self.cancel.cancelled() => Err(EngineError::Cancelled),
-                result = self.git.apply_proposal(&branch, &proposal) => result.map_err(EngineError::from),
+                result = self.git.apply_proposal(&branch, &proposal, reusable_workspace.as_ref()) => result.map_err(EngineError::from),
             } {
-                Ok(()) => {}
+                Ok(applied) => applied,
                 Err(EngineError::Cancelled) => {
                     self.report_progress(
                         EnginePhase::Cancelled,
@@ -306,21 +379,51 @@ impl Engine {
                             "Cancellation requested while applying iteration {iteration}"
                         )),
                     );
-                    let _ = self.git.delete_branch(&branch).await;
+                    if let Some(workspace) = reusable_workspace.as_ref() {
+                        let _ = self.git.cleanup_experiment_workspace(&workspace.path).await;
+                    }
                     info!("Engine cancelled while applying proposal for iteration {iteration}");
                     return Err(EngineError::Cancelled);
                 }
                 Err(e) => {
                     warn!("Failed to apply proposal for iteration {iteration}: {e}");
+                    if let Some(workspace) = reusable_workspace.as_ref() {
+                        let _ = self.git.detach_experiment_workspace(&workspace.path).await;
+                    }
                     let _ = self
                         .persistence
                         .log_failure(&bp_name, iteration, &e.to_string());
-                    let _ = self.git.delete_branch(&branch).await;
                     continue;
                 }
+            };
+            self.log_phase_timing(iteration, "applying", applying_started);
+            log_apply_subphase_timings(self, iteration, &applied_proposal);
+            info!(
+                run_id = %self.run_id,
+                iteration,
+                "Apply proposal timing breakdown recorded: exists_before={} valid_before={} exists_after_apply={} valid_after_apply={} reused_workspace={} macos_no_checkout_used={}",
+                applied_proposal.timing.workspace_exists_before,
+                applied_proposal.timing.workspace_valid_before,
+                applied_proposal.timing.workspace_exists_after_apply,
+                applied_proposal.timing.workspace_valid_after_apply,
+                applied_proposal.timing.reused_workspace,
+                applied_proposal.timing.macos_no_checkout_used,
+            );
+            if applied_proposal.timing.macos_no_checkout_used {
+                info!(
+                    run_id = %self.run_id,
+                    iteration,
+                    "macOS git worktree add --no-checkout optimization used for apply path"
+                );
             }
+            let experiment_workspace = applied_proposal.workspace;
 
-            let eval_future = self.evaluator.evaluate(&proposal, iteration);
+            let evaluation_context = EvaluationContext {
+                workspace_path: Some(experiment_workspace.path.clone()),
+            };
+            let eval_future = self
+                .evaluator
+                .evaluate(&proposal, iteration, &evaluation_context);
             self.report_progress(
                 EnginePhase::Evaluating,
                 Some(iteration),
@@ -328,23 +431,28 @@ impl Engine {
                 None,
                 Some("Evaluator is running against the proposed changes".to_owned()),
             );
+            let evaluating_started = std::time::Instant::now();
 
             let result: ExperimentResult = match tokio::select! {
                 _ = self.cancel.cancelled() => Err(EngineError::Cancelled),
                 result = timeout(Duration::from_secs(timeout_secs), eval_future) => Ok(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
+                    self.log_phase_timing(iteration, "evaluating", evaluating_started);
                     error!("Evaluation error at iteration {iteration}: {e}");
+                    let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                    reusable_workspace = Some(experiment_workspace.clone());
                     let _ = self
                         .persistence
                         .log_failure(&bp_name, iteration, &e.to_string());
-                    let _ = self.git.delete_branch(&branch).await;
                     continue;
                 }
                 Err(_) => {
+                    self.log_phase_timing(iteration, "evaluating", evaluating_started);
                     error!("Evaluation timed out at iteration {iteration}");
+                    let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                    reusable_workspace = Some(experiment_workspace.clone());
                     let _ = self.persistence.log_failure(&bp_name, iteration, "timeout");
-                    let _ = self.git.delete_branch(&branch).await;
                     continue;
                 }
                 })
@@ -360,31 +468,21 @@ impl Engine {
                             "Cancellation requested while evaluating iteration {iteration}"
                         )),
                     );
-                    let _ = self.git.delete_branch(&branch).await;
+                    let _ = self.git.cleanup_experiment_workspace(&experiment_workspace.path).await;
                     info!("Engine cancelled while evaluating iteration {iteration}");
                     return Err(EngineError::Cancelled);
                 }
                 Err(other) => return Err(other),
             };
+            self.log_phase_timing(iteration, "evaluating", evaluating_started);
 
             info!(
                 "Iteration {iteration} score={:.4} baseline={baseline:.4}",
                 result.weighted_total
             );
 
-            self.report_progress(
-                EnginePhase::Persisting,
-                Some(iteration),
-                Some(result.weighted_total),
-                Some(result.duration_ms),
-                Some("Persisting completed iteration results".to_owned()),
-            );
-
-            if let Err(e) = self.persistence.log_experiment(&bp_name, &result) {
-                error!("Failed to persist experiment: {e}");
-            }
-
-            if self.cancel.is_cancelled() {
+            let decision_started = std::time::Instant::now();
+            let promotion_outcome = if self.cancel.is_cancelled() {
                 self.report_progress(
                     EnginePhase::Cancelled,
                     Some(iteration),
@@ -394,11 +492,15 @@ impl Engine {
                         "Cancellation requested after iteration {iteration} completed"
                     )),
                 );
+                let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
                 let _ = self.git.delete_branch(&branch).await;
-                return Err(EngineError::Cancelled);
-            }
-
-            if crate::metrics::is_improvement(baseline, result.weighted_total, min_improvement) {
+                info!("Engine cancelled after iteration {iteration} completed");
+                PromotionOutcome::Cancelled
+            } else if crate::metrics::is_improvement(
+                baseline,
+                result.weighted_total,
+                min_improvement,
+            ) {
                 info!("Improvement found! Promoting branch '{branch}'");
                 self.report_progress(
                     EnginePhase::Promoting,
@@ -407,10 +509,62 @@ impl Engine {
                     Some(result.duration_ms),
                     Some(format!("Promoting branch '{branch}'")),
                 );
-                if let Err(e) = self.git.promote_branch(&branch).await {
-                    warn!("Failed to promote branch: {e}");
-                } else {
-                    baseline = result.weighted_total;
+                let commit_started = std::time::Instant::now();
+                match self
+                    .git
+                    .commit_experiment_workspace(&experiment_workspace.path, &proposal.summary)
+                    .await
+                {
+                    Ok(committed) => {
+                        self.log_phase_duration(
+                            iteration,
+                            "promotion_commit",
+                            commit_started.elapsed().as_millis() as u64,
+                        );
+                        info!(
+                            run_id = %self.run_id,
+                            iteration,
+                            committed,
+                            "Promotion commit completed"
+                        );
+                        if let Err(error) = self
+                            .git
+                            .create_branch_at_workspace_head(&experiment_workspace.path, &branch)
+                            .await
+                        {
+                            warn!(
+                                "Failed to materialize experiment branch '{branch}' from detached workspace: {error}"
+                            );
+                            let _ = self
+                                .git
+                                .cleanup_experiment_workspace(&experiment_workspace.path)
+                                .await;
+                            PromotionOutcome::PromotionFailed
+                        } else if let Err(e) = self.git.promote_branch(&branch).await {
+                            warn!("Failed to promote branch: {e}");
+                            let _ = self
+                                .git
+                                .cleanup_experiment_workspace(&experiment_workspace.path)
+                                .await;
+                            PromotionOutcome::PromotionFailed
+                        } else {
+                            baseline = result.weighted_total;
+                            PromotionOutcome::Promoted
+                        }
+                    }
+                    Err(error) => {
+                        warn!("Failed to commit experiment workspace before promotion: {error}");
+                        self.log_phase_duration(
+                            iteration,
+                            "promotion_commit",
+                            commit_started.elapsed().as_millis() as u64,
+                        );
+                        let _ = self
+                            .git
+                            .cleanup_experiment_workspace(&experiment_workspace.path)
+                            .await;
+                        PromotionOutcome::PromotionFailed
+                    }
                 }
             } else {
                 self.report_progress(
@@ -420,8 +574,69 @@ impl Engine {
                     Some(result.duration_ms),
                     Some(format!("Cleaning up non-promoted branch '{branch}'")),
                 );
-                let _ = self.git.delete_branch(&branch).await;
+                let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                PromotionOutcome::Rejected
+            };
+            self.log_phase_timing(iteration, "promotion_decision", decision_started);
+            if matches!(
+                promotion_outcome,
+                PromotionOutcome::Promoted | PromotionOutcome::Rejected
+            ) {
+                reusable_workspace = Some(experiment_workspace.clone());
+                info!(
+                    run_id = %self.run_id,
+                    iteration,
+                    reusable_workspace_path = %experiment_workspace.path.display(),
+                    workspace_exists_after_iteration = experiment_workspace.path.exists(),
+                    "Stored reusable workspace after iteration"
+                );
+            } else {
+                reusable_workspace = None;
+                info!(
+                    run_id = %self.run_id,
+                    iteration,
+                    workspace_path = %experiment_workspace.path.display(),
+                    "Discarded reusable workspace after failed promotion path"
+                );
             }
+            self.report_progress(
+                EnginePhase::Persisting,
+                Some(iteration),
+                Some(result.weighted_total),
+                Some(result.duration_ms),
+                Some("Persisting completed iteration results".to_owned()),
+            );
+            let persisting_started = std::time::Instant::now();
+
+            if let Err(e) = self
+                .persistence
+                .log_experiment(&bp_name, &result, promotion_outcome)
+            {
+                error!("Failed to persist experiment: {e}");
+            }
+            self.log_phase_timing(iteration, "persisting", persisting_started);
+
+            let iteration_duration_ms = iteration_started.elapsed().as_millis() as u64;
+            self.record_iteration_timing(iteration_duration_ms);
+            info!(
+                run_id = %self.run_id,
+                iteration,
+                duration_ms = iteration_duration_ms,
+                outcome = %format!("{}", promotion_outcome.as_db_value_for_display()),
+                "Engine iteration completed"
+            );
+
+            if matches!(promotion_outcome, PromotionOutcome::Cancelled) {
+                return Err(EngineError::Cancelled);
+            }
+        }
+
+        if let Some(workspace) = reusable_workspace.as_ref() {
+            let cleanup_started = std::time::Instant::now();
+            if let Err(error) = self.git.cleanup_experiment_workspace(&workspace.path).await {
+                warn!("Failed to clean up experiment workspace: {error}");
+            }
+            self.log_phase_timing(max_iter, "workspace_cleanup", cleanup_started);
         }
 
         info!("Engine completed {max_iter} iterations. Final baseline={baseline:.4}");
@@ -433,6 +648,44 @@ impl Engine {
             Some("Engine run completed".to_owned()),
         );
         Ok(())
+    }
+}
+
+fn log_apply_subphase_timings(engine: &Engine, iteration: u64, applied: &AppliedProposal) {
+    if applied.timing.worktree_registration_ms > 0 {
+        engine.log_phase_duration(
+            iteration,
+            "applying_worktree_registration",
+            applied.timing.worktree_registration_ms,
+        );
+    }
+    if applied.timing.reset_clean_ms > 0 {
+        engine.log_phase_duration(
+            iteration,
+            "applying_reset_clean",
+            applied.timing.reset_clean_ms,
+        );
+    }
+    if applied.timing.checkout_detach_ms > 0 {
+        engine.log_phase_duration(
+            iteration,
+            "applying_checkout_detach",
+            applied.timing.checkout_detach_ms,
+        );
+    }
+    if applied.timing.checkout_target_branch_ms > 0 {
+        engine.log_phase_duration(
+            iteration,
+            "applying_checkout_target_branch",
+            applied.timing.checkout_target_branch_ms,
+        );
+    }
+    if applied.timing.patch_materialization_ms > 0 {
+        engine.log_phase_duration(
+            iteration,
+            "applying_patch_materialization",
+            applied.timing.patch_materialization_ms,
+        );
     }
 }
 
