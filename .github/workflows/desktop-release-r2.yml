@@ -96,7 +96,7 @@ jobs:
             export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET"
           fi
           cd crates/maabarium-desktop
-          pnpm tauri build
+          pnpm tauri build --config "$TAURI_CONFIG"
 
       - name: Stage updater bundle and manifest
         shell: bash

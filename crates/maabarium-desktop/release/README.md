@@ -78,7 +78,7 @@ pnpm validate:updater-pubkey -- --file ~/.tauri/maabarium.key.pub
 
 The validator prints a `Recommended GitHub variable value` line. Use that raw key line for `MAABARIUM_UPDATE_PUBKEY` if you want to avoid multiline variable handling surprises in GitHub Actions.
 
-The release workflow also uses that validated key to override Tauri's updater `pubkey` config at build time, so the placeholder value in `tauri.conf.json` is never used in CI.
+The release workflow also passes that validated key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI.
 
 Do not commit either key. Only the public key content should be copied into runtime configuration.
 Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
