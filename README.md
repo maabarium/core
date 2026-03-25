@@ -17,7 +17,7 @@ Maabarium is a Rust workspace for running blueprint-driven improvement loops acr
 
 The project is inspired by Andrej Karpathy's [Autoresearch](https://github.com/karpathy/autoresearch) pattern and adapts that keep-winner loop into a Rust-first, local-first workflow engine.
 
-The name comes from Swahili “maabara” = laboratory — the ultimate personal optimization workshop.
+The name comes from Swahili “maabara” = laboratory - the ultimate personal optimization workshop.
 
 At a high level, each run follows the same keep-winner pattern:
 
