@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- `release-prep` now refreshes `Cargo.lock` after version bumps on clean GitHub runners so release commits keep the workspace lockfile aligned with the published crate metadata.
 - `release-prep` now enforces a successful CI run before preparing a release, uses the `Unreleased` section as GitHub Release notes, and commits the changelog rollover together with version bumps.
 
 ### Fixed
@@ -37,7 +38,6 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - CLI runs now check for Git before starting and finish with aggregated timing summaries that make run performance easier to inspect.
 - Sandbox and workspace materialization now favor APFS-friendly copy-on-write behavior on macOS while preserving a portable fallback path on other platforms.
 - The desktop console now highlights retained winner scoring, adds a direct Maintenance jump target, gives the LoRA runtime panel more space, and presents clearer Git readiness and setup guidance with installer details.
-- `release-prep` now refreshes `Cargo.lock` after version bumps so release commits keep the workspace lockfile aligned with the published crate metadata.
 - Release documentation and manifest examples now align on the production downloads host and describe the installer flow more clearly.
 
 ### Fixed

@@ -95,7 +95,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --format-version 1 --offline >/dev/null
+          cargo metadata --format-version 1 >/dev/null
 
       - name: Commit version bump
         id: commit
