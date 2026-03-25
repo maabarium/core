@@ -81,6 +81,7 @@ jobs:
           : "${R2_ENDPOINT:?CLOUDFLARE_R2_ENDPOINT must be configured}"
           : "${AWS_ACCESS_KEY_ID:?CLOUDFLARE_R2_ACCESS_KEY_ID must be configured}"
           : "${AWS_SECRET_ACCESS_KEY:?CLOUDFLARE_R2_SECRET_ACCESS_KEY must be configured}"
+          node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-pubkey.mjs" --github-env
 
       - name: Install desktop dependencies
         run: cd crates/maabarium-desktop && pnpm install --frozen-lockfile
@@ -133,17 +134,23 @@ jobs:
           fi
 
           mkdir -p "$STAGING_DIR/$PLATFORM_KEY"
-          cp "$UPDATER_BUNDLE" "$STAGING_DIR/$PLATFORM_KEY/"
-          cp "$SIG_PATH" "$STAGING_DIR/$PLATFORM_KEY/"
-
           BUNDLE_NAME="$(basename "$UPDATER_BUNDLE")"
+          RELEASE_BUNDLE_NAME="${BUNDLE_NAME// /-}"
+          RELEASE_SIG_NAME="${RELEASE_BUNDLE_NAME}.sig"
+
+          cp "$UPDATER_BUNDLE" "$STAGING_DIR/$PLATFORM_KEY/$RELEASE_BUNDLE_NAME"
+          cp "$SIG_PATH" "$STAGING_DIR/$PLATFORM_KEY/$RELEASE_SIG_NAME"
+
+          if [[ "$RELEASE_BUNDLE_NAME" != "$BUNDLE_NAME" ]]; then
+            echo "Publishing updater bundle as $RELEASE_BUNDLE_NAME"
+          fi
 
           cd "$DESKTOP_DIR"
           pnpm build:release-manifest -- \
             --base-url "$MAABARIUM_UPDATE_BASE_URL" \
             --artifacts-dir "$STAGING_DIR" \
             --output "$RELEASE_DIR/latest.json" \
-            --platform "$PLATFORM_KEY=$PLATFORM_KEY/$BUNDLE_NAME"
+            --platform "$PLATFORM_KEY=$PLATFORM_KEY/$RELEASE_BUNDLE_NAME"
 
       - name: Generate install.sh from updater metadata base URL
         shell: bash

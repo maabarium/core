@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "build:release-manifest": "node ./scripts/generate-release-manifest.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "validate:updater-pubkey": "node ./scripts/validate-updater-pubkey.mjs"
   },
   "dependencies": {
     "@fontsource/azeret-mono": "^5.2.11",

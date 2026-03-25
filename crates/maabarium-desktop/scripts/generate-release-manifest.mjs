@@ -120,7 +120,7 @@ function printHelp() {
 
 Usage:
   pnpm build:release-manifest -- --base-url https://downloads.maabarium.com
-  pnpm build:release-manifest -- --base-url https://downloads.maabarium.com --platform darwin-aarch64=macos/Maabarium Console.app.tar.gz
+  pnpm build:release-manifest -- --base-url https://downloads.maabarium.com --platform darwin-aarch64=macos/Maabarium-Console.app.tar.gz
 
 Required:
   --base-url <url> or MAABARIUM_UPDATE_BASE_URL

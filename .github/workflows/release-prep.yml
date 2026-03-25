@@ -36,6 +36,8 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -89,6 +91,12 @@ jobs:
         id: bump
         run: node scripts/release/bump-version.mjs --bump "${{ inputs.bump }}" --github-output "$GITHUB_OUTPUT"
 
+      - name: Refresh Cargo.lock for release versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 --offline >/dev/null
+
       - name: Commit version bump
         id: commit
         shell: bash
@@ -99,6 +107,7 @@ jobs:
 
           git add \
             CHANGELOG.md \
+            Cargo.lock \
             crates/maabarium-core/Cargo.toml \
             crates/maabarium-cli/Cargo.toml \
             crates/maabarium-desktop/Cargo.toml \

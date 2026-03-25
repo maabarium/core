@@ -49,8 +49,8 @@ Recommended layout when publishing to R2:
 ```text
 https://downloads.maabarium.com/install.sh
 https://downloads.maabarium.com/latest.json
-https://downloads.maabarium.com/darwin-aarch64/Maabarium%20Console.app.tar.gz
-https://downloads.maabarium.com/darwin-aarch64/Maabarium%20Console.app.tar.gz.sig
+https://downloads.maabarium.com/darwin-aarch64/Maabarium-Console.app.tar.gz
+https://downloads.maabarium.com/darwin-aarch64/Maabarium-Console.app.tar.gz.sig
 ```
 
 ## Generating the Tauri Signing Keypair
@@ -66,6 +66,19 @@ That produces:
 
 - a private key, used only in CI as `TAURI_SIGNING_PRIVATE_KEY`
 - a public key file, whose contents become `MAABARIUM_UPDATE_PUBKEY`
+
+`MAABARIUM_UPDATE_PUBKEY` must be the Tauri-generated updater public key content. Use either the raw key line or the two-line `.pub` file contents. Do not use a PEM block, a Cloudflare credential, or a base64url-encoded variant.
+
+Before copying the value into GitHub, validate it locally:
+
+```bash
+cd crates/maabarium-desktop
+pnpm validate:updater-pubkey -- --file ~/.tauri/maabarium.key.pub
+```
+
+The validator prints a `Recommended GitHub variable value` line. Use that raw key line for `MAABARIUM_UPDATE_PUBKEY` if you want to avoid multiline variable handling surprises in GitHub Actions.
+
+The release workflow also uses that validated key to override Tauri's updater `pubkey` config at build time, so the placeholder value in `tauri.conf.json` is never used in CI.
 
 Do not commit either key. Only the public key content should be copied into runtime configuration.
 Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
