@@ -79,6 +79,109 @@ pub struct SandboxWorkspace {
     policy: WasmtimeIsolationPolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkspaceMaterializationStrategy {
+    PortableCopy,
+    CloneOnWrite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaterializedFileMode {
+    Copied,
+    Cloned,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WorkspaceMaterializationReport {
+    files_copied: usize,
+    files_cloned: usize,
+}
+
+// Phase 3 plan reference: .dev/apple-silicon-optimization-plan-2026-03-25.md
+struct WorkspaceMaterializer {
+    strategy: WorkspaceMaterializationStrategy,
+}
+
+impl WorkspaceMaterializer {
+    fn for_current_platform() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            return Self::new(WorkspaceMaterializationStrategy::CloneOnWrite);
+        }
+
+        #[allow(unreachable_code)]
+        Self::new(WorkspaceMaterializationStrategy::PortableCopy)
+    }
+
+    fn new(strategy: WorkspaceMaterializationStrategy) -> Self {
+        Self { strategy }
+    }
+
+    fn materialize_repo_snapshot(
+        &self,
+        source_root: &Path,
+        destination_root: &Path,
+    ) -> Result<WorkspaceMaterializationReport, EvalError> {
+        let mut report = WorkspaceMaterializationReport::default();
+
+        for entry in std::fs::read_dir(source_root).map_err(|error| {
+            EvalError::Sandbox(format!("failed to read repo snapshot root: {error}"))
+        })? {
+            let entry = entry.map_err(|error| {
+                EvalError::Sandbox(format!("failed to inspect snapshot entry: {error}"))
+            })?;
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(name.as_ref(), ".git" | "target") {
+                continue;
+            }
+
+            let destination = destination_root.join(entry.file_name());
+            let metadata = entry.metadata().map_err(|error| {
+                EvalError::Sandbox(format!("failed to inspect snapshot metadata: {error}"))
+            })?;
+            if metadata.is_dir() {
+                std::fs::create_dir_all(&destination).map_err(|error| {
+                    EvalError::Sandbox(format!("failed to create snapshot directory: {error}"))
+                })?;
+                let nested_report = self.materialize_repo_snapshot(&path, &destination)?;
+                report.files_copied += nested_report.files_copied;
+                report.files_cloned += nested_report.files_cloned;
+            } else if metadata.is_file() {
+                match self.materialize_file(&path, &destination).map_err(|error| {
+                    EvalError::Sandbox(format!(
+                        "failed to materialize snapshot file '{}': {error}",
+                        path.display()
+                    ))
+                })? {
+                    MaterializedFileMode::Copied => report.files_copied += 1,
+                    MaterializedFileMode::Cloned => report.files_cloned += 1,
+                }
+            }
+        }
+
+        Ok(report)
+    }
+
+    fn materialize_file(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> std::io::Result<MaterializedFileMode> {
+        if self.strategy == WorkspaceMaterializationStrategy::CloneOnWrite {
+            #[cfg(target_os = "macos")]
+            {
+                if try_clone_snapshot_file(source, destination)? {
+                    return Ok(MaterializedFileMode::Cloned);
+                }
+            }
+        }
+
+        std::fs::copy(source, destination).map(|_| MaterializedFileMode::Copied)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SubprocessRunResult {
     pub status_code: Option<i32>,
@@ -176,7 +279,8 @@ impl SandboxWorkspace {
     #[instrument(name = "sandbox_workspace_from_repo", fields(repo = %repo_path.display()))]
     pub fn from_repo(repo_path: &Path) -> Result<Self, EvalError> {
         let workspace = Self::new()?;
-        copy_repo_snapshot(repo_path, workspace.root())?;
+        let materializer = WorkspaceMaterializer::for_current_platform();
+        materializer.materialize_repo_snapshot(repo_path, workspace.root())?;
         Ok(workspace)
     }
 
@@ -305,53 +409,6 @@ pub fn summarize_existing_workspace(
     Ok(summary)
 }
 
-fn copy_repo_snapshot(source_root: &Path, destination_root: &Path) -> Result<(), EvalError> {
-    for entry in std::fs::read_dir(source_root).map_err(|error| {
-        EvalError::Sandbox(format!("failed to read repo snapshot root: {error}"))
-    })? {
-        let entry = entry.map_err(|error| {
-            EvalError::Sandbox(format!("failed to inspect snapshot entry: {error}"))
-        })?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if matches!(name.as_ref(), ".git" | "target") {
-            continue;
-        }
-
-        let destination = destination_root.join(entry.file_name());
-        let metadata = entry.metadata().map_err(|error| {
-            EvalError::Sandbox(format!("failed to inspect snapshot metadata: {error}"))
-        })?;
-        if metadata.is_dir() {
-            std::fs::create_dir_all(&destination).map_err(|error| {
-                EvalError::Sandbox(format!("failed to create snapshot directory: {error}"))
-            })?;
-            copy_repo_snapshot(&path, &destination)?;
-        } else if metadata.is_file() {
-            copy_snapshot_file(&path, &destination).map_err(|error| {
-                EvalError::Sandbox(format!(
-                    "failed to copy snapshot file '{}': {error}",
-                    path.display()
-                ))
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
-fn copy_snapshot_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        if try_clone_snapshot_file(source, destination)? {
-            return Ok(());
-        }
-    }
-
-    std::fs::copy(source, destination).map(|_| ())
-}
-
 #[cfg(target_os = "macos")]
 fn try_clone_snapshot_file(source: &Path, destination: &Path) -> std::io::Result<bool> {
     use std::ffi::CString;
@@ -416,6 +473,7 @@ pub fn sanitize_relative_path(path: &str) -> Result<PathBuf, EvalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn rejects_parent_traversal_paths() {
@@ -484,6 +542,94 @@ mod tests {
             cached_policy_runtime().expect("policy runtime should reuse cache") as *const _;
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn materializer_uses_portable_copy_fallback() {
+        let source = tempfile::tempdir().expect("source tempdir should exist");
+        let destination = tempfile::tempdir().expect("destination tempdir should exist");
+
+        fs::create_dir_all(source.path().join("src/nested"))
+            .expect("source nested dir should be created");
+        fs::write(source.path().join("src/lib.rs"), "pub fn baseline() {}\n")
+            .expect("source file should be written");
+        fs::write(source.path().join("src/nested/mod.rs"), "pub mod nested;\n")
+            .expect("nested source file should be written");
+        fs::create_dir_all(source.path().join("target/debug"))
+            .expect("ignored target dir should be created");
+        fs::write(source.path().join("target/debug/ignored.txt"), "ignored")
+            .expect("ignored file should be written");
+
+        let materializer = WorkspaceMaterializer::new(WorkspaceMaterializationStrategy::PortableCopy);
+        let report = materializer
+            .materialize_repo_snapshot(source.path(), destination.path())
+            .expect("snapshot should materialize");
+
+        assert_eq!(report.files_cloned, 0);
+        assert_eq!(report.files_copied, 2);
+        assert_eq!(
+            fs::read_to_string(destination.path().join("src/lib.rs"))
+                .expect("copied file should exist"),
+            "pub fn baseline() {}\n"
+        );
+        assert!(!destination.path().join("target").exists());
+    }
+
+    #[test]
+    #[ignore = "benchmark"]
+    fn benchmark_materializer_on_large_repo() {
+        let source = tempfile::tempdir().expect("source tempdir should exist");
+        let portable_destination = tempfile::tempdir().expect("portable destination should exist");
+        let optimized_destination = tempfile::tempdir().expect("optimized destination should exist");
+
+        fs::create_dir_all(source.path().join("src/generated"))
+            .expect("generated dir should be created");
+        fs::write(source.path().join("src/lib.rs"), "pub fn baseline() {}\n")
+            .expect("baseline file should be written");
+        for index in 0..1500 {
+            fs::write(
+                source
+                    .path()
+                    .join(format!("src/generated/file_{index}.rs")),
+                format!(
+                    "pub fn generated_{index}() -> usize {{ {} }}\n",
+                    index % 97
+                ),
+            )
+            .expect("generated file should be written");
+        }
+
+        let portable = WorkspaceMaterializer::new(WorkspaceMaterializationStrategy::PortableCopy);
+        let portable_started = std::time::Instant::now();
+        let portable_report = portable
+            .materialize_repo_snapshot(source.path(), portable_destination.path())
+            .expect("portable snapshot should materialize");
+        let portable_elapsed = portable_started.elapsed();
+
+        let optimized = WorkspaceMaterializer::for_current_platform();
+        let optimized_started = std::time::Instant::now();
+        let optimized_report = optimized
+            .materialize_repo_snapshot(source.path(), optimized_destination.path())
+            .expect("optimized snapshot should materialize");
+        let optimized_elapsed = optimized_started.elapsed();
+
+        println!(
+            "materializer benchmark: portable={:?} copied={} cloned={} optimized={:?} copied={} cloned={}",
+            portable_elapsed,
+            portable_report.files_copied,
+            portable_report.files_cloned,
+            optimized_elapsed,
+            optimized_report.files_copied,
+            optimized_report.files_cloned,
+        );
+
+        assert_eq!(portable_report.files_copied + portable_report.files_cloned, 1501);
+        assert_eq!(optimized_report.files_copied + optimized_report.files_cloned, 1501);
+        assert_eq!(
+            fs::read_to_string(optimized_destination.path().join("src/lib.rs"))
+                .expect("optimized baseline should exist"),
+            "pub fn baseline() {}\n"
+        );
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ import {
 import type {
   ExperimentBranchCleanupResult,
   ExperimentBranchInventory,
+  GitDependencyState,
   OllamaStatus,
   ReadinessItem,
 } from "../../types/console";
@@ -29,8 +30,10 @@ function readinessBadgeColor(status: ReadinessItem["status"]) {
 export function ReadinessCenterCard({
   readinessItems,
   experimentBranchInventory,
+  gitDependency,
   ollama,
   onOpenSetup,
+  onInstallGit,
   onInstallOllama,
   onStartOllama,
   onPreviewBranchCleanup,
@@ -38,8 +41,10 @@ export function ReadinessCenterCard({
 }: {
   readinessItems: ReadinessItem[];
   experimentBranchInventory: ExperimentBranchInventory | null;
+  gitDependency: GitDependencyState;
   ollama: OllamaStatus | null;
   onOpenSetup: () => void;
+  onInstallGit: () => void;
   onInstallOllama: () => void;
   onStartOllama: () => void;
   onPreviewBranchCleanup: (
@@ -67,6 +72,7 @@ export function ReadinessCenterCard({
   const blockedItems = requiredItems.filter(
     (item) => item.status === "needs_attention",
   );
+  const gitReadiness = readinessItems.find((item) => item.id === "git") ?? null;
   const availableThresholds = useMemo(
     () => experimentBranchInventory?.availableThresholdMonths ?? [1, 3, 6],
     [experimentBranchInventory],
@@ -361,6 +367,30 @@ export function ReadinessCenterCard({
             ) : null}
           </div>
         </div>
+
+        {gitReadiness?.status === "needs_attention" ? (
+          <button
+            type="button"
+            onClick={onInstallGit}
+            className="w-full rounded-lg border border-amber-300/20 bg-gradient-to-r from-amber-400/15 to-teal-500/15 px-3 py-3 text-left transition hover:brightness-110"
+          >
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white">
+              <GitBranch size={14} />
+              {gitReadiness.actionLabel}
+            </div>
+            <div className="mt-1 text-[11px] leading-relaxed text-slate-300">
+              {gitReadiness.summary}
+            </div>
+            {gitDependency.installerLabel || gitDependency.installCommand ? (
+              <div className="mt-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                {gitDependency.installerLabel ?? "Manual setup"}
+                {gitDependency.installCommand
+                  ? ` • ${gitDependency.installCommand}`
+                  : ""}
+              </div>
+            ) : null}
+          </button>
+        ) : null}
 
         {!ollama?.installed ? (
           <button

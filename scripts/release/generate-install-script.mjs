@@ -76,8 +76,31 @@ fail() {
   exit 1
 }
 
+note() {
+  echo "maabarium install: $*"
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+}
+
+ensure_git() {
+  if command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+
+  note "Git is required for Maabarium workflows and is not installed. Starting automatic installation."
+
+  if command -v brew >/dev/null 2>&1; then
+    brew install git || fail "Automatic Git installation via Homebrew failed"
+  elif command -v xcode-select >/dev/null 2>&1; then
+    xcode-select --install || true
+    if ! command -v git >/dev/null 2>&1; then
+      note "Apple's Command Line Tools installer has been started. Finish that installer to complete Git setup before running Maabarium."
+    fi
+  else
+    fail "Git is required, but no supported automatic installer was found on this machine"
+  fi
 }
 
 cleanup() {
@@ -110,6 +133,8 @@ case "$(uname -m)" in
     fail "Unsupported macOS architecture: $(uname -m)"
     ;;
 esac
+
+ensure_git
 
 manifest_url="\${MAABARIUM_UPDATE_MANIFEST_URL:-$DEFAULT_MANIFEST_URL}"
 install_dir="\${MAABARIUM_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"

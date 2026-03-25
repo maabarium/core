@@ -54,6 +54,7 @@ Key design decisions:
 - Detached experiment worktrees are reused across iterations when safe, then cleaned up once at the end of the run
 - Experiment branch refs are materialized only on promoted iterations; rejected runs stay as detached worktree state and never create branch history
 - The CLI prints an end-of-run timing summary aggregated from per-phase engine instrumentation
+- Sandbox snapshot materialization uses a dedicated workspace materializer with macOS clone-on-write support where available and a portable copy fallback everywhere else
 
 ## Module Guide
 
@@ -149,6 +150,23 @@ Implemented in the current repository:
 - tracing spans on engine, pool, evaluator, and sandbox hot paths
 - Wasmtime-backed sandbox policy validation and subprocess-based code evaluation
 - reusable experiment worktrees plus CLI run timing summaries for profiling and operator visibility
+- APFS-friendly sandbox workspace materialization for macOS plus a portable fallback path for Linux and Windows
+
+## Build Profiles
+
+Portable optimized local builds can use:
+
+```bash
+cargo build --profile release-lto
+```
+
+Machine-specific local benchmarking can opt into native CPU tuning explicitly:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --profile release-lto
+```
+
+The native-tuned command is intentionally separate from portable release builds so distributed artifacts do not assume the build host's CPU feature set.
 
 ## Closure Status
 

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use maabarium_core::GitDependencyStatus;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeStrategy {
@@ -319,6 +321,7 @@ pub fn start_ollama() -> Result<(), String> {
 pub fn build_readiness_items(
     setup: &DesktopSetupState,
     fallback_workspace: Option<&str>,
+    git_status: &GitDependencyStatus,
     ollama: &OllamaStatus,
     updater_configured: bool,
     brave_search_configured: bool,
@@ -358,6 +361,24 @@ pub fn build_readiness_items(
                     "Choose a repository or workspace path for runnable workflows.".to_owned()
                 }),
             action_label: "Choose Workspace".to_owned(),
+            last_checked_at_epoch_ms: now,
+        },
+        ReadinessItem {
+            id: "git".to_owned(),
+            title: "Git".to_owned(),
+            status: if git_status.installed {
+                ReadinessStatus::Ready
+            } else {
+                ReadinessStatus::NeedsAttention
+            },
+            summary: git_status.status_detail.clone(),
+            action_label: if git_status.installed {
+                "Git Ready".to_owned()
+            } else if git_status.auto_install_supported {
+                "Install Git".to_owned()
+            } else {
+                "Install Manually".to_owned()
+            },
             last_checked_at_epoch_ms: now,
         },
         ReadinessItem {

@@ -54,6 +54,7 @@ pub struct EngineTimingSummary {
     pub completed_iterations: u64,
     pub phase_totals: BTreeMap<String, EnginePhaseTiming>,
     pub iteration_durations_ms: Vec<u64>,
+    pub proposal_failure_counters: BTreeMap<String, u64>,
 }
 
 pub struct EngineConfig {
@@ -201,6 +202,21 @@ impl Engine {
         }
     }
 
+    fn record_proposal_failure_counters(&self, counters: &BTreeMap<String, u64>) {
+        if counters.is_empty() {
+            return;
+        }
+
+        if let Ok(mut summary) = self.timing_summary.lock() {
+            for (counter_key, count) in counters {
+                *summary
+                    .proposal_failure_counters
+                    .entry(counter_key.clone())
+                    .or_insert(0) += count;
+            }
+        }
+    }
+
     fn reset_timing_summary(&self) {
         if let Ok(mut summary) = self.timing_summary.lock() {
             *summary = EngineTimingSummary {
@@ -299,7 +315,10 @@ impl Engine {
                     &bp.metrics.metrics,
                 ) => result.map_err(EngineError::from),
             } {
-                Ok(proposal) => proposal,
+                Ok(proposal) => {
+                    self.record_proposal_failure_counters(&self.council.last_proposal_failure_counters());
+                    proposal
+                }
                 Err(EngineError::Cancelled) => {
                     self.report_progress(
                         EnginePhase::Cancelled,
@@ -312,6 +331,7 @@ impl Engine {
                     return Err(EngineError::Cancelled);
                 }
                 Err(e) => {
+                    self.record_proposal_failure_counters(&self.council.last_proposal_failure_counters());
                     warn!("Council failed to produce a proposal for iteration {iteration}: {e}");
                     let _ = self
                         .persistence

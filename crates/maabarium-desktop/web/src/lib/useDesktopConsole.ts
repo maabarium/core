@@ -722,6 +722,46 @@ export function useDesktopConsole({
     }
   };
 
+  const installGit = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        readinessItems: snapshot.readinessItems.map((item) =>
+          item.id === "git"
+            ? {
+                ...item,
+                status: "ready" as const,
+                summary:
+                  "Git is installed and ready for isolated worktree operations.",
+                actionLabel: "Git Ready",
+              }
+            : item,
+        ),
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("install_git");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Git Install Error",
+        "Git could not be installed automatically",
+        "Review the details below, complete any OS installer steps if prompted, then retry the workflow.",
+        error,
+      );
+      return false;
+    }
+  };
+
   const startOllama = async () => {
     if (isMockMode()) {
       const snapshot = readMockConsoleState();
@@ -857,6 +897,7 @@ export function useDesktopConsole({
     initializeWorkspaceGit,
     saveDesktopSetup,
     setProviderApiKey,
+    installGit,
     installOllama,
     startOllama,
     previewExperimentBranchCleanup,

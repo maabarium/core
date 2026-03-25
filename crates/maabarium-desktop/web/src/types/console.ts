@@ -278,6 +278,15 @@ export type ReadinessItem = {
   lastCheckedAtEpochMs: number;
 };
 
+export type GitDependencyState = {
+  installed: boolean;
+  commandPath: string | null;
+  autoInstallSupported: boolean;
+  installerLabel: string | null;
+  installCommand: string | null;
+  statusDetail: string;
+};
+
 export type ExperimentBranchInfo = {
   name: string;
   runId: string | null;
@@ -433,6 +442,7 @@ export type ConsoleState = {
   dbPath: string;
   logPath: string;
   hardwareTelemetry: HardwareTelemetry | null;
+  gitDependency: GitDependencyState;
   blueprint: BlueprintFile | null;
   blueprintError: string | null;
   evaluatorKind: string | null;

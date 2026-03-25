@@ -18,7 +18,6 @@ import { BlueprintWizardModal } from "./components/console/BlueprintWizardModal"
 import { ConsoleActivityPanel } from "./components/console/ConsoleActivityPanel";
 import { CouncilRosterCard } from "./components/console/CouncilRosterCard";
 import { DesktopSetupModal } from "./components/console/DesktopSetupModal";
-import { HardwareHeatCard } from "./components/console/HardwareHeatCard";
 import { LoraEvidenceCard } from "./components/console/LoraEvidenceCard";
 import { MetricPanelCard } from "./components/console/MetricPanelCard";
 import { PersistedStackCard } from "./components/console/PersistedStackCard";
@@ -171,6 +170,7 @@ export default function App() {
     initializeWorkspaceGit,
     saveDesktopSetup,
     setProviderApiKey,
+    installGit,
     installOllama,
     startOllama,
     previewExperimentBranchCleanup,
@@ -1100,12 +1100,16 @@ export default function App() {
           isOpen={setupOpen}
           setupState={state.desktopSetup}
           readinessItems={state.readinessItems}
+          gitDependency={state.gitDependency}
           ollama={state.ollama}
           pluginRuntime={state.pluginRuntime}
           saving={setupSaving}
           onClose={() => setSetupOpen(false)}
           onInspectWorkspace={inspectWorkspaceGitStatus}
           onSave={handleSaveDesktopSetup}
+          onInstallGit={async () => {
+            await installGit();
+          }}
           onInstallOllama={async () => {
             await installOllama();
           }}
@@ -1720,13 +1724,8 @@ export default function App() {
                 />
               </div>
 
-              <div className="grid grid-cols-1 gap-6 items-stretch xl:grid-cols-3 lg:flex-1">
-                <HardwareHeatCard hardwareTelemetry={hardwareTelemetry} />
-                <div className="xl:col-span-2 h-full">
-                  <LoraEvidenceCard
-                    latestLoraExperiment={latestLoraExperiment}
-                  />
-                </div>
+              <div className="lg:flex-1">
+                <LoraEvidenceCard latestLoraExperiment={latestLoraExperiment} />
               </div>
             </div>
 
@@ -1804,8 +1803,19 @@ export default function App() {
                   experimentBranchInventory={
                     state?.experimentBranchInventory ?? null
                   }
+                  gitDependency={
+                    state?.gitDependency ?? {
+                      installed: false,
+                      commandPath: null,
+                      autoInstallSupported: false,
+                      installerLabel: null,
+                      installCommand: null,
+                      statusDetail: "Git status is unavailable.",
+                    }
+                  }
                   ollama={state?.ollama ?? null}
                   onOpenSetup={() => setSetupOpen(true)}
+                  onInstallGit={() => void installGit()}
                   onInstallOllama={() => void installOllama()}
                   onStartOllama={() => void startOllama()}
                   onPreviewBranchCleanup={(thresholdMonths) =>

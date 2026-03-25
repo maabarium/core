@@ -4,6 +4,7 @@ import type {
   DesktopSetupState,
   ExperimentBranchCleanupResult,
   ExperimentBranchInventory,
+  GitDependencyState,
   HardwareSensor,
   HardwareTelemetry,
   LoraArtifacts,
@@ -247,6 +248,19 @@ function normalizeHardwareTelemetry(
     gpu: normalizeHardwareSensor(telemetry.gpu),
     npu: normalizeHardwareSensor(telemetry.npu),
     notes: Array.isArray(telemetry.notes) ? telemetry.notes : [],
+  };
+}
+
+function normalizeGitDependency(
+  dependency: GitDependencyState | null | undefined,
+): GitDependencyState {
+  return {
+    installed: Boolean(dependency?.installed),
+    commandPath: dependency?.commandPath ?? null,
+    autoInstallSupported: Boolean(dependency?.autoInstallSupported),
+    installerLabel: dependency?.installerLabel ?? null,
+    installCommand: dependency?.installCommand ?? null,
+    statusDetail: dependency?.statusDetail ?? "Git status is unavailable.",
   };
 }
 
@@ -498,6 +512,7 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
     dbPath: snapshot.dbPath ?? "",
     logPath: snapshot.logPath ?? "",
     hardwareTelemetry: normalizeHardwareTelemetry(snapshot.hardwareTelemetry),
+    gitDependency: normalizeGitDependency(snapshot.gitDependency),
     blueprint: normalizeBlueprintFile(snapshot.blueprint),
     blueprintError: snapshot.blueprintError ?? null,
     evaluatorKind: snapshot.evaluatorKind ?? null,

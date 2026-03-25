@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::{
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EngineTimingSummary, EvaluatorRegistry,
-    ExportFormat, Persistence, PromotionOutcome, SecretStore, UpdaterConfiguration,
-    check_for_cli_update, default_db_path, default_log_path, install_cli_update,
+    ExportFormat, GitDependencyEnsureOutcome, Persistence, PromotionOutcome, SecretStore,
+    UpdaterConfiguration, check_for_cli_update, default_db_path, default_log_path,
+    ensure_git_dependency, install_cli_update,
 };
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
@@ -97,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Run { blueprint_path, db } => {
+            ensure_git_runtime_dependency()?;
             info!("Loading blueprint from {:?}", blueprint_path);
             let blueprint = BlueprintFile::load(&blueprint_path)
                 .map_err(|e| anyhow::anyhow!("Blueprint error: {e}"))?;
@@ -230,6 +232,22 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn ensure_git_runtime_dependency() -> anyhow::Result<()> {
+    match ensure_git_dependency().map_err(anyhow::Error::msg)? {
+        GitDependencyEnsureOutcome::AlreadyInstalled => Ok(()),
+        GitDependencyEnsureOutcome::Installed { installer } => {
+            eprintln!(
+                "Git was missing. Maabarium installed it automatically via {}.",
+                installer.label()
+            );
+            Ok(())
+        }
+        GitDependencyEnsureOutcome::InstallationStarted { message, .. } => {
+            anyhow::bail!(message)
+        }
+    }
+}
+
 fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
     let log_path = default_log_path();
     if let Some(parent) = log_path.parent() {
@@ -319,7 +337,7 @@ fn format_promotion_outcome(outcome: PromotionOutcome) -> &'static str {
 }
 
 fn render_timing_summary(summary: &EngineTimingSummary) -> String {
-    if summary.phase_totals.is_empty() {
+    if summary.phase_totals.is_empty() && summary.proposal_failure_counters.is_empty() {
         return "Run timing summary: unavailable".to_owned();
     }
 
@@ -353,6 +371,14 @@ fn render_timing_summary(summary: &EngineTimingSummary) -> String {
             "- iterations total={}ms avg={}ms max={}ms",
             total_iterations_ms, average_iteration_ms, max_iteration_ms,
         ));
+    }
+
+    if !summary.proposal_failure_counters.is_empty() {
+        let total_failures = summary.proposal_failure_counters.values().sum::<u64>();
+        lines.push(format!("- proposal_failures total={}", total_failures));
+        for (counter_key, count) in &summary.proposal_failure_counters {
+            lines.push(format!("- proposal_failure counter={} count={}", counter_key, count));
+        }
     }
 
     lines.join("\n")
@@ -513,10 +539,18 @@ mod tests {
             },
         );
         summary.iteration_durations_ms = vec![99, 83];
+        summary.proposal_failure_counters.insert(
+            "ollama:invalid_response.unified_diff.context_mismatch".into(),
+            2,
+        );
 
         let rendered = render_timing_summary(&summary);
         assert!(rendered.contains("run_id=abc12345"));
         assert!(rendered.contains("phase=applying total=120ms avg=60ms max=80ms count=2"));
         assert!(rendered.contains("iterations total=182ms avg=91ms max=99ms"));
+        assert!(rendered.contains("proposal_failures total=2"));
+        assert!(rendered.contains(
+            "proposal_failure counter=ollama:invalid_response.unified_diff.context_mismatch count=2"
+        ));
     }
 }

@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, Wrench } from "lucide-react";
 import type {
   DesktopSetupState,
+  GitDependencyState,
   OllamaStatus,
   PluginRuntimeState,
   ReadinessItem,
@@ -18,6 +19,7 @@ type DesktopSetupModalProps = {
   isOpen: boolean;
   setupState: DesktopSetupState;
   readinessItems: ReadinessItem[];
+  gitDependency: GitDependencyState;
   ollama: OllamaStatus | null;
   pluginRuntime: PluginRuntimeState | null;
   saving: boolean;
@@ -27,6 +29,7 @@ type DesktopSetupModalProps = {
     nextSetup: DesktopSetupState,
     apiKeys: Record<string, string>,
   ) => Promise<void>;
+  onInstallGit: () => Promise<void>;
   onInstallOllama: () => Promise<void>;
   onStartOllama: () => Promise<void>;
 };
@@ -35,12 +38,14 @@ export function DesktopSetupModal({
   isOpen,
   setupState,
   readinessItems,
+  gitDependency,
   ollama,
   pluginRuntime,
   saving,
   onClose,
   onInspectWorkspace,
   onSave,
+  onInstallGit,
   onInstallOllama,
   onStartOllama,
 }: DesktopSetupModalProps) {
@@ -110,6 +115,7 @@ export function DesktopSetupModal({
   );
   const researchSearchReadiness =
     readinessItems.find((item) => item.id === "research_search") ?? null;
+  const gitReadiness = readinessItems.find((item) => item.id === "git") ?? null;
   const searchMode = form.researchSearchMode;
   const researchSearchOptions: Array<{
     value: ResearchSearchMode;
@@ -270,6 +276,61 @@ export function DesktopSetupModal({
               </div>
             </section>
           </div>
+
+          {gitReadiness ? (
+            <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                    Git Dependency
+                  </div>
+                  <div className="mt-2 text-sm text-slate-300">
+                    {gitReadiness.summary}
+                  </div>
+                  <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-slate-500">
+                    <div>
+                      Installer: {gitDependency.installerLabel ?? "Unavailable"}
+                    </div>
+                    <div>
+                      Command:{" "}
+                      {gitDependency.installCommand ??
+                        "Manual installation required"}
+                    </div>
+                    {gitDependency.commandPath ? (
+                      <div>Resolved binary: {gitDependency.commandPath}</div>
+                    ) : null}
+                  </div>
+                </div>
+                <Badge
+                  color={
+                    gitReadiness.status === "ready"
+                      ? "emerald"
+                      : gitReadiness.status === "optional"
+                        ? "slate"
+                        : "rose"
+                  }
+                >
+                  {gitReadiness.status === "needs_attention"
+                    ? "Needs Attention"
+                    : gitReadiness.status === "optional"
+                      ? "Optional"
+                      : "Ready"}
+                </Badge>
+              </div>
+
+              {gitReadiness.status === "needs_attention" ? (
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => void onInstallGit()}
+                    className="rounded-lg border border-amber-300/20 bg-gradient-to-r from-amber-400/15 to-teal-500/15 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-white transition hover:brightness-110"
+                  >
+                    {gitReadiness.actionLabel}
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
           <section className="rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-start justify-between gap-3">

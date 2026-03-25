@@ -3,6 +3,7 @@ use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::Instant;
 
 pub struct OllamaProvider {
@@ -27,7 +28,16 @@ struct OllamaRequest {
     prompt: String,
     system: String,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<OllamaFormat>,
     options: OllamaOptions,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum OllamaFormat {
+    JsonMode(String),
+    JsonSchema(Value),
 }
 
 #[derive(Serialize)]
@@ -52,6 +62,12 @@ impl LLMProvider for OllamaProvider {
             prompt: request.prompt.clone(),
             system: request.system.clone(),
             stream: false,
+            format: request.response_format.as_ref().map(|format| match format {
+                super::ResponseFormat::Json => OllamaFormat::JsonMode("json".to_owned()),
+                super::ResponseFormat::JsonSchema(schema) => {
+                    OllamaFormat::JsonSchema(schema.clone())
+                }
+            }),
             options: OllamaOptions {
                 temperature: request.temperature,
                 num_predict: request.max_tokens,

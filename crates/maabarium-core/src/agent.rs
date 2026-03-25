@@ -1,17 +1,18 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use futures::future::join_all;
 use serde::Deserialize;
+use serde_json::json;
 use tracing::{debug, info, warn};
 
 use crate::blueprint::{AgentDef, MetricDef};
 use crate::error::LLMError;
 use crate::git_manager::{FilePatch, FilePatchOperation, Proposal};
-use crate::llm::{CompletionRequest, LLMProvider};
+use crate::llm::{CompletionRequest, LLMProvider, ResponseFormat};
 
 const MAX_CONTEXT_FILES: usize = 3;
 const MAX_FILE_CHARS: usize = 4_000;
@@ -71,6 +72,134 @@ fn proposal_max_tokens(language: &str) -> u32 {
     }
 }
 
+fn proposal_temperature(provider_name: &str) -> f32 {
+    if provider_name.eq_ignore_ascii_case("ollama") {
+        0.0
+    } else {
+        0.2
+    }
+}
+
+fn proposal_response_format() -> ResponseFormat {
+    ResponseFormat::JsonSchema(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "summary": {
+                "type": "string"
+            },
+            "file_patches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "path": {
+                            "type": "string"
+                        },
+                        "operation": {
+                            "type": "string",
+                            "enum": ["create", "modify", "delete"]
+                        },
+                        "unified_diff": {
+                            "type": "string"
+                        }
+                    },
+                    "required": ["path", "operation", "unified_diff"]
+                }
+            }
+        },
+        "required": ["summary", "file_patches"]
+    }))
+}
+
+fn diff_anchor_example(file_contexts: &[FileContext]) -> String {
+    let Some(file) = file_contexts.iter().find(|file| {
+        file.content
+            .lines()
+            .any(|line| !line.trim().is_empty())
+    }) else {
+        return String::new();
+    };
+
+    let Some(anchor_line) = file
+        .content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim_end)
+    else {
+        return String::new();
+    };
+
+    if anchor_line.chars().count() > 120 {
+        return String::new();
+    }
+
+    format!(
+        "\nExact diff anchor for '{}' when modifying the first non-empty line:\n{{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{\n      \"path\": \"{}\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -1,1 +1,1 @@\\n-{}\\n+<replacement line with the same surrounding format>\\n\"\n    }}\n  ]\n}}\nCopy the '-' line exactly from Existing file contents if you modify that line.\n",
+        file.path, file.path, anchor_line,
+    )
+}
+
+fn normalize_proposal_failure_reason(error: &LLMError) -> &'static str {
+    match error {
+        LLMError::InvalidResponse(message) => {
+            if message.starts_with("Invalid proposal JSON:") {
+                "invalid_response.proposal_json"
+            } else if message.contains("Unified diff validation failed") {
+                if message.contains("encountered an empty unified diff line without a prefix") {
+                    "invalid_response.unified_diff.blank_line_without_prefix"
+                } else if message.contains("context mismatch") {
+                    "invalid_response.unified_diff.context_mismatch"
+                } else if message.contains("context line referenced beyond end of file") {
+                    "invalid_response.unified_diff.context_beyond_eof"
+                } else if message.contains("new-line count mismatch") {
+                    "invalid_response.unified_diff.new_line_count_mismatch"
+                } else if message.contains("old-line count mismatch") {
+                    "invalid_response.unified_diff.old_line_count_mismatch"
+                } else if message.contains("removal mismatch") {
+                    "invalid_response.unified_diff.removal_mismatch"
+                } else {
+                    "invalid_response.unified_diff.other"
+                }
+            } else if message.contains("must provide a unified diff") {
+                "invalid_response.missing_required_unified_diff"
+            } else if message.contains("missing unified_diff") {
+                "invalid_response.missing_unified_diff_field"
+            } else if message.contains("is not safe") {
+                "invalid_response.unsafe_patch_path"
+            } else {
+                "invalid_response.other"
+            }
+        }
+        LLMError::Provider(message) => {
+            if message.starts_with("HTTP 404") {
+                "provider.http_404"
+            } else if message.starts_with("HTTP 429") {
+                "provider.http_429"
+            } else if message.starts_with("HTTP 5") {
+                "provider.http_5xx"
+            } else if message.starts_with("HTTP ") {
+                "provider.http_other"
+            } else {
+                "provider.other"
+            }
+        }
+        LLMError::Timeout => "timeout",
+        LLMError::Http(_) => "http_request",
+    }
+}
+
+fn format_proposal_failure_counters(
+    counters: &BTreeMap<(String, &'static str), u64>,
+) -> String {
+    counters
+        .iter()
+        .map(|((provider, reason), count)| format!("{provider}:{reason}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl Agent {
     pub fn new(def: AgentDef, llm: Arc<dyn LLMProvider>) -> Self {
         Self { def, llm }
@@ -124,10 +253,13 @@ impl Agent {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         };
-            let research_guidance = research_patch_guidance(language);
+        let research_guidance = research_patch_guidance(language);
+        let diff_anchor = diff_anchor_example(&file_contexts);
         let prompt = format!(
             "Context:\n{context}\n\nTarget files:\n{targets_desc}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
              Existing file contents:\n{files_desc}\n\n\
+             {diff_anchor}\
+             \n\
              Return valid JSON with this exact shape and no markdown fences:\n\
               {{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{ \"path\": \"relative/path\", \"operation\": \"modify\", \"unified_diff\": \"@@ -1,1 +1,2 @@\\n old line\\n+new line\" }}\n  ]\n}}\n\n\
               The strings \"old line\" and \"new line\" are placeholders only. Replace them with exact file content from Existing file contents if you emit a diff.\n\
@@ -137,14 +269,28 @@ impl Agent {
               Each patch must target exactly one safe relative path.\n\
               Do not return full-file replacements. Do not invent paths outside the target patterns.\n\
                Keep changes narrow and preserve valid {language} syntax.\n\
+               Unified diff rules are strict:\n\
+               - Every line after a @@ hunk header must start with exactly one prefix: space for context, + for additions, - for removals, or \\ for the no-newline marker.\n\
+               - Blank lines inside a hunk are never empty: emit a prefixed blank line such as ' ' for blank context or '+' for a blank added line.\n\
+               - Never emit an empty line inside a hunk body.\n\
+               - Do not include prose, explanations, markdown fences, or file headers inside unified_diff.\n\
+               - When modifying an existing code file, preserve exact surrounding formatting from Existing file contents unless the changed lines require otherwise. Do not expand one-line code into multi-line code unless the diff counts and context exactly match the file.\n\
+             - If Existing file contents show a one-line item such as 'pub fn baseline() {{}}', reuse that exact one-line text in the diff. Do not rewrite it as 'pub fn baseline() {{' and '}}' on separate lines.\n\
+               - For code files such as Rust, TOML, or other source files, do not fall back to whole-file content. Return an empty file_patches array if you cannot produce an exact unified diff.\n\
+               Example with a blank added line:\n\
+               @@ -1,2 +1,3 @@\n\
+              alpha\n\
+               +\n\
+              beta\n\
                If you are not confident that the JSON or unified diff will be exact, return an empty file_patches array and explain the limitation in summary.\n\
                A correct empty patch is better than malformed JSON or an invalid diff.{research_guidance}"
         );
         let req = CompletionRequest {
             system: self.def.system_prompt.clone(),
             prompt,
-            temperature: 0.2,
+            temperature: proposal_temperature(self.llm.provider_name()),
             max_tokens: proposal_max_tokens(language),
+            response_format: Some(proposal_response_format()),
         };
         let resp = self.llm.complete(&req).await?;
         parse_proposal_payload(&resp.content, &file_contexts, &allowed_paths, target_files)
@@ -170,6 +316,7 @@ impl Agent {
             prompt,
             temperature: 0.5,
             max_tokens: 256,
+            response_format: None,
         };
         let resp = self.llm.complete(&req).await?;
         Ok(resp.content.trim().to_owned())
@@ -178,11 +325,16 @@ impl Agent {
     pub fn name(&self) -> &str {
         &self.def.name
     }
+
+    pub fn provider_name(&self) -> &str {
+        self.llm.provider_name()
+    }
 }
 
 pub struct Council {
     agents: Vec<Agent>,
     debate_rounds: u32,
+    last_proposal_failure_counters: Mutex<BTreeMap<String, u64>>,
 }
 
 struct CouncilProposal {
@@ -196,7 +348,15 @@ impl Council {
         Self {
             agents,
             debate_rounds,
+            last_proposal_failure_counters: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    pub fn last_proposal_failure_counters(&self) -> BTreeMap<String, u64> {
+        self.last_proposal_failure_counters
+            .lock()
+            .map(|counters| counters.clone())
+            .unwrap_or_default()
     }
 
     pub async fn run(
@@ -224,6 +384,7 @@ impl Council {
                     (
                         agent_index,
                         agent.name().to_owned(),
+                        agent.provider_name().to_owned(),
                         started.elapsed(),
                         result,
                     )
@@ -232,11 +393,13 @@ impl Council {
         .await;
 
         let mut proposals = Vec::new();
-        for (agent_index, agent_name, duration, result) in proposal_results {
+        let mut proposal_failure_counters = BTreeMap::new();
+        for (agent_index, agent_name, provider_name, duration, result) in proposal_results {
             match result {
                 Ok(proposal) => {
                     info!(
                         agent = %agent_name,
+                        provider = %provider_name,
                         duration_ms = duration.as_millis() as u64,
                         "Council proposal completed"
                     );
@@ -247,9 +410,15 @@ impl Council {
                     });
                 }
                 Err(error) => {
+                    let failure_reason = normalize_proposal_failure_reason(&error);
+                    *proposal_failure_counters
+                        .entry((provider_name.clone(), failure_reason))
+                        .or_insert(0) += 1;
                     warn!(
                         agent = %agent_name,
+                        provider = %provider_name,
                         duration_ms = duration.as_millis() as u64,
+                        failure_reason = %failure_reason,
                         error = %error,
                         "Council proposal failed"
                     );
@@ -257,10 +426,32 @@ impl Council {
             }
         }
 
+        let failed_proposals = proposal_failure_counters.values().sum::<u64>();
+        if let Ok(mut counters) = self.last_proposal_failure_counters.lock() {
+            *counters = proposal_failure_counters
+                .iter()
+                .map(|((provider, failure_reason), count)| {
+                    (format!("{provider}:{failure_reason}"), *count)
+                })
+                .collect();
+        }
+        if !proposal_failure_counters.is_empty() {
+            for ((provider, failure_reason), count) in &proposal_failure_counters {
+                warn!(
+                    provider = %provider,
+                    failure_reason = %failure_reason,
+                    count = *count,
+                    "Council proposal failure counter"
+                );
+            }
+        }
+
         info!(
             duration_ms = proposal_round_started.elapsed().as_millis() as u64,
             requested_agents = self.agents.len(),
             successful_proposals = proposals.len(),
+            failed_proposals,
+            proposal_failure_counters = %format_proposal_failure_counters(&proposal_failure_counters),
             "Council proposal round finished"
         );
 
@@ -1321,5 +1512,42 @@ mod tests {
                     .as_deref()
                     .expect("recovered content should exist")
                     .contains("Clarify the app value and release shape."));
+            }
+
+            #[test]
+            fn normalizes_proposal_failure_reasons() {
+                assert_eq!(
+                    normalize_proposal_failure_reason(&LLMError::InvalidResponse(
+                        "Unified diff validation failed for 'src/lib.rs': context mismatch: expected 'a', found 'b'"
+                            .to_owned(),
+                    )),
+                    "invalid_response.unified_diff.context_mismatch"
+                );
+                assert_eq!(
+                    normalize_proposal_failure_reason(&LLMError::InvalidResponse(
+                        "Unified diff validation failed for 'src/lib.rs': encountered an empty unified diff line without a prefix"
+                            .to_owned(),
+                    )),
+                    "invalid_response.unified_diff.blank_line_without_prefix"
+                );
+                assert_eq!(
+                    normalize_proposal_failure_reason(&LLMError::Provider(
+                        "HTTP 404 Not Found: {\"error\":\"model not found\"}".to_owned(),
+                    )),
+                    "provider.http_404"
+                );
+            }
+
+            #[test]
+            fn formats_proposal_failure_counters_compactly() {
+                let counters = BTreeMap::from([
+                    (("mock".to_owned(), "invalid_response.proposal_json"), 2_u64),
+                    (("ollama".to_owned(), "invalid_response.unified_diff.context_mismatch"), 1_u64),
+                ]);
+
+                assert_eq!(
+                    format_proposal_failure_counters(&counters),
+                    "mock:invalid_response.proposal_json=2, ollama:invalid_response.unified_diff.context_mismatch=1"
+                );
             }
 }

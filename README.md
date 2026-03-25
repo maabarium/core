@@ -25,6 +25,8 @@ At a high level, each run follows the same keep-winner pattern:
 4. evaluate the result in a sandbox or domain-specific evaluator
 5. keep, reject, or export the outcome with persistence and traces
 
+Git is a required runtime dependency for the isolated worktree flow. The desktop app, CLI run command, and macOS install script now detect when Git is missing, inform the user, and attempt to install it automatically through a supported system installer.
+
 What ships today:
 
 - council-driven proposal generation with configurable model routing and request pacing
@@ -98,6 +100,22 @@ See [docs/DESKTOP_PACKAGING.md](docs/DESKTOP_PACKAGING.md) for the fuller packag
 cargo build
 ```
 
+### Build An Optimized Local Binary
+
+Portable optimized build with whole-program optimization:
+
+```bash
+cargo build --profile release-lto
+```
+
+Opt-in local-machine tuning for Apple Silicon or any other fixed developer host:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --profile release-lto
+```
+
+Use the native-tuned command only for local benchmarking or personal builds. Distributed artifacts should keep the portable build profile so they remain compatible across machines in the same target family.
+
 ### Run The CLI With The Example Blueprint
 
 ```bash
@@ -146,6 +164,7 @@ pnpm tauri dev
 
 - [docs/BLUEPRINT_SPEC.md](docs/BLUEPRINT_SPEC.md)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/BUILD_PROFILES.md](docs/BUILD_PROFILES.md)
 - [docs/DESKTOP_PACKAGING.md](docs/DESKTOP_PACKAGING.md)
 - [docs/ROADMAP.md](docs/ROADMAP.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)

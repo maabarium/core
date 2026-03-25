@@ -49,6 +49,7 @@ impl Evaluator for PromptEvaluator {
                 prompt,
                 temperature: 0.1,
                 max_tokens: 16,
+                response_format: None,
             };
             let resp = self.llm.complete(&req).await?;
             let value: f64 = resp.content.trim().parse().map_err(|_| {

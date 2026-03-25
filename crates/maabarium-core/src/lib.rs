@@ -13,6 +13,7 @@ pub mod llm;
 pub mod logging;
 pub mod metrics;
 pub mod persistence;
+pub mod runtime_dependencies;
 pub mod secrets;
 pub mod updater;
 
@@ -33,6 +34,10 @@ pub use evaluator::{
 pub use logging::{default_log_path, read_recent_log_lines, read_recent_log_lines_from_path};
 pub use persistence::{
     ExportFormat, PersistedProposal, Persistence, PromotionOutcome, default_db_path,
+};
+pub use runtime_dependencies::{
+    GitDependencyEnsureOutcome, GitDependencyStatus, GitInstallerKind, ensure_git_dependency,
+    git_dependency_status,
 };
 pub use secrets::{ApiKeyStore, SecretStore};
 pub use updater::{

@@ -46,6 +46,7 @@ pub struct ModelPool {
     providers: Vec<PoolMember>,
     counter: AtomicUsize,
     label: String,
+    provider_label: String,
 }
 
 impl ModelPool {
@@ -55,10 +56,18 @@ impl ModelPool {
             .map(|provider| provider.provider.model_name().to_owned())
             .collect::<Vec<_>>()
             .join(", ");
+        let mut provider_names = providers
+            .iter()
+            .map(|provider| provider.provider.provider_name().to_owned())
+            .collect::<Vec<_>>();
+        provider_names.sort();
+        provider_names.dedup();
+        let provider_label = provider_names.join(", ");
         Self {
             providers,
             counter: AtomicUsize::new(0),
             label,
+            provider_label,
         }
     }
 
@@ -108,7 +117,11 @@ impl LLMProvider for ModelPool {
     }
 
     fn provider_name(&self) -> &str {
-        "model-pool"
+        if self.provider_label.is_empty() {
+            "model-pool"
+        } else {
+            &self.provider_label
+        }
     }
 
     fn model_name(&self) -> &str {
@@ -176,6 +189,7 @@ mod tests {
             prompt: "prompt".into(),
             temperature: 0.0,
             max_tokens: 1,
+            response_format: None,
         };
 
         let first_response = pool.complete(&request).await.expect("first completion");

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 
 use secrecy::SecretString;
@@ -24,6 +25,13 @@ pub struct CompletionRequest {
     pub prompt: String,
     pub temperature: f32,
     pub max_tokens: u32,
+    pub response_format: Option<ResponseFormat>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResponseFormat {
+    Json,
+    JsonSchema(Value),
 }
 
 #[derive(Debug, Clone)]

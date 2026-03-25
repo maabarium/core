@@ -9,8 +9,9 @@ use maabarium_core::blueprint::{
 use maabarium_core::persistence::PersistedExperiment;
 use maabarium_core::{
     default_db_path, default_log_path, read_recent_log_lines_from_path, ApiKeyStore, BlueprintFile,
-    Engine, EngineConfig, EnginePhase, EngineProgressUpdate, EvaluatorRegistry, PersistedProposal,
-    Persistence, ProcessPluginManifest, SecretStore,
+    Engine, EngineConfig, EnginePhase, EngineProgressUpdate, EvaluatorRegistry,
+    GitDependencyEnsureOutcome, PersistedProposal, Persistence, ProcessPluginManifest,
+    SecretStore, ensure_git_dependency, git_dependency_status,
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -256,6 +257,7 @@ struct ConsoleState {
     db_path: String,
     log_path: String,
     hardware_telemetry: HardwareTelemetry,
+    git_dependency: GitDependencyState,
     blueprint: Option<BlueprintFile>,
     blueprint_error: Option<String>,
     evaluator_kind: Option<String>,
@@ -270,6 +272,17 @@ struct ConsoleState {
     experiments: Vec<PersistedExperiment>,
     proposals: Vec<PersistedProposal>,
     logs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitDependencyState {
+    installed: bool,
+    command_path: Option<String>,
+    auto_install_supported: bool,
+    installer_label: Option<String>,
+    install_command: Option<String>,
+    status_detail: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -460,6 +473,7 @@ fn main() {
             get_console_state,
             save_desktop_setup,
             set_provider_api_key,
+            install_git,
             install_ollama,
             start_ollama,
             cleanup_experiment_branches_command,
@@ -1009,6 +1023,18 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     let available_blueprints =
         discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
     let desktop_setup = hydrated_desktop_setup(state);
+    let git_status = git_dependency_status();
+    let git_dependency = GitDependencyState {
+        installed: git_status.installed,
+        command_path: git_status
+            .command_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        auto_install_supported: git_status.auto_install_supported,
+        installer_label: git_status.installer.map(|installer| installer.label().to_owned()),
+        install_command: git_status.install_command.clone(),
+        status_detail: git_status.status_detail.clone(),
+    };
     let mut ollama = build_ollama_status();
     merge_saved_local_models_into_ollama(&desktop_setup, &mut ollama);
     let evaluator_kind = blueprint_result
@@ -1072,6 +1098,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     let readiness_items = build_readiness_items(
         &desktop_setup,
         fallback_workspace,
+        &git_status,
         &ollama,
         updater.configured,
         brave_search_configured,
@@ -1100,6 +1127,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             db_path: state.db_path.display().to_string(),
             log_path: state.log_path.display().to_string(),
             hardware_telemetry,
+            git_dependency: git_dependency.clone(),
             blueprint: Some(blueprint),
             blueprint_error: None,
             evaluator_kind,
@@ -1122,6 +1150,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             db_path: state.db_path.display().to_string(),
             log_path: state.log_path.display().to_string(),
             hardware_telemetry,
+            git_dependency,
             blueprint: None,
             blueprint_error: Some(error.to_string()),
             evaluator_kind,
@@ -1830,6 +1859,8 @@ fn ensure_repository_has_head(repo: &Repository) -> Result<(), String> {
 }
 
 fn prepare_run_workspace(path: &Path, initialize_git_if_needed: bool) -> Result<PathBuf, String> {
+    ensure_git_runtime_dependency()?;
+
     if !path.exists() {
         return Err(format!(
             "Selected workspace {} does not exist",
@@ -1863,6 +1894,21 @@ fn prepare_run_workspace(path: &Path, initialize_git_if_needed: bool) -> Result<
             "Selected workspace {} is not a git repository. Enable repository initialization before starting the run.",
             canonical.display()
         )),
+    }
+}
+
+fn ensure_git_runtime_dependency() -> Result<(), String> {
+    match ensure_git_dependency() {
+        Ok(GitDependencyEnsureOutcome::AlreadyInstalled) => Ok(()),
+        Ok(GitDependencyEnsureOutcome::Installed { installer }) => {
+            info!(installer = installer.label(), "Git dependency installed automatically");
+            Ok(())
+        }
+        Ok(GitDependencyEnsureOutcome::InstallationStarted { message, .. }) => {
+            warn!(message = %message, "Git dependency installation requires follow-up");
+            Err(message)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1993,6 +2039,12 @@ fn cleanup_experiment_branches_command(
     })
 }
 
+
+    #[tauri::command]
+    fn install_git(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+        ensure_git_runtime_dependency()?;
+        Ok(build_console_state(&state))
+    }
 fn sample_hardware_telemetry(state: &AppState) -> HardwareTelemetry {
     match state.hardware_sampler.lock() {
         Ok(mut sampler) => sampler.sample(),
