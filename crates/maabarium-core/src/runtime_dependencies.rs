@@ -307,6 +307,35 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
+    fn test_installer_fixture() -> (Vec<&'static str>, GitInstallerKind, &'static str) {
+        #[cfg(target_os = "macos")]
+        {
+            return (
+                vec!["brew"],
+                GitInstallerKind::Homebrew,
+                "brew install git",
+            );
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return (
+                vec!["winget"],
+                GitInstallerKind::Winget,
+                "winget install --id Git.Git -e --source winget",
+            );
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            return (
+                vec!["apt-get", "sudo"],
+                GitInstallerKind::Apt,
+                "sudo apt-get install -y git",
+            );
+        }
+    }
+
     struct MockRuntime {
         commands: RefCell<BTreeSet<String>>,
         executions: RefCell<Vec<String>>,
@@ -394,27 +423,27 @@ mod tests {
 
     #[test]
     fn ensure_git_dependency_reports_successful_install() {
-        let runtime = MockRuntime::new(&["brew"]).with_install_git_after("brew install git");
+        let (commands, installer, install_git_after) = test_installer_fixture();
+        let runtime = MockRuntime::new(&commands).with_install_git_after(install_git_after);
 
         let outcome = ensure_git_dependency_with_runtime(&runtime).expect("install should succeed");
 
         assert_eq!(
             outcome,
-            GitDependencyEnsureOutcome::Installed {
-                installer: GitInstallerKind::Homebrew,
-            }
+            GitDependencyEnsureOutcome::Installed { installer }
         );
         assert!(runtime.find_command("git").is_some());
     }
 
     #[test]
     fn ensure_git_dependency_surfaces_installer_failure() {
-        let runtime = MockRuntime::new(&["brew"]).with_failure("permission denied");
+        let (commands, installer, _) = test_installer_fixture();
+        let runtime = MockRuntime::new(&commands).with_failure("permission denied");
 
         let error = ensure_git_dependency_with_runtime(&runtime).expect_err("install should fail");
 
         assert!(error.contains("permission denied"));
-        assert!(error.contains("Homebrew"));
+        assert!(error.contains(installer.label()));
     }
 
     #[cfg(target_os = "macos")]
