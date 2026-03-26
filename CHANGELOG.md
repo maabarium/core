@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.3] - 2026-03-26
+
+### Added
+
+- None.
+
+### Changed
+
 - The macOS desktop release workflow and local release smoke test now bundle only the `app` target because the updater publish path consumes the signed `.app.tar.gz` archive and `.sig`, not the GUI-oriented `.dmg`.
 
 ### Fixed
