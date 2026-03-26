@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.6] - 2026-03-26
+
+### Added
+
+- None.
+
+### Changed
+
 - The local desktop release smoke test now treats notarization and stapling as part of macOS launchability validation, rather than stopping at successful Developer ID code signing.
 
 ### Fixed
