@@ -48,6 +48,7 @@ fn prepare_bundled_cli() -> Result<(), String> {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|error| error.to_string())?);
     let generated_cli_dir = manifest_dir.join("generated-resources").join("cli");
+    fs::create_dir_all(&generated_cli_dir).map_err(|error| error.to_string())?;
 
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());
     if profile != "release" && env::var_os("MAABARIUM_BUNDLE_CLI_IN_DEV").is_none() {

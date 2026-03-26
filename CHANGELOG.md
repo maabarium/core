@@ -19,6 +19,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Desktop release preparation now clears stale generated bundled-CLI resources before copying the current target binary, preventing old resource layouts from leaking into later macOS app bundles.
 - The macOS desktop release pipeline now signs the bundled CLI resource before app notarization, addressing notarization failures caused by an unsigned nested executable in `Contents/Resources/generated-resources/cli/.../maabarium`.
+- Non-release desktop builds now ensure `generated-resources/cli/` exists before the release-only CLI bundling shortcut returns, preventing CI `cargo build` failures when Tauri validates bundled resource paths.
 
 ### Breaking Changes
 
