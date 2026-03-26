@@ -12,11 +12,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- The macOS desktop release workflow and local release smoke test now bundle only the `app` target because the updater publish path consumes the signed `.app.tar.gz` archive and `.sig`, not the GUI-oriented `.dmg`.
 
 ### Fixed
 
-- None.
+- The desktop release pipeline no longer depends on the headless-hostile DMG creation step, avoiding `bundle_dmg.sh` failures on GitHub macOS runners while still producing the updater bundle consumed by `latest.json`.
+- The local desktop release smoke test now accepts unencrypted Tauri updater signing keys, matching the actual CLI behavior instead of requiring a password when none exists.
+- The desktop release workflow and local smoke test now export an explicit empty updater signing-key password when none is configured, preventing interactive password prompts for unencrypted keys.
 
 ### Breaking Changes
 

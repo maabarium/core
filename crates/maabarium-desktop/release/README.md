@@ -80,7 +80,9 @@ The validator prints a `Recommended GitHub variable value` line. Use that raw ke
 
 The release workflow also passes that validated key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI.
 
-For release packaging, the workflow also applies a release-only `productName` override of `Maabarium-Console`, so the generated macOS `.app`, `.dmg`, and updater `.app.tar.gz` artifacts use dashed filenames while the desktop window title remains `Maabarium Console`.
+For release packaging, the workflow also applies a release-only `productName` override of `Maabarium-Console`, so the generated macOS `.app` and updater `.app.tar.gz` artifacts use dashed filenames while the desktop window title remains `Maabarium Console`.
+
+The GitHub release workflow now bundles only the macOS `app` target. That is intentional: the updater publishing flow consumes the signed `.app.tar.gz` bundle and its `.sig`, while the `.dmg` path pulls in Finder AppleScript steps that are brittle on headless runners and are not used by the updater manifest.
 
 Do not commit either key. Only the public key content should be copied into runtime configuration.
 Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
@@ -91,11 +93,22 @@ Build signed updater artifacts locally:
 
 ```bash
 cd crates/maabarium-desktop
-export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/maabarium.key"
+export TAURI_SIGNING_PRIVATE_KEY_FILE="$HOME/.tauri/maabarium.key"
 export MAABARIUM_UPDATE_PUBKEY_FILE="$HOME/.tauri/maabarium.key.pub"
-pnpm tauri build
-pnpm build:release-manifest -- --base-url https://downloads.maabarium.com --cli-platform stable/0.1.0/darwin-aarch64/maabarium-cli.tar.gz
+pnpm test:release-local
 ```
+
+Set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if your updater private key was generated with a password. Unencrypted local keys can omit it.
+
+The local smoke script and CI workflow export an explicit empty `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when none is configured so Tauri does not pause for an interactive password prompt on unencrypted keys.
+
+That command performs the same local steps the CI release job cares about:
+
+- validates the updater pubkey
+- builds the signed macOS app bundle with the dashed release-only product name
+- verifies the updater archive and `.sig` exist
+- stages the updater bundle under the platform key
+- generates `latest.json` and `install.sh`
 
 The generated manifest is written to:
 
@@ -103,12 +116,10 @@ The generated manifest is written to:
 crates/maabarium-desktop/release/latest.json
 ```
 
-Generate the matching bootstrap installer script from the same base URL metadata:
+If you only want to build the app manually, the equivalent bundle command is:
 
 ```bash
-node scripts/release/generate-install-script.mjs \
-  --base-url https://downloads.maabarium.com \
-  --output crates/maabarium-desktop/release/install.sh
+pnpm tauri build --config '{"productName":"Maabarium-Console","bundle":{"targets":["app"]}}'
 ```
 
 ## GitHub Actions Release Job

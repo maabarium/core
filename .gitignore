@@ -32,3 +32,4 @@ data/*.log
 .tmp*
 /**/node_modules/
 /**/generated-resources/
+/**/release/

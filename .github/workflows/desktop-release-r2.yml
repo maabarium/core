@@ -92,13 +92,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET:-}" ]]; then
-            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET"
-          fi
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET:-}"
           cd crates/maabarium-desktop
           pnpm tauri build \
             --config "$TAURI_CONFIG" \
-            --config '{"productName":"Maabarium-Console"}'
+            --config '{"productName":"Maabarium-Console","bundle":{"targets":["app"]}}'
 
       - name: Stage updater bundle and manifest
         shell: bash

@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "build:release-manifest": "node ./scripts/generate-release-manifest.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
+    "test:release-local": "bash ./scripts/test-local-release-build.sh",
     "tauri": "tauri",
     "validate:updater-pubkey": "node ./scripts/validate-updater-pubkey.mjs"
   },

@@ -76,11 +76,15 @@ The updater storage endpoint can be backed by Cloudflare R2.
 - `latest.json` lives at the root of that release origin.
 - signed updater bundles live under platform-key subdirectories such as `darwin-aarch64/`, where the published macOS updater archive is named `Maabarium-Console.app.tar.gz`.
 
+The GitHub updater workflow intentionally bundles only the macOS `app` target. The updater release path consumes the signed `.app.tar.gz` bundle and `.sig`; it does not publish the `.dmg`, and skipping that target avoids Finder AppleScript failures on headless macOS runners.
+
 The updater signing public key is not an R2 value. It is the public half of the Tauri updater signing keypair. Use the Tauri-generated public key content directly, not a PEM block, Cloudflare key, or base64url variant.
 
 For local builds, `MAABARIUM_UPDATE_PUBKEY_FILE` can point at the generated `.pub` file and will be embedded at compile time. A runtime `MAABARIUM_UPDATE_PUBKEY` still overrides the embedded key for development sessions.
 
 Before pasting a value into GitHub Actions configuration, validate it locally with `cd crates/maabarium-desktop && pnpm validate:updater-pubkey -- --file ~/.tauri/maabarium.key.pub`. The validator prints the recommended raw key line for `MAABARIUM_UPDATE_PUBKEY`.
+
+For a full local updater-release smoke test, run `cd crates/maabarium-desktop && TAURI_SIGNING_PRIVATE_KEY_FILE=~/.tauri/maabarium.key MAABARIUM_UPDATE_PUBKEY_FILE=~/.tauri/maabarium.key.pub TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<password> pnpm test:release-local`.
 
 See [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md) for the concrete release flow and required variables.
 
