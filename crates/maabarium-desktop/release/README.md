@@ -84,6 +84,8 @@ For release packaging, the workflow also applies a release-only `productName` ov
 
 The GitHub release workflow now bundles only the macOS `app` target. That is intentional: the updater publishing flow consumes the signed `.app.tar.gz` bundle and its `.sig`, while the `.dmg` path pulls in Finder AppleScript steps that are brittle on headless runners and are not used by the updater manifest.
 
+When the Apple signing secrets are configured, that workflow also uses Tauri's supported macOS signing and notarization environment variables during `tauri build`, so the published updater archive contains a Developer ID-signed and notarized app instead of an ad-hoc signed bundle that Gatekeeper will reject.
+
 Do not commit either key. Only the public key content should be copied into runtime configuration.
 Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
 
@@ -162,6 +164,10 @@ to Cloudflare R2.
 
 - `TAURI_SIGNING_PRIVATE_KEY`
 - optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_ID`
+- `APPLE_PASSWORD`
 - `CLOUDFLARE_R2_ACCESS_KEY_ID`
 - `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
 - optional `MAABARIUM_UPDATE_PUBKEY` if you prefer storing the updater public key as a masked secret instead of a repository variable
@@ -170,15 +176,75 @@ to Cloudflare R2.
 
 - `MAABARIUM_UPDATE_PUBKEY`
 - `MAABARIUM_UPDATE_BASE_URL`
+- `APPLE_TEAM_ID`
 - `CLOUDFLARE_R2_BUCKET`
 - `CLOUDFLARE_R2_ENDPOINT`
+- optional `APPLE_SIGNING_IDENTITY`
+- optional `APPLE_PROVIDER_SHORT_NAME`
 
 Example values:
 
 - `MAABARIUM_UPDATE_PUBKEY = <contents of ~/.tauri/maabarium.key.pub>`
 - `MAABARIUM_UPDATE_BASE_URL = https://downloads.maabarium.com`
+- `APPLE_TEAM_ID = ABCD123456`
 - `CLOUDFLARE_R2_BUCKET = maabarium-releases`
 - `CLOUDFLARE_R2_ENDPOINT = https://<account-id>.r2.cloudflarestorage.com`
+
+### Apple Signing Notes
+
+- `APPLE_CERTIFICATE` must be the base64-encoded contents of your exported Developer ID Application `.p12` certificate.
+- `APPLE_CERTIFICATE_PASSWORD` is the password used when exporting that `.p12` file.
+- `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` are used by Tauri's notarization flow. `APPLE_PASSWORD` should be an Apple app-specific password.
+- `APPLE_SIGNING_IDENTITY` is optional if the identity can be inferred from `APPLE_CERTIFICATE`, but setting it explicitly is safer for CI.
+
+## Local Re-sign And Notarize An Existing App Build
+
+If you already built the app locally and want a launchable macOS app for testing on your own machine, re-sign and notarize the `.app` bundle directly:
+
+```bash
+cd /Users/kabudu/projex/maabarium-group/maabarium/crates/maabarium-desktop
+APP_ROOT="/Users/kabudu/projex/maabarium-group/maabarium/target/release/bundle/macos/Maabarium-Console.app"
+ZIP_PATH="$PWD/release/Maabarium-Console-notarize.zip"
+
+codesign --deep --force --verify --verbose \
+	--options runtime \
+	--sign "Developer ID Application: YOUR NAME (TEAMID)" \
+	"$APP_ROOT"
+
+ditto -c -k --keepParent "$APP_ROOT" "$ZIP_PATH"
+
+xcrun notarytool submit "$ZIP_PATH" \
+	--apple-id "YOUR_APPLE_ID" \
+	--password "YOUR_APP_SPECIFIC_PASSWORD" \
+	--team-id "YOUR_TEAM_ID" \
+	--wait
+
+xcrun stapler staple "$APP_ROOT"
+
+spctl --assess --type execute --verbose "$APP_ROOT"
+codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
+```
+
+If your certificate is already installed in Keychain and you only need a local re-sign without notarization, you can stop after the `codesign` command and launch the app via Finder's first-run override flow, but that is not sufficient for a real downloadable release.
+
+## Rebuild The Updater Archive After Local Re-signing
+
+If you re-sign or notarize the app after `tauri build` and want to republish the updater payload, recreate the archive and updater signature from the finalized `.app`:
+
+```bash
+cd /Users/kabudu/projex/maabarium-group/maabarium/crates/maabarium-desktop
+APP_ROOT="/Users/kabudu/projex/maabarium-group/maabarium/target/release/bundle/macos/Maabarium-Console.app"
+ARCHIVE_PATH="/Users/kabudu/projex/maabarium-group/maabarium/target/release/bundle/macos/Maabarium-Console.app.tar.gz"
+
+rm -f "$ARCHIVE_PATH" "$ARCHIVE_PATH.sig"
+tar -C "$(dirname "$APP_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$APP_ROOT")"
+
+pnpm tauri signer sign \
+	-f "$HOME/.tauri/maabarium.key" \
+	"$ARCHIVE_PATH"
+```
+
+Set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` or pass `-p ...` only if your updater private key is encrypted.
 
 ## Triggering a Release
 

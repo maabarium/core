@@ -12,11 +12,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- The macOS desktop release workflow now supports Apple Developer signing and notarization inputs so the published updater archive can contain a Gatekeeper-acceptable app bundle rather than only an updater-signed payload.
 
 ### Fixed
 
 - The macOS desktop release workflow now collects staged GitHub Release upload assets with a Bash 3-compatible loop instead of `mapfile`, avoiding upload-step failures on GitHub's macOS runners.
+- The desktop release documentation now includes exact local re-sign, notarization, stapling, and optional updater re-pack/sign commands for testing a built app on macOS.
 
 ### Breaking Changes
 

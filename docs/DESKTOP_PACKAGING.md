@@ -15,7 +15,7 @@ The current release/distribution story is intentionally simple:
 This is now a hybrid strategy:
 
 1. manual local release builds still work
-2. a focused GitHub Actions workflow can build a signed macOS updater bundle
+2. a focused GitHub Actions workflow can build a Developer ID-signed and notarized macOS updater bundle when Apple signing secrets are configured
 3. `latest.json` plus signed updater bundles can be published to Cloudflare R2
 
 ## Build Command
@@ -78,13 +78,17 @@ The updater storage endpoint can be backed by Cloudflare R2.
 
 The GitHub updater workflow intentionally bundles only the macOS `app` target. The updater release path consumes the signed `.app.tar.gz` bundle and `.sig`; it does not publish the `.dmg`, and skipping that target avoids Finder AppleScript failures on headless macOS runners.
 
+For a real downloadable macOS release, the app inside that updater archive must still be Apple-signed and notarized. The desktop release workflow now supports Tauri's built-in macOS signing and notarization environment variables so CI can publish a Gatekeeper-acceptable app bundle instead of only an updater-signed payload.
+
 The updater signing public key is not an R2 value. It is the public half of the Tauri updater signing keypair. Use the Tauri-generated public key content directly, not a PEM block, Cloudflare key, or base64url variant.
 
 For local builds, `MAABARIUM_UPDATE_PUBKEY_FILE` can point at the generated `.pub` file and will be embedded at compile time. A runtime `MAABARIUM_UPDATE_PUBKEY` still overrides the embedded key for development sessions.
 
 Before pasting a value into GitHub Actions configuration, validate it locally with `cd crates/maabarium-desktop && pnpm validate:updater-pubkey -- --file ~/.tauri/maabarium.key.pub`. The validator prints the recommended raw key line for `MAABARIUM_UPDATE_PUBKEY`.
 
-For a full local updater-release smoke test, run `cd crates/maabarium-desktop && TAURI_SIGNING_PRIVATE_KEY_FILE=~/.tauri/maabarium.key MAABARIUM_UPDATE_PUBKEY_FILE=~/.tauri/maabarium.key.pub TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<password> pnpm test:release-local`.
+For a full local updater-release smoke test, run `cd crates/maabarium-desktop && TAURI_SIGNING_PRIVATE_KEY_FILE=~/.tauri/maabarium.key MAABARIUM_UPDATE_PUBKEY_FILE=~/.tauri/maabarium.key.pub pnpm test:release-local`.
+
+If you need to re-sign and notarize an already-built app locally for launch testing, use the exact commands documented in [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md).
 
 See [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md) for the concrete release flow and required variables.
 
@@ -103,7 +107,10 @@ For any release-like handoff of the desktop app, document at least:
 
 ## macOS Signing and Notarization
 
-The current supported signing/notarization path is manual and intended for release-style handoff builds.
+The current supported signing/notarization path now has two forms:
+
+- CI-backed signing and notarization through `.github/workflows/desktop-release-r2.yml` when the Apple secrets are configured
+- a manual local re-sign/notarize fallback for existing `.app` bundles
 
 ### Prerequisites
 
@@ -176,7 +183,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
 ### Notes
 
 - This process still works for manual releases.
-- A focused CI workflow now exists for signed macOS updater publishing to Cloudflare R2.
+- A focused CI workflow now exists for signed and notarized macOS updater publishing to Cloudflare R2.
 - The runtime data paths remain external to the bundle, but they now live in app-specific OS directories.
 - On macOS that means `~/Library/Application Support/com.maabarium.console/` for the database and blueprint library, plus `~/Library/Logs/com.maabarium.console/` for logs.
 - Existing repository-relative desktop data and blueprints are migrated forward on first run when present.
@@ -190,7 +197,7 @@ The following are still deferred until a later closure pass:
 - `cargo bundle` adoption
 - installer generation
 - multi-platform updater aggregation in one release job
-- full notarization automation in CI
+- multi-provider notarization authentication beyond the current Apple ID plus app-specific password flow
 
 These are packaging enhancements, not current requirements for the supported desktop workflow.
 
