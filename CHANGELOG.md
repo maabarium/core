@@ -8,6 +8,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.5] - 2026-03-26
+
+### Added
+
 - A macOS pre-bundle signing hook now signs the bundled desktop CLI resource with the configured Developer ID identity before Tauri packages the app.
 
 ### Changed
