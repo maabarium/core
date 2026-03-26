@@ -123,6 +123,34 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     echo "Bundled CLI signature is missing hardened runtime." >&2
     exit 1
   fi
+
+  SPCTL_OUTPUT="$(spctl --assess --type execute --verbose "$APP_ROOT" 2>&1)" || SPCTL_STATUS=$?
+  SPCTL_STATUS="${SPCTL_STATUS:-0}"
+
+  STAPLER_OUTPUT="$(xcrun stapler validate "$APP_ROOT" 2>&1)" || STAPLER_STATUS=$?
+  STAPLER_STATUS="${STAPLER_STATUS:-0}"
+
+  HAS_NOTARIZATION_CREDENTIALS=0
+  if [[ -n "${APPLE_ID:-}" && -n "${APPLE_PASSWORD:-}" && -n "${APPLE_TEAM_ID:-}" ]]; then
+    HAS_NOTARIZATION_CREDENTIALS=1
+  fi
+  if [[ -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_ISSUER:-}" && -n "${APPLE_API_KEY_PATH:-}" ]]; then
+    HAS_NOTARIZATION_CREDENTIALS=1
+  fi
+
+  if [[ "$SPCTL_STATUS" -ne 0 || "$STAPLER_STATUS" -ne 0 ]]; then
+    echo "$SPCTL_OUTPUT" >&2
+    echo "$STAPLER_OUTPUT" >&2
+
+    if grep -F "Unnotarized Developer ID" <<<"$SPCTL_OUTPUT" >/dev/null; then
+      echo "Signed app is still unnotarized, so Finder launch will fail on current macOS releases." >&2
+      if [[ "$HAS_NOTARIZATION_CREDENTIALS" -eq 0 ]]; then
+        echo "Provide APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID or APPLE_API_KEY/APPLE_API_ISSUER/APPLE_API_KEY_PATH so Tauri can notarize during the local release build." >&2
+      fi
+    fi
+
+    exit 1
+  fi
 fi
 
 rm -rf "$STAGING_DIR"

@@ -12,11 +12,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- The local desktop release smoke test now treats notarization and stapling as part of macOS launchability validation, rather than stopping at successful Developer ID code signing.
 
 ### Fixed
 
-- None.
+- The desktop release guidance now calls out that a signed-but-unnotarized app can surface Finder's generic `cannot be opened because of a problem` error on current macOS releases.
+- The macOS desktop app no longer depends on Homebrew OpenSSL dylibs at launch, avoiding immediate startup aborts on notarized CI builds copied onto other machines.
 
 ### Breaking Changes
 
