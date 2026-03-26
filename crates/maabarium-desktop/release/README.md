@@ -80,6 +80,8 @@ The validator prints a `Recommended GitHub variable value` line. Use that raw ke
 
 The release workflow also passes that validated key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI.
 
+For release packaging, the workflow also applies a release-only `productName` override of `Maabarium-Console`, so the generated macOS `.app`, `.dmg`, and updater `.app.tar.gz` artifacts use dashed filenames while the desktop window title remains `Maabarium Console`.
+
 Do not commit either key. Only the public key content should be copied into runtime configuration.
 Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
 

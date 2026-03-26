@@ -30,6 +30,10 @@ function parseArgs(argv) {
     const token = argv[index];
     const next = argv[index + 1];
 
+    if (token === "--") {
+      continue;
+    }
+
     if (token === "--artifacts-dir" && next) {
       args.artifactsDir = path.resolve(process.cwd(), next);
       index += 1;
