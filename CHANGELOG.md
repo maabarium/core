@@ -12,11 +12,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- The macOS desktop release workflow now passes explicit Tauri config overrides during `tauri build` so release packaging can inject the validated updater public key and emit dashed `Maabarium-Console` bundle artifact names without changing the desktop window title.
 
 ### Fixed
 
-- None.
+- The desktop release manifest generator now tolerates the `--` separator forwarded by `pnpm`, so `pnpm build:release-manifest -- ...` succeeds in CI.
+- The macOS desktop release workflow no longer falls back to the placeholder updater pubkey from `tauri.conf.json` during bundling, preventing repeated signed-release failures from invalid pubkey decoding.
 
 ### Breaking Changes
 
