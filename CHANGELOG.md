@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.2] - 2026-03-26
+
+### Added
+
+- None.
+
+### Changed
+
 - The macOS desktop release workflow now passes explicit Tauri config overrides during `tauri build` so release packaging can inject the validated updater public key and emit dashed `Maabarium-Console` bundle artifact names without changing the desktop window title.
 
 ### Fixed
