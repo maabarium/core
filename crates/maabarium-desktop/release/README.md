@@ -196,6 +196,7 @@ Example values:
 - `APPLE_CERTIFICATE_PASSWORD` is the password used when exporting that `.p12` file.
 - `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` are used by Tauri's notarization flow. `APPLE_PASSWORD` should be an Apple app-specific password.
 - `APPLE_SIGNING_IDENTITY` is optional if the identity can be inferred from `APPLE_CERTIFICATE`, but setting it explicitly is safer for CI.
+- To generate a GitHub-ready `APPLE_CERTIFICATE` value from a local `.p12` export, run `cd crates/maabarium-desktop && pnpm prepare:apple-certificate -- --copy ~/Downloads/DeveloperIDApplication.p12`. The helper script verifies that the base64 output decodes back to the original file before printing or copying it.
 
 ## Local Re-sign And Notarize An Existing App Build
 
@@ -207,17 +208,17 @@ APP_ROOT="/Users/kabudu/projex/maabarium-group/maabarium/target/release/bundle/m
 ZIP_PATH="$PWD/release/Maabarium-Console-notarize.zip"
 
 codesign --deep --force --verify --verbose \
-	--options runtime \
-	--sign "Developer ID Application: YOUR NAME (TEAMID)" \
-	"$APP_ROOT"
+  --options runtime \
+  --sign "Developer ID Application: YOUR NAME (TEAMID)" \
+  "$APP_ROOT"
 
 ditto -c -k --keepParent "$APP_ROOT" "$ZIP_PATH"
 
 xcrun notarytool submit "$ZIP_PATH" \
-	--apple-id "YOUR_APPLE_ID" \
-	--password "YOUR_APP_SPECIFIC_PASSWORD" \
-	--team-id "YOUR_TEAM_ID" \
-	--wait
+  --apple-id "YOUR_APPLE_ID" \
+  --password "YOUR_APP_SPECIFIC_PASSWORD" \
+  --team-id "YOUR_TEAM_ID" \
+  --wait
 
 xcrun stapler staple "$APP_ROOT"
 
@@ -240,8 +241,8 @@ rm -f "$ARCHIVE_PATH" "$ARCHIVE_PATH.sig"
 tar -C "$(dirname "$APP_ROOT")" -czf "$ARCHIVE_PATH" "$(basename "$APP_ROOT")"
 
 pnpm tauri signer sign \
-	-f "$HOME/.tauri/maabarium.key" \
-	"$ARCHIVE_PATH"
+  -f "$HOME/.tauri/maabarium.key" \
+  "$ARCHIVE_PATH"
 ```
 
 Set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` or pass `-p ...` only if your updater private key is encrypted.

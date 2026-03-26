@@ -8,7 +8,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- The desktop package now includes a reusable `prepare:apple-certificate` helper that converts a Developer ID Application `.p12` export into a verified, GitHub-ready `APPLE_CERTIFICATE` base64 value.
 
 ### Changed
 
