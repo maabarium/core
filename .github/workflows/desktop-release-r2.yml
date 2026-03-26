@@ -178,7 +178,10 @@ jobs:
         run: |
           set -euo pipefail
           DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
-          mapfile -t release_assets < <(find "$DESKTOP_DIR/release/staging" -type f | sort)
+          release_assets=()
+          while IFS= read -r asset_path; do
+            release_assets+=("$asset_path")
+          done < <(find "$DESKTOP_DIR/release/staging" -type f | sort)
           gh release upload "${{ steps.release-context.outputs.tag }}" \
             "$DESKTOP_DIR/release/latest.json" \
             "$DESKTOP_DIR/release/install.sh" \
