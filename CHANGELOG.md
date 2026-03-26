@@ -8,15 +8,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- A macOS pre-bundle signing hook now signs the bundled desktop CLI resource with the configured Developer ID identity before Tauri packages the app.
 
 ### Changed
 
-- None.
+- The macOS desktop release workflow now imports the Apple signing certificate into a temporary keychain before bundling so nested packaged executables can be signed during the build.
+- The local desktop release smoke test now verifies the bundled CLI executable inside the `.app` for Developer ID authority, secure timestamp, and hardened runtime in addition to the updater archive outputs.
 
 ### Fixed
 
-- None.
+- Desktop release preparation now clears stale generated bundled-CLI resources before copying the current target binary, preventing old resource layouts from leaking into later macOS app bundles.
+- The macOS desktop release pipeline now signs the bundled CLI resource before app notarization, addressing notarization failures caused by an unsigned nested executable in `Contents/Resources/generated-resources/cli/.../maabarium`.
 
 ### Breaking Changes
 

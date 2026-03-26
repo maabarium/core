@@ -39,6 +39,10 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
   exit 1
 fi
 
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  export MAABARIUM_REQUIRE_APPLE_CLI_SIGNING="1"
+fi
+
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
   echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; continuing with an unencrypted updater signing key."
 fi
@@ -73,6 +77,7 @@ export TAURI_CONFIG
 pnpm tauri build --config "$TAURI_CONFIG"
 
 BUNDLE_DIR="$REPO_ROOT/target/release/bundle/macos"
+APP_ROOT="$BUNDLE_DIR/Maabarium-Console.app"
 UPDATER_BUNDLE="$BUNDLE_DIR/Maabarium-Console.app.tar.gz"
 SIG_PATH="$UPDATER_BUNDLE.sig"
 
@@ -84,6 +89,40 @@ fi
 if [[ ! -f "$SIG_PATH" ]]; then
   echo "Expected updater signature at $SIG_PATH" >&2
   exit 1
+fi
+
+if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+  BUNDLED_CLI_PATH="$(find "$APP_ROOT/Contents/Resources" -path '*/cli/*/maabarium' -type f -print -quit)"
+  if [[ ! -f "$BUNDLED_CLI_PATH" ]]; then
+    echo "Expected a bundled CLI executable under $APP_ROOT/Contents/Resources" >&2
+    exit 1
+  fi
+
+  APP_CODESIGN_DETAILS="$(codesign --display --verbose=4 "$APP_ROOT" 2>&1)"
+  CLI_CODESIGN_DETAILS="$(codesign --display --verbose=4 "$BUNDLED_CLI_PATH" 2>&1)"
+
+  codesign --verify --strict --verbose=2 "$APP_ROOT"
+  codesign --verify --strict --verbose=2 "$BUNDLED_CLI_PATH"
+
+  if ! grep -F "Authority=Developer ID Application" <<<"$APP_CODESIGN_DETAILS" >/dev/null; then
+    echo "App bundle is not signed with a Developer ID Application identity." >&2
+    exit 1
+  fi
+
+  if ! grep -F "Authority=Developer ID Application" <<<"$CLI_CODESIGN_DETAILS" >/dev/null; then
+    echo "Bundled CLI is not signed with a Developer ID Application identity." >&2
+    exit 1
+  fi
+
+  if ! grep -F "Timestamp=" <<<"$CLI_CODESIGN_DETAILS" >/dev/null; then
+    echo "Bundled CLI signature does not include a secure timestamp." >&2
+    exit 1
+  fi
+
+  if ! grep -F "flags=0x10000(runtime)" <<<"$CLI_CODESIGN_DETAILS" >/dev/null; then
+    echo "Bundled CLI signature is missing hardened runtime." >&2
+    exit 1
+  fi
 fi
 
 rm -rf "$STAGING_DIR"

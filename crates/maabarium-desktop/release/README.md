@@ -196,6 +196,7 @@ Example values:
 - `APPLE_CERTIFICATE_PASSWORD` is the password used when exporting that `.p12` file.
 - `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` are used by Tauri's notarization flow. `APPLE_PASSWORD` should be an Apple app-specific password.
 - `APPLE_SIGNING_IDENTITY` is optional if the identity can be inferred from `APPLE_CERTIFICATE`, but setting it explicitly is safer for CI.
+- The macOS release flow now signs the bundled desktop CLI resource during Tauri's `beforeBundleCommand`, so the signing identity must be available in Keychain before `pnpm tauri build` starts. The GitHub Actions workflow imports the `.p12` into a temporary keychain first; for local validation, install the certificate in Keychain or import it manually before running the release script.
 - To generate a GitHub-ready `APPLE_CERTIFICATE` value from a local `.p12` export, run `cd crates/maabarium-desktop && pnpm prepare:apple-certificate -- --copy ~/Downloads/DeveloperIDApplication.p12`. The helper script verifies that the base64 output decodes back to the original file before printing or copying it.
 
 ## Local Re-sign And Notarize An Existing App Build
