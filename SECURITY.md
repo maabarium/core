@@ -63,4 +63,4 @@ When changing security-sensitive code:
 - add tests for failure paths, not only success paths
 - preserve or improve tracing without logging secrets
 - document any new runtime assumptions
-- update `docs/ARCHITECTURE.md` and `.dev/implementation-remaining-items.md` if the security posture changes materially
+- update `docs/ARCHITECTURE.md` if the security posture changes materially

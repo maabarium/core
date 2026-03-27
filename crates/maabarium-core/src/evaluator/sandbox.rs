@@ -97,7 +97,6 @@ struct WorkspaceMaterializationReport {
     files_cloned: usize,
 }
 
-// Phase 3 plan reference: .dev/apple-silicon-optimization-plan-2026-03-25.md
 struct WorkspaceMaterializer {
     strategy: WorkspaceMaterializationStrategy,
 }

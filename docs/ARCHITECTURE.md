@@ -177,8 +177,6 @@ The historical closure items are now explicitly resolved in code and docs:
 3. OSS launch artifacts exist and match the repository
 4. The LoRA path is explicitly scoped to external artifact validation with reproducibility manifests
 
-The remaining implementation tracker at [../.dev/implementation-remaining-items.md](../.dev/implementation-remaining-items.md) is now a closure record rather than an open feature queue.
-
 ## Desktop Packaging and Distribution
 
 The supported desktop distribution path is the Tauri app bundle built from the workspace.
@@ -227,4 +225,3 @@ This closes the roadmap item without overstating native MLX support.
 
 - The live desktop app is Tauri-based and lives in `crates/maabarium-desktop`.
 - The runtime does not use a pure WASI-only execution model for evaluator execution; it uses a hybrid sandboxing approach.
-- The historical `.dev/maabarium-revised.md` document is background context, not the authoritative implementation plan.

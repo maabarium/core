@@ -35,7 +35,6 @@ cd crates/maabarium-desktop && pnpm build
 - [ ] Updated `README.md`.
 - [ ] Updated `docs/ARCHITECTURE.md`.
 - [ ] Updated `docs/BLUEPRINT_SPEC.md`.
-- [ ] Updated `.dev/` parity or closure docs.
 - [ ] Updated contributor or customization guidance.
 
 ## Risk Review

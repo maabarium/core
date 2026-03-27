@@ -20,7 +20,6 @@ If a proposed change would reintroduce stale historical assumptions, update the 
 - `crates/maabarium-desktop` — Tauri desktop console
 - `blueprints/` — example and domain blueprints
 - `docs/` — active architecture and blueprint-spec documentation
-- `.dev/` — implementation parity and closure-planning documents
 
 ## Development Setup
 
