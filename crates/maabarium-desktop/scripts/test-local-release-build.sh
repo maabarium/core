@@ -98,6 +98,8 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
     exit 1
   fi
 
+  "$DESKTOP_DIR/scripts/verify-macos-entitlements.sh" "$APP_ROOT"
+
   APP_CODESIGN_DETAILS="$(codesign --display --verbose=4 "$APP_ROOT" 2>&1)"
   CLI_CODESIGN_DETAILS="$(codesign --display --verbose=4 "$BUNDLED_CLI_PATH" 2>&1)"
 

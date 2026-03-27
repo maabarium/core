@@ -36,6 +36,9 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "entitlements": "Entitlements.plist"
+    },
     "resources": [
       "../../blueprints/",
       "generated-resources/cli/",

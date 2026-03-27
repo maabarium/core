@@ -16,7 +16,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Packaged desktop apps now resolve the bundled CLI from the shipped `generated-resources/cli/...` path, so launching a newer app refreshes the app-data CLI instead of leaving an older seeded binary in place.
+- Signed macOS desktop release bundles now embed the hardened-runtime entitlement required by the Wasmtime sandbox evaluator, preventing product-builder workflows from crashing when iteration evaluation publishes executable pages.
+- Desktop release validation now fails fast when the built app is missing the macOS executable-memory entitlement required by the Wasmtime sandbox path.
 
 ### Breaking Changes
 

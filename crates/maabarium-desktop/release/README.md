@@ -105,6 +105,8 @@ The GitHub release workflow now bundles only the macOS `app` target. That is int
 
 When the Apple signing secrets are configured, that workflow also uses Tauri's supported macOS signing and notarization environment variables during `tauri build`, so the published updater archive contains a Developer ID-signed and notarized app instead of an ad-hoc signed bundle that Gatekeeper will reject.
 
+Because the desktop app embeds a Wasmtime-based sandbox evaluator, signed macOS release bundles also need the hardened-runtime exception `com.apple.security.cs.allow-unsigned-executable-memory`. That entitlement now comes from `crates/maabarium-desktop/Entitlements.plist`, and both the local release smoke script and CI workflow verify that the built app binary carries it before artifacts are staged or published.
+
 Do not commit either key. Only the public key content should be copied into runtime configuration.
 Release builds should provide that public key during `pnpm tauri build` so the packaged app embeds the updater trust anchor. A runtime `MAABARIUM_UPDATE_PUBKEY` value still overrides the embedded key for local or development sessions.
 
@@ -127,6 +129,7 @@ That command performs the same local steps the CI release job cares about:
 
 - validates the updater pubkey
 - builds the signed macOS app bundle with the dashed release-only product name
+- verifies the signed app keeps the Wasmtime executable-memory entitlement required by the sandbox evaluator
 - verifies the updater archive and `.sig` exist
 - stages the updater bundle under the platform key
 - generates `latest.json` and `install.sh`

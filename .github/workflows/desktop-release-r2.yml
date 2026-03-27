@@ -174,6 +174,13 @@ jobs:
             --config "$TAURI_CONFIG" \
             --config '{"productName":"Maabarium-Console","bundle":{"targets":["app"]}}'
 
+      - name: Verify macOS desktop entitlements
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/verify-macos-entitlements.sh" \
+            "$GITHUB_WORKSPACE/target/release/bundle/macos/Maabarium-Console.app"
+
       - name: Stage updater bundle and manifest
         env:
           RELEASE_CHANNEL: ${{ steps.release-context.outputs.channel }}

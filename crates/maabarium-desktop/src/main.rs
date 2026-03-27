@@ -727,12 +727,7 @@ fn bundled_cli_resource_path(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> 
     let bundled_path = app
         .path()
         .resource_dir()
-        .map(|directory| {
-            directory
-                .join("cli")
-                .join(runtime_platform_key())
-                .join(cli_binary_name())
-        })
+        .map(|directory| resolve_bundled_cli_resource_path(&directory))
         .unwrap_or_else(|_| dev_bundled_cli_resource_path());
 
     if bundled_path.exists() {
@@ -745,6 +740,20 @@ fn bundled_cli_resource_path(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> 
             Ok(bundled_path)
         }
     }
+}
+
+fn resolve_bundled_cli_resource_path(resource_dir: &Path) -> PathBuf {
+    let generated_relative_path = Path::new("generated-resources")
+        .join("cli")
+        .join(runtime_platform_key())
+        .join(cli_binary_name());
+    let legacy_relative_path = Path::new("cli")
+        .join(runtime_platform_key())
+        .join(cli_binary_name());
+
+    resolve_bundled_resource_path(resource_dir, &generated_relative_path)
+        .or_else(|| resolve_bundled_resource_path(resource_dir, &legacy_relative_path))
+        .unwrap_or_else(|| resource_dir.join(generated_relative_path))
 }
 
 fn dev_bundled_cli_resource_path() -> PathBuf {
@@ -3411,6 +3420,25 @@ mod tests {
         let resolved = resolve_bundled_resource_path(&resource_dir, Path::new("blueprints"));
 
         assert_eq!(resolved, Some(direct_blueprints));
+
+        std::fs::remove_dir_all(&resource_dir).expect("resource dir should be removed");
+    }
+
+    #[test]
+    fn resolve_bundled_cli_resource_path_finds_generated_resources_layout() {
+        let resource_dir = unique_test_directory("resource-dir-cli-generated");
+        let expected_cli = resource_dir
+            .join("generated-resources")
+            .join("cli")
+            .join(runtime_platform_key())
+            .join(cli_binary_name());
+        std::fs::create_dir_all(expected_cli.parent().expect("cli parent should exist"))
+            .expect("cli parent dir should exist");
+        std::fs::write(&expected_cli, b"cli").expect("cli file should exist");
+
+        let resolved = resolve_bundled_cli_resource_path(&resource_dir);
+
+        assert_eq!(resolved, expected_cli);
 
         std::fs::remove_dir_all(&resource_dir).expect("resource dir should be removed");
     }

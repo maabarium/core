@@ -81,6 +81,8 @@ The updater storage endpoint can be backed by Cloudflare R2.
 
 The GitHub updater workflow intentionally bundles only the macOS `app` target. The updater release path consumes the signed `.app.tar.gz` bundle and `.sig`; it does not publish the `.dmg`, and skipping that target avoids Finder AppleScript failures on headless macOS runners.
 
+Because the desktop app embeds a Wasmtime-based sandbox validator, signed macOS release bundles also need the hardened-runtime exception `com.apple.security.cs.allow-unsigned-executable-memory`. The desktop package now declares that entitlement in `crates/maabarium-desktop/Entitlements.plist`, and release validation checks the produced `.app` bundle before upload so CI fails fast if the entitlement disappears.
+
 ## Release Operator Checklist
 
 Use this checklist when you need to publish or republish desktop updater metadata.
