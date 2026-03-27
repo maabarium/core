@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.10] - 2026-03-27
+
+### Added
+
+- None.
+
+### Changed
+
 - Release operators can now run the `release-prep` and macOS `desktop-release-r2` flows directly from a local workstation with repo-provided scripts when GitHub Actions minutes are unavailable.
 
 ### Fixed
