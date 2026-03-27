@@ -122,6 +122,9 @@ trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --release-tag)
       RELEASE_TAG="${2:-}"
       shift 2
@@ -275,7 +278,7 @@ else
 fi
 
 RAW_PUBKEY="$(normalize_pubkey_line)"
-TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
+TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
 export TAURI_CONFIG
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 export MAABARIUM_REQUIRE_APPLE_CLI_SIGNING="1"
@@ -285,8 +288,7 @@ import_apple_certificate
 
 pnpm tauri build \
   --ci \
-  --config "$TAURI_CONFIG" \
-  --config '{"productName":"Maabarium-Console","bundle":{"targets":["app"]}}'
+  --config "$TAURI_CONFIG"
 
 BUNDLE_DIR="$REPO_ROOT/target/release/bundle/macos"
 APP_ROOT="$BUNDLE_DIR/Maabarium-Console.app"

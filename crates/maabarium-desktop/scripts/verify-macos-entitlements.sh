@@ -38,7 +38,23 @@ if [[ ! -s "$ENTITLEMENTS_FILE" ]]; then
   exit 1
 fi
 
-ENTITLEMENT_VALUE="$(plutil -extract "$ENTITLEMENT_KEY" raw -o - "$ENTITLEMENTS_FILE" 2>/dev/null || true)"
+ENTITLEMENT_VALUE="$(awk -v key="$ENTITLEMENT_KEY" '
+  index($0, "[Key] " key) {
+    found = 1
+    next
+  }
+
+  found && index($0, "[Bool]") {
+    print $NF
+    exit
+  }
+
+  found && index($0, "[Integer]") {
+    print $NF
+    exit
+  }
+' "$ENTITLEMENTS_FILE")"
+
 if [[ "$ENTITLEMENT_VALUE" != "1" && "$ENTITLEMENT_VALUE" != "true" ]]; then
   echo "Desktop app binary is missing required entitlement: $ENTITLEMENT_KEY" >&2
   exit 1
