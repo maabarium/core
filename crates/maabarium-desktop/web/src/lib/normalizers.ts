@@ -264,6 +264,33 @@ function normalizeGitDependency(
   };
 }
 
+function normalizeCliLink(
+  snapshot: ConsoleState["cliLink"],
+): ConsoleState["cliLink"] {
+  return {
+    installationSupported: Boolean(snapshot?.installationSupported),
+    platform: snapshot?.platform ?? "unknown",
+    managedLinkPath: snapshot?.managedLinkPath ?? "",
+    managedLinkDirectory: snapshot?.managedLinkDirectory ?? "",
+    targetPath: snapshot?.targetPath ?? "",
+    currentLinkTarget: snapshot?.currentLinkTarget ?? null,
+    pathContainsManagedDir: Boolean(snapshot?.pathContainsManagedDir),
+    shellName: snapshot?.shellName ?? null,
+    shellConfigPath: snapshot?.shellConfigPath ?? null,
+    exportCommand: snapshot?.exportCommand ?? null,
+    status:
+      snapshot?.status === "healthy" ||
+      snapshot?.status === "not_installed" ||
+      snapshot?.status === "broken" ||
+      snapshot?.status === "needs_refresh" ||
+      snapshot?.status === "conflict" ||
+      snapshot?.status === "unsupported"
+        ? snapshot.status
+        : "unsupported",
+    statusDetail: snapshot?.statusDetail ?? "CLI link status is unavailable.",
+  };
+}
+
 function normalizeDesktopSetup(
   setup: DesktopSetupState | null | undefined,
 ): DesktopSetupState {
@@ -511,6 +538,7 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
     blueprintPath: snapshot.blueprintPath ?? "",
     dbPath: snapshot.dbPath ?? "",
     logPath: snapshot.logPath ?? "",
+    cliLink: normalizeCliLink(snapshot.cliLink),
     hardwareTelemetry: normalizeHardwareTelemetry(snapshot.hardwareTelemetry),
     gitDependency: normalizeGitDependency(snapshot.gitDependency),
     blueprint: normalizeBlueprintFile(snapshot.blueprint),

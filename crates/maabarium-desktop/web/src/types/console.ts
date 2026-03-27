@@ -209,6 +209,29 @@ export type PluginRuntimeState = {
   error: string | null;
 };
 
+export type CliLinkStatus =
+  | "healthy"
+  | "not_installed"
+  | "broken"
+  | "needs_refresh"
+  | "conflict"
+  | "unsupported";
+
+export type CliLinkState = {
+  installationSupported: boolean;
+  platform: string;
+  managedLinkPath: string;
+  managedLinkDirectory: string;
+  targetPath: string;
+  currentLinkTarget: string | null;
+  pathContainsManagedDir: boolean;
+  shellName: string | null;
+  shellConfigPath: string | null;
+  exportCommand: string | null;
+  status: CliLinkStatus;
+  statusDetail: string;
+};
+
 export type InstallUpdateResult = {
   installed: boolean;
   version: string | null;
@@ -441,6 +464,7 @@ export type ConsoleState = {
   blueprintPath: string;
   dbPath: string;
   logPath: string;
+  cliLink: CliLinkState;
   hardwareTelemetry: HardwareTelemetry | null;
   gitDependency: GitDependencyState;
   blueprint: BlueprintFile | null;

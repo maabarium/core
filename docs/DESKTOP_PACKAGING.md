@@ -53,6 +53,8 @@ The desktop bundle now also includes the built-in repository blueprint library a
 
 Supported release builds can also bundle the standalone `maabarium` CLI binary as an app resource. On startup the desktop app seeds that binary into the app-data `bin/` directory and refreshes it when the bundled resource changes, so desktop installs can expose the same terminal tooling without a second manual download.
 
+If the user enables the optional shell integration, the desktop app creates a managed symlink at `~/.local/bin/maabarium`. That link is intentionally separate from the `.app` bundle and is not removed automatically when the app is dragged to Trash; the desktop setup flow exposes a `Remove CLI Link` action for that cleanup.
+
 The app reads the app-specific paths to populate live metrics, history, diff, and log views.
 
 ## Local Distribution Model

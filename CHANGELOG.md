@@ -8,16 +8,20 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- The desktop setup flow can now install or remove a managed `~/.local/bin/maabarium` symlink for the bundled CLI, report link health, and show macOS shell PATH guidance when that directory is not exported.
+- The desktop onboarding flow now includes a `Pull Recommended Models` action that asks the local Ollama runtime to download any missing suggested models after Ollama is installed and running.
 
 ### Changed
 
 - Packaged desktop releases now embed their updater manifest endpoint at build time, so Finder-launched apps no longer depend on runtime shell environment variables to enable update checks.
 - The desktop updater UI and release workflow now use the published `stable` and `beta` channels instead of exposing an unused `nightly` option.
+- The desktop app now self-heals the managed CLI symlink on startup when the bundled app-data CLI target changes or the existing link becomes stale.
 
 ### Fixed
 
 - Release desktop builds no longer migrate repository-local runtime files and blueprint libraries by default, avoiding development-only state leaking into downloaded production apps.
+- The macOS desktop window close hook now explicitly closes the window when no flow is running, so the native red close button works again instead of appearing to do nothing.
+- Packaged desktop apps now resolve bundled blueprint resources from Tauri's nested `_up_` resource layout, so fresh installs seed the full built-in blueprint library instead of only showing `example.toml`.
 
 ### Breaking Changes
 

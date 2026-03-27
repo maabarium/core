@@ -15,6 +15,8 @@ For a user installing the macOS desktop release, there is not a second required 
 
 The CLI remains optional at runtime, but supported desktop release builds can now seed a bundled copy into the app-data `bin/` directory so GUI installs can expose the same terminal-driven workflows without a second download step.
 
+If a user installs the optional shell link from the desktop setup flow, that `~/.local/bin/maabarium` symlink is managed separately from the `.app` bundle. Dragging `Maabarium-Console.app` to Trash does not remove the shell link automatically; use the app's `Remove CLI Link` action first if you want to clean that integration up.
+
 ## Runtime Data Location
 
 The packaged macOS desktop app stores its runtime files in app-specific directories:

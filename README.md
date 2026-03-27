@@ -85,6 +85,13 @@ Release builds do not migrate repository-local desktop runtime files by default.
 
 The desktop bundle also seeds bundled blueprint TOMLs into the app-data blueprint library, and release bundles can ship a standalone CLI resource for desktop installs.
 
+On supported desktop builds, the first-run setup flow can also:
+
+- install Git automatically when it is missing
+- install or remove a managed shell link at `~/.local/bin/maabarium` for the bundled CLI
+- detect when `~/.local/bin` is missing from `PATH` and show shell-specific guidance
+- install Ollama, start Ollama, and pull any missing recommended local models through an explicit in-app action
+
 Release desktop builds should provide `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE` plus `MAABARIUM_UPDATE_BASE_URL` or `MAABARIUM_UPDATE_MANIFEST_URL` during `pnpm tauri build` so packaged installs embed the updater trust anchor and manifest endpoint.
 
 The published desktop updater channels are `stable` and `beta`. Stable releases continue to publish the installer-facing root `latest.json`, and the in-app updater reads `stable/latest.json` or `beta/latest.json`.

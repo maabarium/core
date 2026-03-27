@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, Wrench } from "lucide-react";
 import type {
+  CliLinkState,
   DesktopSetupState,
   GitDependencyState,
   OllamaStatus,
@@ -20,6 +21,7 @@ type DesktopSetupModalProps = {
   setupState: DesktopSetupState;
   readinessItems: ReadinessItem[];
   gitDependency: GitDependencyState;
+  cliLink: CliLinkState;
   ollama: OllamaStatus | null;
   pluginRuntime: PluginRuntimeState | null;
   saving: boolean;
@@ -30,8 +32,11 @@ type DesktopSetupModalProps = {
     apiKeys: Record<string, string>,
   ) => Promise<void>;
   onInstallGit: () => Promise<void>;
+  onInstallCliLink: () => Promise<void>;
+  onRemoveCliLink: () => Promise<void>;
   onInstallOllama: () => Promise<void>;
   onStartOllama: () => Promise<void>;
+  onPullRecommendedOllamaModels: () => Promise<void>;
 };
 
 export function DesktopSetupModal({
@@ -39,6 +44,7 @@ export function DesktopSetupModal({
   setupState,
   readinessItems,
   gitDependency,
+  cliLink,
   ollama,
   pluginRuntime,
   saving,
@@ -46,8 +52,11 @@ export function DesktopSetupModal({
   onInspectWorkspace,
   onSave,
   onInstallGit,
+  onInstallCliLink,
+  onRemoveCliLink,
   onInstallOllama,
   onStartOllama,
+  onPullRecommendedOllamaModels,
 }: DesktopSetupModalProps) {
   const [form, setForm] = useState<DesktopSetupState>(setupState);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
@@ -116,6 +125,45 @@ export function DesktopSetupModal({
   const researchSearchReadiness =
     readinessItems.find((item) => item.id === "research_search") ?? null;
   const gitReadiness = readinessItems.find((item) => item.id === "git") ?? null;
+  const cliLinkBadgeColor =
+    cliLink.status === "healthy"
+      ? "emerald"
+      : cliLink.status === "unsupported"
+        ? "slate"
+        : cliLink.status === "conflict"
+          ? "rose"
+          : "blue";
+  const cliLinkBadgeLabel =
+    cliLink.status === "healthy"
+      ? "Ready"
+      : cliLink.status === "unsupported"
+        ? "Unsupported"
+        : cliLink.status === "conflict"
+          ? "Blocked"
+          : cliLink.status === "not_installed"
+            ? "Not Installed"
+            : "Needs Attention";
+  const cliLinkNeedsInstallAction =
+    cliLink.installationSupported &&
+    (cliLink.status === "not_installed" ||
+      cliLink.status === "broken" ||
+      cliLink.status === "needs_refresh");
+  const cliLinkCanRemove =
+    cliLink.installationSupported &&
+    (cliLink.status === "healthy" ||
+      cliLink.status === "broken" ||
+      cliLink.status === "needs_refresh");
+  const cliLinkActionLabel =
+    cliLink.status === "healthy"
+      ? "Refresh CLI Link"
+      : cliLink.status === "not_installed"
+        ? "Install CLI Link"
+        : "Repair CLI Link";
+  const showMacPathGuidance =
+    cliLink.platform === "macos" &&
+    cliLink.installationSupported &&
+    !cliLink.pathContainsManagedDir &&
+    cliLink.managedLinkDirectory.length > 0;
   const searchMode = form.researchSearchMode;
   const researchSearchOptions: Array<{
     value: ResearchSearchMode;
@@ -137,6 +185,25 @@ export function DesktopSetupModal({
   const availableModelNames = listOllamaModelNames(
     ollama,
     form.selectedLocalModels,
+  );
+  const recommendedModelNames = Array.from(
+    new Set(
+      (ollama?.recommendedModels ?? [])
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+  const missingRecommendedModelNames = recommendedModelNames.filter(
+    (modelName) =>
+      !(ollama?.models.some((model) => model.name === modelName) ?? false),
+  );
+  const discoveredNonRecommendedModels = (ollama?.models ?? []).filter(
+    (model) => !recommendedModelNames.includes(model.name),
+  );
+  const savedOnlyModelNames = form.selectedLocalModels.filter(
+    (modelName) =>
+      !recommendedModelNames.includes(modelName) &&
+      !discoveredNonRecommendedModels.some((model) => model.name === modelName),
   );
 
   const toggleModel = (modelName: string) => {
@@ -336,6 +403,82 @@ export function DesktopSetupModal({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                  Shell CLI
+                </div>
+                <div className="mt-2 text-sm text-slate-300">
+                  {cliLink.statusDetail}
+                </div>
+                <div className="mt-3 space-y-1 text-[11px] leading-relaxed text-slate-500">
+                  <div>
+                    Managed link: {cliLink.managedLinkPath || "Unavailable"}
+                  </div>
+                  <div>
+                    Bundled target: {cliLink.targetPath || "Unavailable"}
+                  </div>
+                  {cliLink.currentLinkTarget ? (
+                    <div>Current target: {cliLink.currentLinkTarget}</div>
+                  ) : null}
+                </div>
+              </div>
+              <Badge color={cliLinkBadgeColor}>{cliLinkBadgeLabel}</Badge>
+            </div>
+
+            {cliLinkNeedsInstallAction || cliLinkCanRemove ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {cliLinkNeedsInstallAction ? (
+                  <button
+                    type="button"
+                    onClick={() => void onInstallCliLink()}
+                    className="rounded-lg border border-teal-400/20 bg-gradient-to-r from-teal-500/15 to-amber-400/15 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-white transition hover:brightness-110"
+                  >
+                    {cliLinkActionLabel}
+                  </button>
+                ) : null}
+                {cliLinkCanRemove ? (
+                  <button
+                    type="button"
+                    onClick={() => void onRemoveCliLink()}
+                    className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+                  >
+                    Remove CLI Link
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {showMacPathGuidance ? (
+              <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-500/10 px-3 py-3 text-xs leading-relaxed text-amber-100">
+                <div className="font-semibold text-amber-50">
+                  Your shell PATH does not include{" "}
+                  {cliLink.managedLinkDirectory}.
+                </div>
+                <div className="mt-2 text-amber-100/85">
+                  Add the managed CLI directory to your
+                  {cliLink.shellName ? ` ${cliLink.shellName}` : " shell"}
+                  {cliLink.shellConfigPath
+                    ? ` profile at ${cliLink.shellConfigPath}`
+                    : " profile"}
+                  , then open a new terminal.
+                </div>
+                {cliLink.exportCommand ? (
+                  <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 font-mono text-[11px] text-slate-100">
+                    {cliLink.exportCommand}
+                  </div>
+                ) : null}
+              </div>
+            ) : cliLink.installationSupported ? (
+              <div className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-3 text-xs leading-relaxed text-emerald-100">
+                {cliLink.pathContainsManagedDir
+                  ? `${cliLink.managedLinkDirectory} is already on your shell PATH.`
+                  : "Shell PATH guidance is unavailable for this platform."}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
                   Workspace
                 </div>
                 <div className="mt-2 text-sm text-slate-300">
@@ -483,15 +626,33 @@ export function DesktopSetupModal({
                     >
                       Start Ollama
                     </button>
+                  ) : missingRecommendedModelNames.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void onPullRecommendedOllamaModels()}
+                      className="rounded-lg border border-teal-400/20 bg-gradient-to-r from-teal-500/15 to-amber-400/15 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-white transition hover:brightness-110"
+                    >
+                      Pull Recommended Models
+                    </button>
                   ) : null}
                 </div>
               </div>
 
+              {ollama?.installed &&
+              ollama.running &&
+              missingRecommendedModelNames.length > 0 ? (
+                <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-500/10 px-3 py-3 text-xs leading-relaxed text-amber-100">
+                  Pull the missing recommended models into Ollama so local
+                  workflows can use the suggested defaults without manual
+                  `ollama pull` commands.
+                </div>
+              ) : null}
+
               <div className="mt-4 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
-                Select Local Models
+                Recommended Models
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                {availableModelNames.map((modelName) => {
+                {recommendedModelNames.map((modelName) => {
                   const selected = form.selectedLocalModels.includes(modelName);
                   const installed =
                     ollama?.models.some((model) => model.name === modelName) ??
@@ -509,6 +670,75 @@ export function DesktopSetupModal({
                   );
                 })}
               </div>
+
+              {recommendedModelNames.length === 0 ? (
+                <div className="mt-3 rounded-lg border border-dashed border-white/10 bg-slate-950/40 px-3 py-3 text-xs text-slate-400">
+                  No recommended Ollama models are configured for this build.
+                </div>
+              ) : null}
+
+              {discoveredNonRecommendedModels.length > 0 ? (
+                <>
+                  <div className="mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                    Other Discovered Local Models
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {discoveredNonRecommendedModels.map((model) => {
+                      const selected = form.selectedLocalModels.includes(
+                        model.name,
+                      );
+                      const metadata = [model.sizeLabel, model.modifiedAt]
+                        .filter(Boolean)
+                        .join(" • ");
+                      return (
+                        <button
+                          key={model.name}
+                          type="button"
+                          onClick={() => toggleModel(model.name)}
+                          className={`rounded-2xl border px-3 py-2 text-left text-xs transition ${selected ? "border-teal-400/30 bg-teal-500/10 text-teal-100" : "border-white/10 bg-slate-950/60 text-slate-300 hover:bg-white/5"}`}
+                        >
+                          <div className="font-bold">{model.name}</div>
+                          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                            installed locally
+                            {metadata ? ` • ${metadata}` : ""}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
+
+              {savedOnlyModelNames.length > 0 ? (
+                <>
+                  <div className="mt-5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                    Saved Local Selections
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {savedOnlyModelNames.map((modelName) => {
+                      const selected =
+                        form.selectedLocalModels.includes(modelName);
+                      return (
+                        <button
+                          key={modelName}
+                          type="button"
+                          onClick={() => toggleModel(modelName)}
+                          className={`rounded-full border px-3 py-2 text-xs font-bold transition ${selected ? "border-teal-400/30 bg-teal-500/10 text-teal-100" : "border-white/10 bg-slate-950/60 text-slate-300 hover:bg-white/5"}`}
+                        >
+                          {modelName} • saved
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
+
+              {availableModelNames.length === 0 ? (
+                <div className="mt-3 rounded-lg border border-dashed border-white/10 bg-slate-950/40 px-3 py-3 text-xs text-slate-400">
+                  Install and start Ollama, then pull at least one local model
+                  to make local runtime selection available here.
+                </div>
+              ) : null}
             </section>
           ) : null}
 

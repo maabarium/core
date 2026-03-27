@@ -173,6 +173,9 @@ export default function App() {
     installGit,
     installOllama,
     startOllama,
+    pullRecommendedOllamaModels,
+    installCliLink,
+    removeCliLink,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
   } = useDesktopConsole();
@@ -671,12 +674,25 @@ export default function App() {
               return;
             }
 
+            const closeWindow = async () => {
+              event.preventDefault();
+              allowWindowCloseRef.current = true;
+
+              try {
+                await currentWindow.close();
+              } catch {
+                allowWindowCloseRef.current = false;
+                throw new Error("The desktop window could not be closed.");
+              }
+            };
+
             const flowRunning =
               Boolean(state?.engineRunning) ||
               runStatus === "running" ||
               runStatus === "stopping";
 
             if (!flowRunning) {
+              await closeWindow();
               return;
             }
 
@@ -711,9 +727,8 @@ export default function App() {
               });
             }
 
-            allowWindowCloseRef.current = true;
             await stopEngine();
-            await currentWindow.close();
+            await closeWindow();
           },
         );
       } catch {
@@ -1101,6 +1116,7 @@ export default function App() {
           setupState={state.desktopSetup}
           readinessItems={state.readinessItems}
           gitDependency={state.gitDependency}
+          cliLink={state.cliLink}
           ollama={state.ollama}
           pluginRuntime={state.pluginRuntime}
           saving={setupSaving}
@@ -1110,11 +1126,20 @@ export default function App() {
           onInstallGit={async () => {
             await installGit();
           }}
+          onInstallCliLink={async () => {
+            await installCliLink();
+          }}
+          onRemoveCliLink={async () => {
+            await removeCliLink();
+          }}
           onInstallOllama={async () => {
             await installOllama();
           }}
           onStartOllama={async () => {
             await startOllama();
+          }}
+          onPullRecommendedOllamaModels={async () => {
+            await pullRecommendedOllamaModels();
           }}
         />
       ) : null}

@@ -807,6 +807,133 @@ export function useDesktopConsole({
     }
   };
 
+  const pullRecommendedOllamaModels = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const existingModelNames = new Set(
+        snapshot.ollama.models.map((model) => model.name),
+      );
+      const missingRecommendedModels = snapshot.ollama.recommendedModels.filter(
+        (modelName) => !existingModelNames.has(modelName),
+      );
+      const nextSnapshot = {
+        ...snapshot,
+        ollama: {
+          ...snapshot.ollama,
+          installed: true,
+          running: true,
+          commandAvailable: true,
+          statusDetail:
+            missingRecommendedModels.length > 0
+              ? `Ollama is running in mock mode with ${snapshot.ollama.models.length + missingRecommendedModels.length} installed local model(s).`
+              : snapshot.ollama.statusDetail,
+          models: [
+            ...snapshot.ollama.models,
+            ...missingRecommendedModels.map((name) => ({
+              name,
+              sizeLabel: null,
+              modifiedAt: null,
+            })),
+          ],
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("pull_recommended_ollama_models");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Ollama Model Pull Error",
+        "Recommended Ollama models could not be pulled",
+        "Review the details below, then retry after confirming Ollama is installed and running.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const installCliLink = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        cliLink: {
+          ...snapshot.cliLink,
+          installationSupported: true,
+          platform: snapshot.cliLink.platform || "macos",
+          status: "healthy" as const,
+          statusDetail:
+            "The managed CLI link resolves to the bundled desktop CLI.",
+          currentLinkTarget: snapshot.cliLink.targetPath,
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("install_cli_link");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "CLI Install Error",
+        "The shell CLI link could not be installed",
+        "Review the details below, then retry the managed CLI install action.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const removeCliLink = async () => {
+    if (isMockMode()) {
+      const snapshot = readMockConsoleState();
+      if (!snapshot) {
+        return false;
+      }
+
+      const nextSnapshot = {
+        ...snapshot,
+        cliLink: {
+          ...snapshot.cliLink,
+          status: "not_installed" as const,
+          statusDetail:
+            "No managed CLI link is installed yet. Install one to make `maabarium` available from your shell.",
+          currentLinkTarget: null,
+        },
+      };
+      writeMockConsoleState(nextSnapshot);
+      applySnapshot(nextSnapshot);
+      return true;
+    }
+
+    try {
+      await runSnapshotCommand("remove_cli_link");
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "CLI Removal Error",
+        "The shell CLI link could not be removed",
+        "Review the details below, then retry the managed CLI removal action.",
+        error,
+      );
+      return false;
+    }
+  };
+
   const runExperimentBranchCleanup = async (
     thresholdMonths: number,
     dryRun: boolean,
@@ -900,6 +1027,9 @@ export function useDesktopConsole({
     installGit,
     installOllama,
     startOllama,
+    pullRecommendedOllamaModels,
+    installCliLink,
+    removeCliLink,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
   };

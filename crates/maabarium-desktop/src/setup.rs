@@ -320,6 +320,52 @@ pub fn start_ollama() -> Result<(), String> {
     Err("Starting Ollama is currently implemented only for macOS desktop builds.".to_owned())
 }
 
+pub fn pull_recommended_ollama_models() -> Result<(), String> {
+    let command_path =
+        find_command("ollama").ok_or_else(|| "Ollama is not installed on this machine yet.".to_owned())?;
+
+    let running = TcpStream::connect_timeout(
+        &SocketAddr::from(([127, 0, 0, 1], 11434)),
+        Duration::from_millis(300),
+    )
+    .is_ok();
+
+    if !running {
+        return Err(
+            "Ollama must be running before recommended models can be pulled.".to_owned(),
+        );
+    }
+
+    let installed_models = read_ollama_models(&command_path);
+    let missing_models = recommended_ollama_models()
+        .into_iter()
+        .filter(|model_name| {
+            !installed_models
+                .iter()
+                .any(|installed_model| installed_model.name == *model_name)
+        })
+        .collect::<Vec<_>>();
+
+    if missing_models.is_empty() {
+        return Ok(());
+    }
+
+    for model_name in missing_models {
+        let status = Command::new(&command_path)
+            .args(["pull", model_name.as_str()])
+            .status()
+            .map_err(|error| format!("Failed to launch Ollama model pull for '{model_name}': {error}"))?;
+
+        if !status.success() {
+            return Err(format!(
+                "Ollama model pull for '{model_name}' exited with status {status}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn build_readiness_items(
     setup: &DesktopSetupState,
     fallback_workspace: Option<&str>,

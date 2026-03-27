@@ -38,7 +38,8 @@ use crate::maintenance::{
 };
 use crate::setup::{
     build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
-    load_desktop_setup, save_desktop_setup as persist_desktop_setup,
+    load_desktop_setup, pull_recommended_ollama_models as pull_recommended_ollama_models_runtime,
+    save_desktop_setup as persist_desktop_setup,
     start_ollama as start_ollama_runtime, DesktopSetupState, OllamaStatus, ReadinessItem,
     ResearchSearchMode,
 };
@@ -60,6 +61,7 @@ struct AppState {
     hardware_sampler: Mutex<HardwareTelemetrySampler>,
     db_path: PathBuf,
     log_path: PathBuf,
+    cli_path: PathBuf,
     engine_cancel: Mutex<Option<CancellationToken>>,
     engine_running: Arc<AtomicBool>,
     run_state: Arc<Mutex<MutableRunState>>,
@@ -229,6 +231,34 @@ struct PluginRuntimeState {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CliLinkStatus {
+    Healthy,
+    NotInstalled,
+    Broken,
+    NeedsRefresh,
+    Conflict,
+    Unsupported,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliLinkState {
+    installation_supported: bool,
+    platform: String,
+    managed_link_path: String,
+    managed_link_directory: String,
+    target_path: String,
+    current_link_target: Option<String>,
+    path_contains_managed_dir: bool,
+    shell_name: Option<String>,
+    shell_config_path: Option<String>,
+    export_command: Option<String>,
+    status: CliLinkStatus,
+    status_detail: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum PluginRuntimeStatus {
@@ -258,6 +288,7 @@ struct ConsoleState {
     blueprint_path: String,
     db_path: String,
     log_path: String,
+    cli_link: CliLinkState,
     hardware_telemetry: HardwareTelemetry,
     git_dependency: GitDependencyState,
     blueprint: Option<BlueprintFile>,
@@ -478,6 +509,9 @@ fn main() {
             install_git,
             install_ollama,
             start_ollama,
+            pull_recommended_ollama_models,
+            install_cli_link,
+            remove_cli_link,
             cleanup_experiment_branches_command,
             start_engine,
             stop_engine,
@@ -594,6 +628,7 @@ fn initialize_app_state(
 ) -> anyhow::Result<AppState> {
     let blueprints_dir = prepare_desktop_blueprints_directory(app)?;
     seed_bundled_cli(app, &runtime_paths.cli_path)?;
+    reconcile_managed_cli_link(&runtime_paths.cli_path)?;
     let settings_path = blueprints_dir
         .parent()
         .unwrap_or(&blueprints_dir)
@@ -607,6 +642,7 @@ fn initialize_app_state(
         hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
         db_path: runtime_paths.db_path.clone(),
         log_path: runtime_paths.log_path.clone(),
+        cli_path: runtime_paths.cli_path.clone(),
         engine_cancel: Mutex::new(None),
         engine_running: Arc::new(AtomicBool::new(false)),
         run_state: Arc::new(Mutex::new(MutableRunState::default())),
@@ -667,12 +703,24 @@ fn legacy_blueprints_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../blueprints")
 }
 
+fn resolve_bundled_resource_path(resource_dir: &Path, relative_path: &Path) -> Option<PathBuf> {
+    let candidates = [
+        resource_dir.join(relative_path),
+        resource_dir.join("_up_").join(relative_path),
+        resource_dir.join("_up_").join("_up_").join(relative_path),
+    ];
+
+    candidates.into_iter().find(|candidate| candidate.exists())
+}
+
 fn bundled_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
-    Ok(app
+    let resource_dir = app
         .path()
         .resource_dir()
-        .context("Failed to resolve the desktop resource directory")?
-        .join(BLUEPRINTS_DIR_NAME))
+        .context("Failed to resolve the desktop resource directory")?;
+
+    Ok(resolve_bundled_resource_path(&resource_dir, Path::new(BLUEPRINTS_DIR_NAME))
+        .unwrap_or_else(|| resource_dir.join(BLUEPRINTS_DIR_NAME)))
 }
 
 fn bundled_cli_resource_path(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
@@ -1031,9 +1079,326 @@ fn desktop_runtime_allows_legacy_migration() -> bool {
         || std::env::var_os("MAABARIUM_ENABLE_LEGACY_DESKTOP_MIGRATION").is_some()
 }
 
+fn managed_cli_link_directory() -> anyhow::Result<PathBuf> {
+    if cfg!(windows) {
+        return Err(anyhow::anyhow!(
+            "Managed CLI symlinks are not supported on Windows in this build"
+        ));
+    }
+
+    Ok(desktop_home_directory()?.join(".local").join("bin"))
+}
+
+fn managed_cli_link_path() -> anyhow::Result<PathBuf> {
+    Ok(managed_cli_link_directory()?.join(cli_binary_name()))
+}
+
+fn cli_path_contains_directory(directory: &Path) -> bool {
+    std::env::var_os("PATH")
+        .into_iter()
+    .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .any(|entry| entry == directory)
+}
+
+fn current_shell_name() -> Option<String> {
+    std::env::var("SHELL").ok().and_then(|value| {
+        Path::new(value.trim())
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .map(|file_name| file_name.to_owned())
+    })
+}
+
+fn shell_config_path(home: &Path, shell_name: Option<&str>) -> Option<PathBuf> {
+    match shell_name {
+        Some("zsh") => Some(home.join(".zshrc")),
+        Some("bash") => Some(home.join(".bash_profile")),
+        Some("fish") => Some(home.join(".config").join("fish").join("config.fish")),
+        _ => Some(home.join(".zshrc")),
+    }
+}
+
+fn shell_export_command(shell_name: Option<&str>) -> String {
+    match shell_name {
+        Some("fish") => "fish_add_path $HOME/.local/bin".to_owned(),
+        _ => "export PATH=\"$HOME/.local/bin:$PATH\"".to_owned(),
+    }
+}
+
+fn describe_cli_link_state(cli_path: &Path) -> CliLinkState {
+    let platform = std::env::consts::OS.to_owned();
+    let installation_supported = !cfg!(windows);
+    let target_path = cli_path.display().to_string();
+
+    if !installation_supported {
+        return CliLinkState {
+            installation_supported,
+            platform,
+            managed_link_path: String::new(),
+            managed_link_directory: String::new(),
+            target_path,
+            current_link_target: None,
+            path_contains_managed_dir: false,
+            shell_name: None,
+            shell_config_path: None,
+            export_command: None,
+            status: CliLinkStatus::Unsupported,
+            status_detail:
+                "Managed CLI links are not supported on this platform in the current build."
+                    .to_owned(),
+        };
+    }
+
+    let home = match desktop_home_directory() {
+        Ok(path) => path,
+        Err(error) => {
+            return CliLinkState {
+                installation_supported,
+                platform,
+                managed_link_path: String::new(),
+                managed_link_directory: String::new(),
+                target_path,
+                current_link_target: None,
+                path_contains_managed_dir: false,
+                shell_name: None,
+                shell_config_path: None,
+                export_command: None,
+                status: CliLinkStatus::Conflict,
+                status_detail: format!(
+                    "The desktop app could not resolve the home directory for CLI link management: {error}"
+                ),
+            };
+        }
+    };
+
+    let shell_name = current_shell_name();
+    let managed_directory = home.join(".local").join("bin");
+    let managed_link_path = managed_directory.join(cli_binary_name());
+    let path_contains_managed_dir = cli_path_contains_directory(&managed_directory);
+    let shell_config_path = shell_config_path(&home, shell_name.as_deref())
+        .map(|path| path.display().to_string());
+    let export_command = Some(shell_export_command(shell_name.as_deref()));
+
+    match std::fs::symlink_metadata(&managed_link_path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_symlink() {
+                return CliLinkState {
+                    installation_supported,
+                    platform,
+                    managed_link_path: managed_link_path.display().to_string(),
+                    managed_link_directory: managed_directory.display().to_string(),
+                    target_path,
+                    current_link_target: None,
+                    path_contains_managed_dir,
+                    shell_name,
+                    shell_config_path,
+                    export_command,
+                    status: CliLinkStatus::Conflict,
+                    status_detail: format!(
+                        "{} already exists and is not a symlink. The desktop app will not replace it automatically.",
+                        managed_link_path.display()
+                    ),
+                };
+            }
+
+            match std::fs::read_link(&managed_link_path) {
+                Ok(current_target) => {
+                    let current_link_target = Some(current_target.display().to_string());
+                    let status = if current_target == cli_path {
+                        if cli_path.exists() {
+                            CliLinkStatus::Healthy
+                        } else {
+                            CliLinkStatus::Broken
+                        }
+                    } else if current_target.exists() {
+                        CliLinkStatus::NeedsRefresh
+                    } else {
+                        CliLinkStatus::Broken
+                    };
+                    let status_detail = match status {
+                        CliLinkStatus::Healthy => format!(
+                            "The managed CLI link resolves to the bundled desktop CLI at {}.",
+                            cli_path.display()
+                        ),
+                        CliLinkStatus::NeedsRefresh => format!(
+                            "The managed CLI link points at {} instead of the current bundled desktop CLI.",
+                            current_target.display()
+                        ),
+                        CliLinkStatus::Broken => format!(
+                            "The managed CLI link points at {} but the target is unavailable.",
+                            current_target.display()
+                        ),
+                        _ => "CLI link status is unavailable.".to_owned(),
+                    };
+
+                    CliLinkState {
+                        installation_supported,
+                        platform,
+                        managed_link_path: managed_link_path.display().to_string(),
+                        managed_link_directory: managed_directory.display().to_string(),
+                        target_path,
+                        current_link_target,
+                        path_contains_managed_dir,
+                        shell_name,
+                        shell_config_path,
+                        export_command,
+                        status,
+                        status_detail,
+                    }
+                }
+                Err(error) => CliLinkState {
+                    installation_supported,
+                    platform,
+                    managed_link_path: managed_link_path.display().to_string(),
+                    managed_link_directory: managed_directory.display().to_string(),
+                    target_path,
+                    current_link_target: None,
+                    path_contains_managed_dir,
+                    shell_name,
+                    shell_config_path,
+                    export_command,
+                    status: CliLinkStatus::Broken,
+                    status_detail: format!(
+                        "The managed CLI link exists, but its target could not be read: {error}"
+                    ),
+                },
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CliLinkState {
+            installation_supported,
+            platform,
+            managed_link_path: managed_link_path.display().to_string(),
+            managed_link_directory: managed_directory.display().to_string(),
+            target_path,
+            current_link_target: None,
+            path_contains_managed_dir,
+            shell_name,
+            shell_config_path,
+            export_command,
+            status: CliLinkStatus::NotInstalled,
+            status_detail:
+                "No managed CLI link is installed yet. Install one to make `maabarium` available from your shell."
+                    .to_owned(),
+        },
+        Err(error) => CliLinkState {
+            installation_supported,
+            platform,
+            managed_link_path: managed_link_path.display().to_string(),
+            managed_link_directory: managed_directory.display().to_string(),
+            target_path,
+            current_link_target: None,
+            path_contains_managed_dir,
+            shell_name,
+            shell_config_path,
+            export_command,
+            status: CliLinkStatus::Conflict,
+            status_detail: format!(
+                "The desktop app could not inspect the managed CLI link at {}: {error}",
+                managed_link_path.display()
+            ),
+        },
+    }
+}
+
+fn install_managed_cli_link(cli_path: &Path) -> anyhow::Result<()> {
+    if cfg!(windows) {
+        return Err(anyhow::anyhow!(
+            "Managed CLI symlinks are not supported on Windows in this build"
+        ));
+    }
+
+    if !cli_path.exists() {
+        return Err(anyhow::anyhow!(
+            "Bundled desktop CLI is unavailable at {}",
+            cli_path.display()
+        ));
+    }
+
+    let link_path = managed_cli_link_path()?;
+    if let Some(parent) = link_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create managed CLI link directory {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    match std::fs::symlink_metadata(&link_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                std::fs::remove_file(&link_path).with_context(|| {
+                    format!("Failed to remove stale CLI symlink {}", link_path.display())
+                })?;
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Refusing to replace non-symlink path {}",
+                    link_path.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "Failed to inspect managed CLI link {}: {error}",
+                link_path.display()
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(cli_path, &link_path).with_context(|| {
+        format!(
+            "Failed to create managed CLI symlink from {} to {}",
+            link_path.display(),
+            cli_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn remove_managed_cli_link() -> anyhow::Result<()> {
+    if cfg!(windows) {
+        return Err(anyhow::anyhow!(
+            "Managed CLI symlinks are not supported on Windows in this build"
+        ));
+    }
+
+    let link_path = managed_cli_link_path()?;
+    match std::fs::symlink_metadata(&link_path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_symlink() {
+                return Err(anyhow::anyhow!(
+                    "Refusing to remove non-symlink path {}",
+                    link_path.display()
+                ));
+            }
+
+            std::fs::remove_file(&link_path).with_context(|| {
+                format!("Failed to remove managed CLI symlink {}", link_path.display())
+            })?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(anyhow::anyhow!(
+            "Failed to inspect managed CLI link {}: {error}",
+            link_path.display()
+        )),
+    }
+}
+
+fn reconcile_managed_cli_link(cli_path: &Path) -> anyhow::Result<()> {
+    match describe_cli_link_state(cli_path).status {
+        CliLinkStatus::NeedsRefresh | CliLinkStatus::Broken => install_managed_cli_link(cli_path),
+        _ => Ok(()),
+    }
+}
+
 fn build_console_state(state: &AppState) -> ConsoleState {
     let blueprint_path = current_blueprint_path(state);
     let run_state = current_run_state(state);
+    let cli_link = describe_cli_link_state(&state.cli_path);
     let hardware_telemetry = sample_hardware_telemetry(state);
     let blueprint_result = BlueprintFile::load(&blueprint_path);
     let plugin_runtime = blueprint_result
@@ -1146,6 +1511,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             blueprint_path: blueprint_path.display().to_string(),
             db_path: state.db_path.display().to_string(),
             log_path: state.log_path.display().to_string(),
+            cli_link,
             hardware_telemetry,
             git_dependency: git_dependency.clone(),
             blueprint: Some(blueprint),
@@ -1169,6 +1535,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             blueprint_path: blueprint_path.display().to_string(),
             db_path: state.db_path.display().to_string(),
             log_path: state.log_path.display().to_string(),
+            cli_link,
             hardware_telemetry,
             git_dependency,
             blueprint: None,
@@ -2084,6 +2451,26 @@ fn start_ollama(state: tauri::State<'_, AppState>) -> Result<ConsoleState, Strin
 }
 
 #[tauri::command]
+fn pull_recommended_ollama_models(
+    state: tauri::State<'_, AppState>,
+) -> Result<ConsoleState, String> {
+    pull_recommended_ollama_models_runtime()?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn install_cli_link(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+    install_managed_cli_link(&state.cli_path).map_err(|error| error.to_string())?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+fn remove_cli_link(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+    remove_managed_cli_link().map_err(|error| error.to_string())?;
+    Ok(build_console_state(&state))
+}
+
+#[tauri::command]
 fn cleanup_experiment_branches_command(
     state: tauri::State<'_, AppState>,
     older_than_months: u32,
@@ -2532,8 +2919,9 @@ fn open_repository_license_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) ->
 
 fn resolved_repository_license_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let bundled_license = resource_dir.join("LICENSE");
-        if bundled_license.exists() {
+        if let Some(bundled_license) =
+            resolve_bundled_resource_path(&resource_dir, Path::new("LICENSE"))
+        {
             return Ok(bundled_license);
         }
     }
@@ -2800,6 +3188,7 @@ mod tests {
             hardware_sampler: Mutex::new(HardwareTelemetrySampler::default()),
             db_path: PathBuf::from("data/maabarium.db"),
             log_path: PathBuf::from("data/maabarium.log"),
+            cli_path: PathBuf::from("data/bin/maabarium"),
             engine_cancel: Mutex::new(None),
             engine_running: Arc::new(AtomicBool::new(false)),
             run_state: Arc::new(Mutex::new(MutableRunState::default())),
@@ -2954,5 +3343,75 @@ mod tests {
         let pubkey = resolved_update_pubkey(Some("   ".to_owned()), Some(" compiled-pubkey "));
 
         assert_eq!(pubkey.as_deref(), Some("compiled-pubkey"));
+    }
+
+    #[test]
+    fn cli_path_contains_directory_detects_exact_entry() {
+        let managed_dir = PathBuf::from("/tmp/maabarium-bin");
+        let unrelated_dir = PathBuf::from("/tmp/elsewhere");
+        let original_path = std::env::var_os("PATH");
+        let path_value = std::env::join_paths([unrelated_dir, managed_dir.clone()])
+            .expect("path entries should join");
+
+        unsafe {
+            std::env::set_var("PATH", &path_value);
+        }
+
+        assert!(cli_path_contains_directory(&managed_dir));
+
+        match original_path {
+            Some(value) => unsafe {
+                std::env::set_var("PATH", value);
+            },
+            None => unsafe {
+                std::env::remove_var("PATH");
+            },
+        }
+    }
+
+    #[test]
+    fn shell_config_path_prefers_expected_profile_files() {
+        let home = PathBuf::from("/Users/tester");
+
+        assert_eq!(
+            shell_config_path(&home, Some("zsh")),
+            Some(home.join(".zshrc"))
+        );
+        assert_eq!(
+            shell_config_path(&home, Some("bash")),
+            Some(home.join(".bash_profile"))
+        );
+        assert_eq!(
+            shell_config_path(&home, Some("fish")),
+            Some(home.join(".config").join("fish").join("config.fish"))
+        );
+    }
+
+    #[test]
+    fn resolve_bundled_resource_path_finds_nested_up_resources() {
+        let resource_dir = unique_test_directory("resource-dir");
+        let nested_blueprints = resource_dir.join("_up_").join("_up_").join("blueprints");
+        std::fs::create_dir_all(&nested_blueprints).expect("nested blueprint dir should exist");
+
+        let resolved = resolve_bundled_resource_path(&resource_dir, Path::new("blueprints"));
+
+        assert_eq!(resolved, Some(nested_blueprints));
+
+        std::fs::remove_dir_all(&resource_dir).expect("resource dir should be removed");
+    }
+
+    #[test]
+    fn resolve_bundled_resource_path_prefers_direct_resource_match() {
+        let resource_dir = unique_test_directory("resource-dir-direct");
+        let direct_blueprints = resource_dir.join("blueprints");
+        let nested_blueprints = resource_dir.join("_up_").join("_up_").join("blueprints");
+        std::fs::create_dir_all(&direct_blueprints).expect("direct blueprint dir should exist");
+        std::fs::create_dir_all(&nested_blueprints).expect("nested blueprint dir should exist");
+
+        let resolved = resolve_bundled_resource_path(&resource_dir, Path::new("blueprints"));
+
+        assert_eq!(resolved, Some(direct_blueprints));
+
+        std::fs::remove_dir_all(&resource_dir).expect("resource dir should be removed");
     }
 }
