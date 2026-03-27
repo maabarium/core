@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { CheckCircle2, Wrench } from "lucide-react";
+import { CheckCircle2, LoaderCircle, Wrench } from "lucide-react";
 import type {
   CliLinkState,
   DesktopSetupState,
@@ -63,6 +63,8 @@ export function DesktopSetupModal({
   const [workspaceStatus, setWorkspaceStatus] =
     useState<WorkspaceGitStatus | null>(null);
   const [inspectingWorkspace, setInspectingWorkspace] = useState(false);
+  const [pullingRecommendedModels, setPullingRecommendedModels] =
+    useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -72,7 +74,21 @@ export function DesktopSetupModal({
     setForm(setupState);
     setApiKeys({});
     setWorkspaceStatus(null);
+    setPullingRecommendedModels(false);
   }, [isOpen]);
+
+  const handlePullRecommendedModels = async () => {
+    if (pullingRecommendedModels) {
+      return;
+    }
+
+    setPullingRecommendedModels(true);
+    try {
+      await onPullRecommendedOllamaModels();
+    } finally {
+      setPullingRecommendedModels(false);
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -629,10 +645,18 @@ export function DesktopSetupModal({
                   ) : missingRecommendedModelNames.length > 0 ? (
                     <button
                       type="button"
-                      onClick={() => void onPullRecommendedOllamaModels()}
-                      className="rounded-lg border border-teal-400/20 bg-gradient-to-r from-teal-500/15 to-amber-400/15 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-white transition hover:brightness-110"
+                      onClick={() => void handlePullRecommendedModels()}
+                      disabled={pullingRecommendedModels}
+                      className="rounded-lg border border-teal-400/20 bg-gradient-to-r from-teal-500/15 to-amber-400/15 px-3 py-2 text-xs font-black uppercase tracking-[0.18em] text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
                     >
-                      Pull Recommended Models
+                      <span className="inline-flex items-center gap-2">
+                        {pullingRecommendedModels ? (
+                          <LoaderCircle size={14} className="animate-spin" />
+                        ) : null}
+                        {pullingRecommendedModels
+                          ? "Pulling Models..."
+                          : "Pull Recommended Models"}
+                      </span>
                     </button>
                   ) : null}
                 </div>
@@ -645,6 +669,14 @@ export function DesktopSetupModal({
                   Pull the missing recommended models into Ollama so local
                   workflows can use the suggested defaults without manual
                   `ollama pull` commands.
+                </div>
+              ) : null}
+
+              {pullingRecommendedModels ? (
+                <div className="mt-4 rounded-lg border border-teal-300/20 bg-teal-500/10 px-3 py-3 text-xs leading-relaxed text-teal-100">
+                  Maabarium is asking Ollama to download the missing recommended
+                  models now. Large models can take a while, especially on the
+                  first pull.
                 </div>
               ) : null}
 

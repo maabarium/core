@@ -16,7 +16,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- The desktop onboarding modal no longer re-inspects the selected workspace on every background console snapshot refresh, preventing the workspace status row from flickering between "Inspecting..." and "Repository detected ...".
+- The desktop onboarding modal now shows an in-progress state while recommended Ollama models are being pulled, so local-runtime setup no longer looks frozen during long downloads.
 
 ### Breaking Changes
 

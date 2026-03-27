@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -567,21 +567,22 @@ export function useDesktopConsole({
     }
   };
 
-  const inspectWorkspaceGitStatus = async (path: string) => {
+  const inspectWorkspaceGitStatus = useCallback(async (path: string) => {
     try {
       return await invoke<WorkspaceGitStatus>("inspect_workspace_git_status", {
         path,
       });
     } catch (error) {
-      presentDesktopError(
-        "Workspace Inspection Error",
-        "The workspace could not be inspected",
-        "Review the details below, then retry after selecting a valid folder.",
-        error,
-      );
+      setDesktopError({
+        title: "Workspace Inspection Error",
+        heading: "The workspace could not be inspected",
+        description:
+          "Review the details below, then retry after selecting a valid folder.",
+        message: errorMessage(error),
+      });
       return null;
     }
-  };
+  }, []);
 
   const initializeWorkspaceGit = async (path: string) => {
     if (isMockMode()) {
