@@ -16,6 +16,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.11] - 2026-03-27
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
 - Local and CI desktop release builds now preserve the macOS entitlement override when forcing the updater-only `app` bundle target, so signed `Maabarium-Console.app` artifacts keep the Wasmtime executable-memory entitlement instead of failing the release verifier.
 
 ### Breaking Changes
