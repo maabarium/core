@@ -10,6 +10,7 @@
     "build:release-manifest": "node ./scripts/generate-release-manifest.mjs",
     "prepare:apple-certificate": "bash ./scripts/prepare-apple-certificate.sh",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
+    "reset:macos-production-data": "bash ./scripts/reset-macos-production-data.sh",
     "test:release-local": "bash ./scripts/test-local-release-build.sh",
     "tauri": "tauri",
     "validate:updater-pubkey": "node ./scripts/validate-updater-pubkey.mjs"

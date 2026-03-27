@@ -12,11 +12,12 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- Packaged desktop releases now embed their updater manifest endpoint at build time, so Finder-launched apps no longer depend on runtime shell environment variables to enable update checks.
+- The desktop updater UI and release workflow now use the published `stable` and `beta` channels instead of exposing an unused `nightly` option.
 
 ### Fixed
 
-- None.
+- Release desktop builds no longer migrate repository-local runtime files and blueprint libraries by default, avoiding development-only state leaking into downloaded production apps.
 
 ### Breaking Changes
 

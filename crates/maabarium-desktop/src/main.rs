@@ -43,7 +43,9 @@ use crate::setup::{
     ResearchSearchMode,
 };
 
-const DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
+const RELEASE_DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
+const DEV_DESKTOP_RUNTIME_ID: &str = "com.maabarium.console.dev";
+const SUPPORTED_UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 const BLUEPRINTS_DIR_NAME: &str = "blueprints";
 const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
 const APP_DISPLAY_NAME: &str = "Maabarium";
@@ -633,11 +635,7 @@ fn default_blueprint_path(blueprints_dir: &Path) -> PathBuf {
 }
 
 fn prepare_desktop_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .context("Failed to resolve the desktop app-data directory")?;
-    let blueprints_dir = app_data_dir.join(BLUEPRINTS_DIR_NAME);
+    let blueprints_dir = desktop_data_directory()?.join(BLUEPRINTS_DIR_NAME);
 
     std::fs::create_dir_all(&blueprints_dir).with_context(|| {
         format!(
@@ -646,8 +644,12 @@ fn prepare_desktop_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Resul
         )
     })?;
 
-    let migrated = copy_blueprint_files_if_missing(&legacy_blueprints_directory(), &blueprints_dir)
-        .context("Failed to migrate legacy blueprints into desktop app data")?;
+    let migrated = if desktop_runtime_allows_legacy_migration() {
+        copy_blueprint_files_if_missing(&legacy_blueprints_directory(), &blueprints_dir)
+            .context("Failed to migrate legacy blueprints into desktop app data")?
+    } else {
+        0
+    };
     let seeded = seed_bundled_blueprints(app, &blueprints_dir)
         .context("Failed to seed bundled blueprints into desktop app data")?;
 
@@ -903,8 +905,10 @@ fn prepare_desktop_runtime_paths() -> anyhow::Result<DesktopRuntimePaths> {
     let log_path = log_dir.join("maabarium.log");
     let cli_path = data_dir.join("bin").join(cli_binary_name());
 
-    migrate_legacy_runtime_file(&default_db_path(), &db_path)?;
-    migrate_legacy_runtime_file(&default_log_path(), &log_path)?;
+    if desktop_runtime_allows_legacy_migration() {
+        migrate_legacy_runtime_file(&default_db_path(), &db_path)?;
+        migrate_legacy_runtime_file(&default_log_path(), &log_path)?;
+    }
 
     Ok(DesktopRuntimePaths {
         db_path,
@@ -945,7 +949,7 @@ fn desktop_data_directory() -> anyhow::Result<PathBuf> {
         return Ok(home
             .join("Library")
             .join("Application Support")
-            .join(DESKTOP_RUNTIME_ID));
+            .join(desktop_runtime_id()));
     }
 
     #[cfg(target_os = "windows")]
@@ -975,7 +979,10 @@ fn desktop_log_directory() -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = desktop_home_directory()?;
-        return Ok(home.join("Library").join("Logs").join(DESKTOP_RUNTIME_ID));
+        return Ok(home
+            .join("Library")
+            .join("Logs")
+            .join(desktop_runtime_id()));
     }
 
     #[cfg(target_os = "windows")]
@@ -1009,6 +1016,19 @@ fn desktop_home_directory() -> anyhow::Result<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("HOME is not set for desktop runtime path resolution"))
+}
+
+fn desktop_runtime_id() -> &'static str {
+    if cfg!(debug_assertions) {
+        DEV_DESKTOP_RUNTIME_ID
+    } else {
+        RELEASE_DESKTOP_RUNTIME_ID
+    }
+}
+
+fn desktop_runtime_allows_legacy_migration() -> bool {
+    cfg!(debug_assertions)
+        || std::env::var_os("MAABARIUM_ENABLE_LEGACY_DESKTOP_MIGRATION").is_some()
 }
 
 fn build_console_state(state: &AppState) -> ConsoleState {
@@ -1615,33 +1635,77 @@ fn parse_token_usage_event(line: &str) -> Option<(DateTime<Local>, u64)> {
 fn update_channel_from_env() -> Option<String> {
     std::env::var("MAABARIUM_UPDATE_CHANNEL")
         .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+        .and_then(|value| normalize_update_channel(&value))
+}
+
+fn compiled_update_channel() -> Option<String> {
+    option_env!("MAABARIUM_COMPILED_UPDATE_CHANNEL").and_then(normalize_update_channel)
 }
 
 fn resolved_update_channel(setup: Option<&DesktopSetupState>) -> String {
     setup
         .and_then(|value| value.preferred_update_channel.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+        .and_then(normalize_update_channel)
         .or_else(update_channel_from_env)
+        .or_else(compiled_update_channel)
         .unwrap_or_else(|| "stable".to_owned())
 }
 
-fn update_endpoint_from_env(channel: &str) -> Option<String> {
-    if let Ok(endpoint) = std::env::var("MAABARIUM_UPDATE_MANIFEST_URL") {
-        let endpoint = endpoint.trim().to_owned();
-        if !endpoint.is_empty() {
-            return Some(endpoint);
-        }
+fn normalize_update_channel(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if SUPPORTED_UPDATE_CHANNELS.contains(&normalized.as_str()) {
+        Some(normalized)
+    } else {
+        None
     }
+}
 
-    std::env::var("MAABARIUM_UPDATE_BASE_URL")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_owned())
-        .filter(|value| !value.is_empty())
-        .map(|base_url| format!("{base_url}/{channel}/latest.json"))
+fn normalized_update_manifest_url(value: &str) -> Option<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.to_owned())
+    }
+}
+
+fn normalized_update_base_url(value: &str) -> Option<String> {
+    let normalized = value.trim().trim_end_matches('/');
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.to_owned())
+    }
+}
+
+fn resolved_update_endpoint(
+    runtime_manifest_url: Option<String>,
+    runtime_base_url: Option<String>,
+    compiled_manifest_url: Option<&str>,
+    compiled_base_url: Option<&str>,
+    channel: &str,
+) -> Option<String> {
+    runtime_manifest_url
+        .as_deref()
+        .and_then(normalized_update_manifest_url)
+        .or_else(|| compiled_manifest_url.and_then(normalized_update_manifest_url))
+        .or_else(|| {
+            runtime_base_url
+                .as_deref()
+                .and_then(normalized_update_base_url)
+                .or_else(|| compiled_base_url.and_then(normalized_update_base_url))
+                .map(|base_url| format!("{base_url}/{channel}/latest.json"))
+        })
+}
+
+fn update_endpoint_from_environment(channel: &str) -> Option<String> {
+    resolved_update_endpoint(
+        std::env::var("MAABARIUM_UPDATE_MANIFEST_URL").ok(),
+        std::env::var("MAABARIUM_UPDATE_BASE_URL").ok(),
+        option_env!("MAABARIUM_COMPILED_UPDATE_MANIFEST_URL"),
+        option_env!("MAABARIUM_COMPILED_UPDATE_BASE_URL"),
+        channel,
+    )
 }
 
 fn resolved_update_pubkey(
@@ -1668,7 +1732,7 @@ fn update_pubkey_from_env() -> Option<String> {
 
 fn describe_updater_configuration(setup: &DesktopSetupState) -> UpdaterConfigurationState {
     let channel = resolved_update_channel(Some(setup));
-    let endpoint = update_endpoint_from_env(&channel);
+    let endpoint = update_endpoint_from_environment(&channel);
     let configured = endpoint.is_some() && update_pubkey_from_env().is_some();
 
     UpdaterConfigurationState {
@@ -1681,8 +1745,8 @@ fn describe_updater_configuration(setup: &DesktopSetupState) -> UpdaterConfigura
 
 fn update_runtime_configuration(setup: &DesktopSetupState) -> Result<UpdateRuntimeConfig, String> {
     let channel = resolved_update_channel(Some(setup));
-    let endpoint = update_endpoint_from_env(&channel)
-        .ok_or_else(|| "Set MAABARIUM_UPDATE_MANIFEST_URL or MAABARIUM_UPDATE_BASE_URL to enable desktop updates".to_owned())?;
+    let endpoint = update_endpoint_from_environment(&channel)
+        .ok_or_else(|| "Set MAABARIUM_UPDATE_MANIFEST_URL or MAABARIUM_UPDATE_BASE_URL, or embed one of them at build time, to enable desktop updates".to_owned())?;
     let pubkey = update_pubkey_from_env()
         .ok_or_else(|| "Set MAABARIUM_UPDATE_PUBKEY or embed the updater pubkey at build time to enable desktop updates".to_owned())?;
 
@@ -2136,7 +2200,7 @@ async fn check_for_updates(
     let setup = hydrated_desktop_setup(&state);
     let current_version = app.package_info().version.to_string();
     let channel = resolved_update_channel(Some(&setup));
-    let endpoint = update_endpoint_from_env(&channel);
+    let endpoint = update_endpoint_from_environment(&channel);
     let configured = endpoint.is_some() && update_pubkey_from_env().is_some();
 
     if !configured {
@@ -2833,6 +2897,46 @@ mod tests {
         setup.preferred_update_channel = Some("beta".to_owned());
 
         assert_eq!(resolved_update_channel(Some(&setup)), "beta");
+    }
+
+    #[test]
+    fn resolved_update_channel_ignores_unsupported_saved_value() {
+        let mut setup = DesktopSetupState::default();
+        setup.preferred_update_channel = Some("nightly".to_owned());
+
+        assert_eq!(resolved_update_channel(Some(&setup)), "stable");
+    }
+
+    #[test]
+    fn resolved_update_endpoint_prefers_compiled_manifest_url() {
+        let endpoint = resolved_update_endpoint(
+            None,
+            None,
+            Some(" https://downloads.maabarium.com/beta/latest.json "),
+            None,
+            "beta",
+        );
+
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("https://downloads.maabarium.com/beta/latest.json")
+        );
+    }
+
+    #[test]
+    fn resolved_update_endpoint_falls_back_to_base_url_and_channel() {
+        let endpoint = resolved_update_endpoint(
+            None,
+            Some(" https://downloads.maabarium.com/ ".to_owned()),
+            None,
+            None,
+            "stable",
+        );
+
+        assert_eq!(
+            endpoint.as_deref(),
+            Some("https://downloads.maabarium.com/stable/latest.json")
+        );
     }
 
     #[test]

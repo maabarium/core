@@ -26,7 +26,7 @@ The packaged macOS desktop app stores its runtime files in app-specific director
 
 The built-in blueprint library is bundled into the desktop app as resources and seeded into the app-data `blueprints/` directory on startup.
 
-If a legacy desktop session previously used repository-relative files under `data/` or `blueprints/`, the desktop app migrates those files forward on first run when the app-specific files do not already exist.
+Debug desktop builds migrate legacy repository-relative files under `data/` or `blueprints/` on first run when the app-specific files do not already exist. Packaged release builds do not perform that migration unless `MAABARIUM_ENABLE_LEGACY_DESKTOP_MIGRATION=1` is set for the process.
 
 ## What Is R2-Based vs Tauri-Based
 
@@ -42,16 +42,33 @@ Configure the desktop app with:
 
 - `MAABARIUM_UPDATE_BASE_URL` or `MAABARIUM_UPDATE_MANIFEST_URL`
 - `MAABARIUM_UPDATE_PUBKEY`
-- optional `MAABARIUM_UPDATE_CHANNEL`
+- optional `MAABARIUM_UPDATE_CHANNEL` with `stable` or `beta`
+
+Packaged release builds should embed those values at build time. Finder-launched apps do not inherit your GitHub Actions environment, so setting `MAABARIUM_UPDATE_BASE_URL` only in CI publication steps is not enough on its own.
 
 Recommended layout when publishing to R2:
 
 ```text
 https://downloads.maabarium.com/install.sh
 https://downloads.maabarium.com/latest.json
+https://downloads.maabarium.com/stable/latest.json
+https://downloads.maabarium.com/beta/latest.json
 https://downloads.maabarium.com/darwin-aarch64/Maabarium-Console.app.tar.gz
 https://downloads.maabarium.com/darwin-aarch64/Maabarium-Console.app.tar.gz.sig
 ```
+
+`latest.json` remains the stable alias for the install script. The in-app updater resolves `stable/latest.json` or `beta/latest.json` based on the saved release channel.
+
+## Reset Old Production App Data Before A Fresh Release Test
+
+If you previously ran older packaged builds that populated `~/Library/Application Support/com.maabarium.console`, you can back up and clear that production desktop state before testing a new release:
+
+```bash
+cd crates/maabarium-desktop
+pnpm reset:macos-production-data
+```
+
+That script moves existing production app data, logs, preferences, and saved state into a timestamped backup under `~/Library/Application Support/maabarium-reset-backups/`. Use `--dry-run` to inspect what would be moved.
 
 ## Generating the Tauri Signing Keypair
 
@@ -139,6 +156,24 @@ The desktop publishing workflow publishes:
 - `install.sh`
 
 and also uploads those artifacts to the matching GitHub Release before syncing the updater files to Cloudflare R2.
+
+### Stable vs Beta Operator Checklist
+
+Use the published Release event as the default trigger. Manual `workflow_dispatch` is primarily for rebuilding or republishing an existing tag.
+
+Stable:
+
+1. Run `release-prep` with the intended semver bump.
+2. Publish the normal GitHub Release created by that workflow.
+3. Let `desktop-release-r2` publish the signed bundle plus `stable/latest.json`.
+4. Verify the workflow also refreshed root `latest.json` for the install script.
+
+Beta:
+
+1. Create or publish the tag as a GitHub prerelease.
+2. Let `desktop-release-r2` react to that prerelease and publish the `beta` channel automatically.
+3. Only use manual `workflow_dispatch` with `release_channel=beta` when republishing an existing beta tag.
+4. Verify the workflow published `beta/latest.json` and did not replace root `latest.json`.
 
 ### Release-Prep Inputs
 

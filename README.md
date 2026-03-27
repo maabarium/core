@@ -81,11 +81,13 @@ On macOS, the desktop app uses:
 - `~/Library/Application Support/com.maabarium.console/blueprints/`
 - `~/Library/Application Support/com.maabarium.console/bin/maabarium`
 
-On first launch, the desktop app can migrate legacy repo-local runtime files forward when they already exist.
+Release builds do not migrate repository-local desktop runtime files by default. Debug builds keep that migration path for local development, and release smoke builds can opt back in with `MAABARIUM_ENABLE_LEGACY_DESKTOP_MIGRATION=1`.
 
 The desktop bundle also seeds bundled blueprint TOMLs into the app-data blueprint library, and release bundles can ship a standalone CLI resource for desktop installs.
 
-Release desktop builds should provide `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE` during `pnpm tauri build` so packaged installs embed the updater public key.
+Release desktop builds should provide `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE` plus `MAABARIUM_UPDATE_BASE_URL` or `MAABARIUM_UPDATE_MANIFEST_URL` during `pnpm tauri build` so packaged installs embed the updater trust anchor and manifest endpoint.
+
+The published desktop updater channels are `stable` and `beta`. Stable releases continue to publish the installer-facing root `latest.json`, and the in-app updater reads `stable/latest.json` or `beta/latest.json`.
 
 See [docs/DESKTOP_PACKAGING.md](docs/DESKTOP_PACKAGING.md) for the fuller packaging and updater flow.
 

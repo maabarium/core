@@ -8,6 +8,14 @@ on:
         description: Optional existing release tag to publish from during a manual run.
         required: false
         type: string
+      release_channel:
+        description: Channel to publish when running the workflow manually.
+        required: false
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
   release:
     types:
       - published
@@ -45,14 +53,33 @@ jobs:
             echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
             echo "ref=refs/tags/${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
             echo "upload_release=true" >> "$GITHUB_OUTPUT"
+            if [[ "${{ github.event.release.prerelease }}" == "true" ]]; then
+              echo "channel=beta" >> "$GITHUB_OUTPUT"
+              echo "publish_root_manifest=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "channel=stable" >> "$GITHUB_OUTPUT"
+              echo "publish_root_manifest=true" >> "$GITHUB_OUTPUT"
+            fi
           elif [[ -n "${{ inputs.release_tag || '' }}" ]]; then
             echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
             echo "ref=refs/tags/${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
             echo "upload_release=true" >> "$GITHUB_OUTPUT"
+            echo "channel=${{ inputs.release_channel || 'stable' }}" >> "$GITHUB_OUTPUT"
+            if [[ "${{ inputs.release_channel || 'stable' }}" == "stable" ]]; then
+              echo "publish_root_manifest=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish_root_manifest=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
             echo "upload_release=false" >> "$GITHUB_OUTPUT"
+            echo "channel=${{ inputs.release_channel || 'stable' }}" >> "$GITHUB_OUTPUT"
+            if [[ "${{ inputs.release_channel || 'stable' }}" == "stable" ]]; then
+              echo "publish_root_manifest=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish_root_manifest=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - uses: actions/checkout@v4
@@ -136,6 +163,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           MAABARIUM_REQUIRE_APPLE_CLI_SIGNING: "1"
+          MAABARIUM_UPDATE_CHANNEL: ${{ steps.release-context.outputs.channel }}
         shell: bash
         run: |
           set -euo pipefail
@@ -147,6 +175,8 @@ jobs:
             --config '{"productName":"Maabarium-Console","bundle":{"targets":["app"]}}'
 
       - name: Stage updater bundle and manifest
+        env:
+          RELEASE_CHANNEL: ${{ steps.release-context.outputs.channel }}
         shell: bash
         run: |
           set -euo pipefail
@@ -155,6 +185,7 @@ jobs:
           BUNDLE_DIR="$GITHUB_WORKSPACE/target/release/bundle/macos"
           RELEASE_DIR="$DESKTOP_DIR/release"
           STAGING_DIR="$RELEASE_DIR/staging"
+          MANIFEST_DIR="$RELEASE_DIR/$RELEASE_CHANNEL"
 
           case "$(uname -m)" in
             arm64|aarch64)
@@ -182,6 +213,7 @@ jobs:
           fi
 
           mkdir -p "$STAGING_DIR/$PLATFORM_KEY"
+          mkdir -p "$MANIFEST_DIR"
           BUNDLE_NAME="$(basename "$UPDATER_BUNDLE")"
           RELEASE_BUNDLE_NAME="${BUNDLE_NAME// /-}"
           RELEASE_SIG_NAME="${RELEASE_BUNDLE_NAME}.sig"
@@ -196,8 +228,9 @@ jobs:
           cd "$DESKTOP_DIR"
           pnpm build:release-manifest -- \
             --base-url "$MAABARIUM_UPDATE_BASE_URL" \
+            --channel "$RELEASE_CHANNEL" \
             --artifacts-dir "$STAGING_DIR" \
-            --output "$RELEASE_DIR/latest.json" \
+            --output "$MANIFEST_DIR/latest.json" \
             --platform "$PLATFORM_KEY=$PLATFORM_KEY/$RELEASE_BUNDLE_NAME"
 
       - name: Generate install.sh from updater metadata base URL
@@ -214,8 +247,9 @@ jobs:
         with:
           name: desktop-release-r2-macos
           path: |
-            crates/maabarium-desktop/release/latest.json
             crates/maabarium-desktop/release/install.sh
+            crates/maabarium-desktop/release/stable/latest.json
+            crates/maabarium-desktop/release/beta/latest.json
             crates/maabarium-desktop/release/staging/**
 
       - name: Upload desktop artifacts to GitHub Release
@@ -227,11 +261,12 @@ jobs:
           set -euo pipefail
           DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
           release_assets=()
+          manifest_path="$DESKTOP_DIR/release/${{ steps.release-context.outputs.channel }}/latest.json"
           while IFS= read -r asset_path; do
             release_assets+=("$asset_path")
           done < <(find "$DESKTOP_DIR/release/staging" -type f | sort)
           gh release upload "${{ steps.release-context.outputs.tag }}" \
-            "$DESKTOP_DIR/release/latest.json" \
+            "$manifest_path" \
             "$DESKTOP_DIR/release/install.sh" \
             "${release_assets[@]}" \
             --clobber
@@ -242,5 +277,8 @@ jobs:
           set -euo pipefail
           DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
           aws s3 sync "$DESKTOP_DIR/release/staging/" "s3://$R2_BUCKET/" --delete --endpoint-url "$R2_ENDPOINT"
-          aws s3 cp "$DESKTOP_DIR/release/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"
+          aws s3 cp "$DESKTOP_DIR/release/${{ steps.release-context.outputs.channel }}/latest.json" "s3://$R2_BUCKET/${{ steps.release-context.outputs.channel }}/latest.json" --endpoint-url "$R2_ENDPOINT"
+          if [[ "${{ steps.release-context.outputs.publish_root_manifest }}" == "true" ]]; then
+            aws s3 cp "$DESKTOP_DIR/release/${{ steps.release-context.outputs.channel }}/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"
+          fi
           aws s3 cp "$DESKTOP_DIR/release/install.sh" "s3://$R2_BUCKET/install.sh" --endpoint-url "$R2_ENDPOINT" --content-type "text/x-shellscript; charset=utf-8"

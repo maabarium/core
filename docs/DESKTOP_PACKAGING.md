@@ -78,6 +78,32 @@ The updater storage endpoint can be backed by Cloudflare R2.
 
 The GitHub updater workflow intentionally bundles only the macOS `app` target. The updater release path consumes the signed `.app.tar.gz` bundle and `.sig`; it does not publish the `.dmg`, and skipping that target avoids Finder AppleScript failures on headless macOS runners.
 
+## Release Operator Checklist
+
+Use this checklist when you need to publish or republish desktop updater metadata.
+
+### Stable release sequence
+
+1. Run `.github/workflows/release-prep.yml` with the correct semver bump.
+2. Let `release-prep` create and publish the normal GitHub Release plus the `desktop-vX.Y.Z` tag.
+3. Let `.github/workflows/desktop-release-r2.yml` run from that published Release event, or rerun it manually for the same tag with `release_channel=stable` if you need to republish.
+4. Confirm the workflow published `stable/latest.json` and refreshed the root `latest.json` alias used by `install.sh`.
+5. Confirm the signed updater bundle, `.sig`, and `install.sh` were uploaded to both the GitHub Release and Cloudflare R2.
+
+### Beta release sequence
+
+1. Create a GitHub prerelease for the tag you want to distribute as beta.
+2. Let `.github/workflows/desktop-release-r2.yml` run from that prerelease event, which automatically maps the release to the `beta` channel.
+3. If you need to rebuild or republish that same prerelease tag, run `desktop-release-r2` manually with the release tag and `release_channel=beta`.
+4. Confirm the workflow published `beta/latest.json` without replacing the root `latest.json` stable alias.
+5. Confirm the signed updater bundle, `.sig`, and `install.sh` were uploaded to the GitHub Release and Cloudflare R2.
+
+### Post-publish checks
+
+1. Verify the downloaded app is Apple-signed, notarized, and stapled.
+2. Verify the packaged app resolves updates from the expected channel manifest.
+3. If you are testing on a machine with older packaged builds, back up or reset `com.maabarium.console` app data before treating the run as a clean first-launch check.
+
 For a real downloadable macOS release, the app inside that updater archive must still be Apple-signed and notarized. The desktop release workflow now supports Tauri's built-in macOS signing and notarization environment variables so CI can publish a Gatekeeper-acceptable app bundle instead of only an updater-signed payload.
 
 The updater signing public key is not an R2 value. It is the public half of the Tauri updater signing keypair. Use the Tauri-generated public key content directly, not a PEM block, Cloudflare key, or base64url variant.

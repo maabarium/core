@@ -8,7 +8,7 @@ import type {
 import { Badge } from "../ui/Badge";
 import { GlassCard } from "../ui/GlassCard";
 
-const UPDATE_CHANNEL_OPTIONS = ["stable", "beta", "nightly"] as const;
+const UPDATE_CHANNEL_OPTIONS = ["stable", "beta"] as const;
 
 export function UpdatesCard({
   updater,
@@ -67,7 +67,7 @@ export function UpdatesCard({
           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
             Channel
           </div>
-          <div className="mt-2 grid grid-cols-3 gap-2">
+          <div className="mt-2 grid grid-cols-2 gap-2">
             {UPDATE_CHANNEL_OPTIONS.map((channel) => {
               const selected = selectedChannel === channel;
               return (
@@ -101,7 +101,8 @@ export function UpdatesCard({
               In-app updates are disabled in this session.
               <div className="mt-2 text-slate-500">
                 Set MAABARIUM_UPDATE_BASE_URL or MAABARIUM_UPDATE_MANIFEST_URL
-                plus MAABARIUM_UPDATE_PUBKEY to enable update checks.
+                at runtime, or embed them during the release build, plus
+                MAABARIUM_UPDATE_PUBKEY to enable update checks.
               </div>
             </>
           )}
@@ -109,8 +110,8 @@ export function UpdatesCard({
 
         {!updater?.configured ? (
           <div className="rounded-lg border border-dashed border-amber-400/20 bg-amber-500/5 px-3 py-3 text-xs text-amber-100">
-            Dev mode is running without updater credentials or a release
-            manifest URL.
+            This desktop session is running without updater credentials or a
+            release manifest URL.
           </div>
         ) : null}
 

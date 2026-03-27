@@ -7,6 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use maabarium_core::GitDependencyStatus;
 
+const SUPPORTED_UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeStrategy {
@@ -562,8 +564,7 @@ fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
     setup.preferred_update_channel = setup
         .preferred_update_channel
         .take()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+        .and_then(|value| normalize_update_channel(&value));
     setup.remind_later_until = setup
         .remind_later_until
         .take()
@@ -600,6 +601,15 @@ fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
         }
     });
     setup
+}
+
+fn normalize_update_channel(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if SUPPORTED_UPDATE_CHANNELS.contains(&normalized.as_str()) {
+        Some(normalized)
+    } else {
+        None
+    }
 }
 
 fn recommended_ollama_models() -> Vec<String> {
