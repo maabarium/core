@@ -31,5 +31,6 @@ data/*.log
 .dev/
 .tmp*
 /**/node_modules/
+crates/maabarium-desktop/dist/
 /**/generated-resources/
 /**/release/
