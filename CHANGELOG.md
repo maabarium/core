@@ -8,6 +8,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.7] - 2026-03-27
+
+### Added
+
 - The desktop setup flow can now install or remove a managed `~/.local/bin/maabarium` symlink for the bundled CLI, report link health, and show macOS shell PATH guidance when that directory is not exported.
 - The desktop onboarding flow now includes a `Pull Recommended Models` action that asks the local Ollama runtime to download any missing suggested models after Ollama is installed and running.
 
