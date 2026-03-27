@@ -22,7 +22,7 @@ blueprints/
 # ─── Identity ─────────────────────────────────────────────────────────────────
 
 [blueprint]
-name    = "my-optimizer"          # required, non-empty string
+name    = "my-optimiser"          # required, non-empty string
 version = "1.0"                   # semver string (informational)
 description = """
 Human-readable description of what this blueprint optimizes.
@@ -32,7 +32,7 @@ Multi-line is fine.
 # ─── Domain ──────────────────────────────────────────────────────────────────
 
 [domain]
-repo_path    = "."                # path to the git repo being optimized
+repo_path    = "."                # path to the git repo being optimised
 target_files = ["src/**/*.rs"]   # glob patterns for files in scope
 language     = "rust"             # informational; used by evaluators
 
@@ -124,7 +124,7 @@ plugin_id = "custom-evaluator"   # optional display/runtime identifier
 
 | Field          | Type             | Required | Description                                                           |
 | -------------- | ---------------- | -------- | --------------------------------------------------------------------- |
-| `repo_path`    | string           | ✓        | Path to the git repository being optimized. `"."` = current directory |
+| `repo_path`    | string           | ✓        | Path to the git repository being optimised. `"."` = current directory |
 | `target_files` | array of strings | ✓        | Glob patterns for files the agent may modify                          |
 | `language`     | string           | ✓        | Programming language hint (used by evaluators)                        |
 
@@ -239,8 +239,8 @@ The engine validates a blueprint at load time and refuses to start if:
 Maabarium selects one built-in evaluator per blueprint:
 
 - `code`: the default path for code and application work
-- `prompt`: used for prompt or markdown optimization blueprints
-- `lora`: used for LoRA artifact validation blueprints
+- `prompt`: used for prompt or markdown optimisation blueprints
+- `lora`: used for LoRA artefact validation blueprints
 - `research`: used for research-oriented blueprints
 
 The research evaluator activates when a blueprint clearly targets research work, for example:
@@ -280,12 +280,12 @@ This metadata is persisted in SQLite and included in JSON and CSV exports throug
 
 ## Example Blueprints
 
-### LoRA Artifact Validation
+### LoRA Artefact Validation
 
 The built-in LoRA path is intentionally narrow. Maabarium does not run first-class MLX training inside the engine today. The supported workflow is:
 
-1. train or export adapter artifacts outside the engine,
-2. include those artifacts plus metadata in a proposal,
+1. train or export adapter artefacts outside the engine,
+2. include those artefacts plus metadata in a proposal,
 3. evaluate packaging completeness and reproducibility through the built-in LoRA evaluator.
 
 The evaluator recognizes `language = "lora"` blueprints and expects the proposal to include a `maabarium-lora-run.json` manifest when reproducibility scoring matters.
@@ -307,11 +307,11 @@ Minimal manifest example:
 
 This lets the evaluator score three things without overclaiming native training support:
 
-- adapter artifact completeness,
+- adapter artefact completeness,
 - metadata hygiene,
 - reproducibility of the external training or evaluation run.
 
-### Prompt Optimization
+### Prompt Optimisation
 
 ```toml
 [blueprint]
@@ -335,7 +335,7 @@ min_improvement = 0.02
 metrics = [
     { name = "actionability",   weight = 0.3, direction = "maximize", description = "How actionable is this prompt?" },
     { name = "specificity",     weight = 0.3, direction = "maximize", description = "How specific and concrete?" },
-    { name = "revenue_signal",  weight = 0.2, direction = "maximize", description = "Does it drive revenue-relevant behavior?" },
+    { name = "revenue_signal",  weight = 0.2, direction = "maximize", description = "Does it drive revenue-relevant behaviour?" },
     { name = "brevity",         weight = 0.2, direction = "maximize", description = "Is it concise without losing clarity?" },
 ]
 

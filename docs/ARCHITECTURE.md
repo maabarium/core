@@ -2,7 +2,7 @@
 
 ## Overview
 
-Maabarium is a Rust-native, local-first continuous improvement engine inspired by Karpathy's Autoresearch pattern. It implements a **keep-winner loop**: propose → apply → evaluate → keep-or-revert, generalized beyond ML training to arbitrary optimization domains.
+Maabarium is a Rust-native, local-first continuous improvement engine inspired by Karpathy's Autoresearch pattern. It implements a **keep-winner loop**: propose → apply → evaluate → keep-or-revert, generalised beyond ML training to arbitrary optimisation domains.
 
 ## Design Principles
 
@@ -154,7 +154,7 @@ Implemented in the current repository:
 
 ## Build Profiles
 
-Portable optimized local builds can use:
+Portable optimised local builds can use:
 
 ```bash
 cargo build --profile release-lto
@@ -166,7 +166,7 @@ Machine-specific local benchmarking can opt into native CPU tuning explicitly:
 RUSTFLAGS="-C target-cpu=native" cargo build --profile release-lto
 ```
 
-The native-tuned command is intentionally separate from portable release builds so distributed artifacts do not assume the build host's CPU feature set.
+The native-tuned command is intentionally separate from portable release builds so distributed artefacts do not assume the build host's CPU feature set.
 
 ## Closure Status
 
@@ -174,8 +174,8 @@ The historical closure items are now explicitly resolved in code and docs:
 
 1. Desktop packaging/distribution is documented for the Tauri desktop app
 2. Evaluator selection is routed through an internal built-in registry
-3. OSS launch artifacts exist and match the repository
-4. The LoRA path is explicitly scoped to external artifact validation with reproducibility manifests
+3. OSS launch artefacts exist and match the repository
+4. The LoRA path is explicitly scoped to external artefact validation with reproducibility manifests
 
 ## Desktop Packaging and Distribution
 
@@ -187,7 +187,7 @@ Current packaging expectation:
 - distribute the generated platform bundle from the Tauri output directory
 - keep runtime data outside the app binary at `data/maabarium.db` and `data/maabarium.log`
 
-The desktop stack is Tauri-based. A manual signing/notarization process is documented, but not yet automated.
+The desktop stack is Tauri-based. A manual signing/notarisation process is documented, but not yet automated.
 
 The detailed packaging/release expectations are documented in [DESKTOP_PACKAGING.md](DESKTOP_PACKAGING.md).
 
@@ -197,8 +197,8 @@ The following are not active implementation commitments in the current roadmap:
 
 - No second desktop shell is planned; the supported desktop shell is the Tauri app.
 - No runtime shared-library evaluator plugin ABI is promised; external plugins remain deferred behind the built-in evaluator registry because ABI stability and supply-chain trust are not solved yet.
-- No native Rust MLX-first path is promised; the supported LoRA path validates externally produced artifacts and reproducibility metadata instead of claiming in-engine training.
-- No CI-backed signing/notarization automation is promised yet.
+- No native Rust MLX-first path is promised; the supported LoRA path validates externally produced artefacts and reproducibility metadata instead of claiming in-engine training.
+- No CI-backed signing/notarisation automation is promised yet.
 - No return to the old broad phase-table format is planned for active docs.
 
 ## Evaluator Selection
@@ -216,8 +216,8 @@ This keeps evaluator selection deterministic and typed without exposing a dynami
 The supported LoRA workflow is intentionally narrow:
 
 - training or fine-tuning happens outside the engine,
-- proposals carry adapter artifacts plus `maabarium-lora-run.json`,
-- `LoraEvaluator` scores artifact completeness, metadata hygiene, and reproducibility hints from that manifest.
+- proposals carry adapter artefacts plus `maabarium-lora-run.json`,
+- `LoraEvaluator` scores artefact completeness, metadata hygiene, and reproducibility hints from that manifest.
 
 This closes the roadmap item without overstating native MLX support.
 

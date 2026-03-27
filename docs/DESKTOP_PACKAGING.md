@@ -15,7 +15,7 @@ The current release/distribution story is intentionally simple:
 This is now a hybrid strategy:
 
 1. manual local release builds still work
-2. a focused GitHub Actions workflow can build a Developer ID-signed and notarized macOS updater bundle when Apple signing secrets are configured
+2. a focused GitHub Actions workflow can build a Developer ID-signed and notarised macOS updater bundle when Apple signing secrets are configured
 3. `latest.json` plus signed updater bundles can be published to Cloudflare R2
 
 ## Build Command
@@ -34,7 +34,7 @@ target/release/bundle/macos
 
 ## Runtime Expectations
 
-The app now stores desktop runtime artifacts in app-specific OS directories instead of the repository `data/` directory.
+The app now stores desktop runtime artefacts in app-specific OS directories instead of the repository `data/` directory.
 
 On macOS the desktop app uses:
 
@@ -77,7 +77,7 @@ The updater storage endpoint can be backed by Cloudflare R2.
 - release builds should provide `MAABARIUM_UPDATE_PUBKEY` during `pnpm tauri build` so the packaged app embeds the updater public key.
 - `latest.json` lives at the root of that release origin.
 - signed updater bundles live under platform-key subdirectories such as `darwin-aarch64/`, where the published macOS updater archive is named `Maabarium-Console.app.tar.gz`.
-- CLI self-update archives live under the same platform-key directories, for example `darwin-aarch64/maabarium-darwin-aarch64.tar.gz`, and are registered under `cli.artifacts` in `latest.json`.
+- CLI self-update archives live under the same platform-key directories, for example `darwin-aarch64/maabarium-darwin-aarch64.tar.gz`, and are registered under the `cli.artifacts` key in `latest.json`.
 
 The GitHub updater workflow intentionally bundles only the macOS `app` target. The updater release path consumes the signed `.app.tar.gz` bundle and `.sig`; it does not publish the `.dmg`, and skipping that target avoids Finder AppleScript failures on headless macOS runners.
 
@@ -107,11 +107,11 @@ Use this checklist when you need to publish or republish desktop updater metadat
 
 ### Post-publish checks
 
-1. Verify the downloaded app is Apple-signed, notarized, and stapled.
+1. Verify the downloaded app is Apple-signed, notarised, and stapled.
 2. Verify the packaged app resolves updates from the expected channel manifest.
 3. If you are testing on a machine with older packaged builds, back up or reset `com.maabarium.console` app data before treating the run as a clean first-launch check.
 
-For a real downloadable macOS release, the app inside that updater archive must still be Apple-signed and notarized. The desktop release workflow now supports Tauri's built-in macOS signing and notarization environment variables so CI can publish a Gatekeeper-acceptable app bundle instead of only an updater-signed payload.
+For a real downloadable macOS release, the app inside that updater archive must still be Apple-signed and notarised. The desktop release workflow now supports Tauri's built-in macOS signing and notarisation environment variables so CI can publish a Gatekeeper-acceptable app bundle instead of only an updater-signed payload.
 
 The updater signing public key is not an R2 value. It is the public half of the Tauri updater signing keypair. Use the Tauri-generated public key content directly, not a PEM block, Cloudflare key, or base64url variant.
 
@@ -121,7 +121,7 @@ Before pasting a value into GitHub Actions configuration, validate it locally wi
 
 For a full local updater-release smoke test, run `cd crates/maabarium-desktop && TAURI_SIGNING_PRIVATE_KEY_FILE=~/.tauri/maabarium.key MAABARIUM_UPDATE_PUBKEY_FILE=~/.tauri/maabarium.key.pub pnpm test:release-local`.
 
-If you need to re-sign and notarize an already-built app locally for launch testing, use the exact commands documented in [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md).
+If you need to re-sign and notarise an already-built app locally for launch testing, use the exact commands documented in [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md).
 
 See [crates/maabarium-desktop/release/README.md](../crates/maabarium-desktop/release/README.md) for the concrete release flow and required variables.
 
@@ -138,18 +138,18 @@ For any release-like handoff of the desktop app, document at least:
 - expected bundled CLI path for the packaged app when release bundling is enabled
 - whether the binary was tested against a real local database/log pair
 
-## macOS Signing and Notarization
+## macOS Signing and Notarisation
 
-The current supported signing/notarization path now has two forms:
+The current supported signing/notarisation path now has two forms:
 
-- CI-backed signing and notarization through `.github/workflows/desktop-release-r2.yml` when the Apple secrets are configured
-- a manual local re-sign/notarize fallback for existing `.app` bundles
+- CI-backed signing and notarisation through `.github/workflows/desktop-release-r2.yml` when the Apple secrets are configured
+- a manual local re-sign/notarise fallback for existing `.app` bundles
 
 ### Prerequisites
 
 - Apple Developer membership with a `Developer ID Application` certificate installed in Keychain
 - Xcode command-line tools available (`xcrun`, `codesign`)
-- An app-specific password configured for notarization, or a saved `notarytool` keychain profile
+- An app-specific password configured for notarisation, or a saved `notarytool` keychain profile
 
 ### 1. Build the Release Binary
 
@@ -159,7 +159,7 @@ cd crates/maabarium-desktop && pnpm tauri build
 
 ### 2. Create a Minimal `.app` Bundle
 
-Use the Tauri-generated `.app` bundle from the release build output as the notarization artifact.
+Use the Tauri-generated `.app` bundle from the release build output as the notarisation artefact.
 
 For example:
 
@@ -184,13 +184,13 @@ codesign --deep --force --verify --verbose \
   "$APP_ROOT"
 ```
 
-### 4. Create a Notarization Upload Artifact
+### 4. Create a Notarisation Upload Artefact
 
 ```bash
 ditto -c -k --keepParent "$APP_ROOT" dist/Maabarium.zip
 ```
 
-### 5. Submit for Notarization
+### 5. Submit for Notarisation
 
 Using a stored keychain profile:
 
@@ -216,7 +216,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_ROOT"
 ### Notes
 
 - This process still works for manual releases.
-- A focused CI workflow now exists for signed and notarized macOS updater publishing to Cloudflare R2.
+- A focused CI workflow now exists for signed and notarised macOS updater publishing to Cloudflare R2.
 - The runtime data paths remain external to the bundle, but they now live in app-specific OS directories.
 - On macOS that means `~/Library/Application Support/com.maabarium.console/` for the database and blueprint library, plus `~/Library/Logs/com.maabarium.console/` for logs.
 - Existing repository-relative desktop data and blueprints are migrated forward on first run when present.
@@ -230,7 +230,7 @@ The following are still deferred until a later closure pass:
 - `cargo bundle` adoption
 - installer generation
 - multi-platform updater aggregation in one release job
-- multi-provider notarization authentication beyond the current Apple ID plus app-specific password flow
+- multi-provider notarisation authentication beyond the current Apple ID plus app-specific password flow
 
 These are packaging enhancements, not current requirements for the supported desktop workflow.
 
@@ -242,7 +242,7 @@ These are packaging enhancements, not current requirements for the supported des
 - app launch tested manually when a GUI session is available
 - app can create and read its app-specific runtime database and log files
 - app can seed and read its app-specific blueprint library without a repo checkout
-- signing/notarization steps documented for manual release builds
+- signing/notarisation steps documented for manual release builds
 - updater publish flow documented for R2-backed releases
 
 ## Rationale

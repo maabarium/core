@@ -6,9 +6,9 @@ Maabarium keeps portable release builds separate from host-specific local tuning
 
 Use the portable profile for builds that may run on other machines with the same Rust target triple. Use native CPU tuning only for local benchmarking or personal binaries built for the current machine.
 
-## Portable Optimized Build
+## Portable Optimised Build
 
-The workspace defines a `release-lto` profile for optimized local builds with whole-program optimization:
+The workspace defines a `release-lto` profile for optimised local builds with whole-program optimisation:
 
 ```bash
 cargo build --profile release-lto
@@ -32,7 +32,7 @@ RUSTFLAGS="-C target-cpu=native" cargo build --profile release-lto
 
 This allows LLVM to emit instructions for the exact build host CPU.
 
-Do not use this mode for distributed artifacts, CI outputs, or release bundles intended for other systems. A native-tuned build can silently depend on CPU features that are not available on another machine of the same operating-system target.
+Do not use this mode for distributed artefacts, CI outputs, or release bundles intended for other systems. A native-tuned build can silently depend on CPU features that are not available on another machine of the same operating-system target.
 
 ## Validation
 

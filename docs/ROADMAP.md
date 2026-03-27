@@ -56,7 +56,7 @@ Potential improvements:
 - stronger source-ranking heuristics with freshness, diversity, and credibility signals
 - citation health checks that flag broken links, duplicated sourcing, or weak evidence clusters
 - side-by-side comparison views for multiple research passes on the same topic
-- export packages that preserve sources, traces, provider context, and confidence notes in a cleaner artifact
+- export packages that preserve sources, traces, provider context, and confidence notes in a cleaner artefact
 
 Why it matters:
 
@@ -84,7 +84,7 @@ Potential improvements:
 - blueprint recommendations based on repo shape, language, and prior successful runs
 - reusable evaluator presets for common domains such as code quality, product work, and grounded research
 - prompt and model strategy libraries that capture what worked well in previous experiments
-- reusable workspace policies for testing, sandboxing, and branching behavior
+- reusable workspace policies for testing, sandboxing, and branching behaviour
 
 Why it matters:
 
@@ -125,7 +125,7 @@ Potential improvements:
 - runtime strategy selection that adapts automatically to task type, hardware state, and prior performance
 - model routing that learns when to use cheaper local models vs. stronger remote models
 - experiment pacing that changes based on confidence, evaluator signal quality, and current score trend
-- policy-driven autonomy levels ranging from human-in-the-loop to lights-out batch optimization
+- policy-driven autonomy levels ranging from human-in-the-loop to lights-out batch optimisation
 
 Why it matters:
 
@@ -137,7 +137,7 @@ Potential improvements:
 
 - stronger audit trails for workspace mutations, secrets usage, and outbound provider activity
 - policy packs for repo safety, network rules, and sandbox restrictions by workflow type
-- compliance-oriented logging and export modes for teams that need reviewable evidence of system behavior
+- compliance-oriented logging and export modes for teams that need reviewable evidence of system behaviour
 - more explicit provenance tracking for which model, provider, and evaluator logic influenced each result
 
 Why it matters:
