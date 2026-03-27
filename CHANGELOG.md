@@ -8,6 +8,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.8] - 2026-03-27
+
+### Added
+
 - Release manifests now publish standalone CLI archives under `cli.artifacts`, allowing packaged `maabarium` binaries to discover platform-specific self-update payloads.
 
 ### Changed
