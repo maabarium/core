@@ -77,6 +77,7 @@ The updater storage endpoint can be backed by Cloudflare R2.
 - release builds should provide `MAABARIUM_UPDATE_PUBKEY` during `pnpm tauri build` so the packaged app embeds the updater public key.
 - `latest.json` lives at the root of that release origin.
 - signed updater bundles live under platform-key subdirectories such as `darwin-aarch64/`, where the published macOS updater archive is named `Maabarium-Console.app.tar.gz`.
+- CLI self-update archives live under the same platform-key directories, for example `darwin-aarch64/maabarium-darwin-aarch64.tar.gz`, and are registered under `cli.artifacts` in `latest.json`.
 
 The GitHub updater workflow intentionally bundles only the macOS `app` target. The updater release path consumes the signed `.app.tar.gz` bundle and `.sig`; it does not publish the `.dmg`, and skipping that target avoids Finder AppleScript failures on headless macOS runners.
 

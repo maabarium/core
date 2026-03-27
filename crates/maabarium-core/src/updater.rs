@@ -59,26 +59,68 @@ pub struct CliUpdatePlan {
 
 impl UpdaterConfiguration {
     pub fn from_env() -> Result<Self, UpdaterError> {
-        let channel = std::env::var("MAABARIUM_UPDATE_CHANNEL")
-            .ok()
-            .map(|value| value.trim().to_owned())
+        Self::from_sources(
+            std::env::var("MAABARIUM_UPDATE_CHANNEL").ok(),
+            std::env::var("MAABARIUM_UPDATE_MANIFEST_URL").ok(),
+            std::env::var("MAABARIUM_UPDATE_BASE_URL").ok(),
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub fn from_sources(
+        runtime_channel: Option<String>,
+        runtime_manifest_url: Option<String>,
+        runtime_base_url: Option<String>,
+        compiled_channel: Option<&str>,
+        compiled_manifest_url: Option<&str>,
+        compiled_base_url: Option<&str>,
+    ) -> Result<Self, UpdaterError> {
+        let channel = runtime_channel
+            .as_deref()
+            .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                compiled_channel
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| "stable".to_owned());
 
-        if let Ok(manifest_url) = std::env::var("MAABARIUM_UPDATE_MANIFEST_URL") {
-            let manifest_url = manifest_url.trim().to_owned();
-            if !manifest_url.is_empty() {
-                return Ok(Self {
-                    channel,
-                    manifest_url,
-                });
-            }
+        if let Some(manifest_url) = runtime_manifest_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                compiled_manifest_url
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+        {
+            return Ok(Self {
+                channel,
+                manifest_url,
+            });
         }
 
-        let base_url = std::env::var("MAABARIUM_UPDATE_BASE_URL")
-            .ok()
-            .map(|value| value.trim().trim_end_matches('/').to_owned())
+        let base_url = runtime_base_url
+            .as_deref()
+            .map(str::trim)
+            .map(|value| value.trim_end_matches('/'))
             .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                compiled_base_url
+                    .map(str::trim)
+                    .map(|value| value.trim_end_matches('/'))
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
             .ok_or_else(|| UpdaterError::InvalidManifest("Set MAABARIUM_UPDATE_MANIFEST_URL or MAABARIUM_UPDATE_BASE_URL to enable CLI updates".to_owned()))?;
 
         Ok(Self {

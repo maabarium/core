@@ -5,6 +5,7 @@ use maabarium_core::{
     UpdaterConfiguration, check_for_cli_update, default_db_path, default_log_path,
     ensure_git_dependency, install_cli_update,
 };
+use maabarium_core::error::UpdaterError;
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -90,6 +91,17 @@ enum CliExportFormat {
     Csv,
 }
 
+fn cli_updater_configuration() -> Result<UpdaterConfiguration, UpdaterError> {
+    UpdaterConfiguration::from_sources(
+        std::env::var("MAABARIUM_UPDATE_CHANNEL").ok(),
+        std::env::var("MAABARIUM_UPDATE_MANIFEST_URL").ok(),
+        std::env::var("MAABARIUM_UPDATE_BASE_URL").ok(),
+        option_env!("MAABARIUM_COMPILED_UPDATE_CHANNEL"),
+        option_env!("MAABARIUM_COMPILED_UPDATE_MANIFEST_URL"),
+        option_env!("MAABARIUM_COMPILED_UPDATE_BASE_URL"),
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _log_guard = init_tracing()?;
@@ -173,7 +185,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::SelfManage { action } => match action {
             SelfAction::Version => {
                 println!("maabarium {}", env!("CARGO_PKG_VERSION"));
-                match UpdaterConfiguration::from_env() {
+                match cli_updater_configuration() {
                     Ok(config) => {
                         println!("channel: {}", config.channel);
                         println!("manifest: {}", config.manifest_url);
@@ -184,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             SelfAction::Check => {
-                let config = UpdaterConfiguration::from_env()?;
+                let config = cli_updater_configuration()?;
                 match check_for_cli_update(env!("CARGO_PKG_VERSION"), &config).await? {
                     Some(plan) => {
                         println!(
@@ -208,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             SelfAction::Update => {
-                let config = UpdaterConfiguration::from_env()?;
+                let config = cli_updater_configuration()?;
                 let Some(plan) = check_for_cli_update(env!("CARGO_PKG_VERSION"), &config).await?
                 else {
                     println!(

@@ -140,7 +140,7 @@ Optional:
   --minimum-supported-version <semver>
   --migration-notice <text>
   --platform <key=path>    Explicit platform mapping relative to artifacts dir
-  --cli-platform <key=path>  Add a CLI archive mapping relative to the current working directory
+  --cli-platform <key=path>  Add a CLI archive mapping relative to the artifacts dir
 
 The generator auto-discovers updater artifacts when the platform can be inferred
 from the filename or path. Use --platform when separate CI jobs produce ambiguous
@@ -244,9 +244,10 @@ function registerCliArtifact(
   cliArtifacts,
   platformKey,
   relativeArchivePath,
+  artifactsDir,
   baseUrl,
 ) {
-  const archivePath = path.resolve(process.cwd(), relativeArchivePath);
+  const archivePath = path.resolve(artifactsDir, relativeArchivePath);
 
   if (!fs.existsSync(archivePath)) {
     throw new Error(
@@ -320,7 +321,7 @@ function collectPlatforms({ artifactsDir, baseUrl, explicitMappings }) {
   return platforms;
 }
 
-function collectCliArtifacts({ baseUrl, explicitMappings }) {
+function collectCliArtifacts({ artifactsDir, baseUrl, explicitMappings }) {
   const cliArtifacts = {};
 
   for (const mapping of explicitMappings) {
@@ -332,6 +333,7 @@ function collectCliArtifacts({ baseUrl, explicitMappings }) {
       cliArtifacts,
       platformKey,
       relativeArchivePath,
+      artifactsDir,
       baseUrl,
     );
   }
@@ -376,6 +378,7 @@ function main() {
     explicitMappings: args.platforms,
   });
   const cliArtifacts = collectCliArtifacts({
+    artifactsDir: args.artifactsDir,
     baseUrl: args.baseUrl,
     explicitMappings: args.cliPlatforms,
   });

@@ -154,6 +154,7 @@ The desktop publishing workflow publishes:
 
 - updater bundle
 - updater signature
+- standalone CLI archive
 - `latest.json`
 - `install.sh`
 

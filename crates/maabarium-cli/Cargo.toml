@@ -3,6 +3,7 @@ name = "maabarium-cli"
 version = "0.2.7"
 edition = "2024"
 license = "Apache-2.0"
+build = "build.rs"
 
 [[bin]]
 name = "maabarium"

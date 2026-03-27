@@ -8,6 +8,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use maabarium_core::GitDependencyStatus;
 
 const SUPPORTED_UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
+const OLLAMA_MACOS_APP_PATH: &str = "/Applications/Ollama.app";
+const OLLAMA_MACOS_RESOURCE_CLI_PATH: &str =
+    "/Applications/Ollama.app/Contents/Resources/ollama";
+const OLLAMA_MACOS_APP_BINARY_PATH: &str = "/Applications/Ollama.app/Contents/MacOS/Ollama";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -241,25 +245,41 @@ pub fn build_ollama_status() -> OllamaStatus {
     } else {
         None
     };
-    let command_path = find_command("ollama");
-    let app_installed = cfg!(target_os = "macos") && Path::new("/Applications/Ollama.app").exists();
+    let command_path = find_ollama_command();
+    let app_installed = ollama_app_installed();
     let installed = command_path.is_some() || app_installed;
     let running = TcpStream::connect_timeout(
         &SocketAddr::from(([127, 0, 0, 1], 11434)),
         Duration::from_millis(300),
     )
     .is_ok();
-    let models = command_path
-        .as_ref()
-        .filter(|_| running)
-        .map(read_ollama_models)
-        .unwrap_or_default();
+    let (models, model_discovery_error) = if !running {
+        (Vec::new(), None)
+    } else {
+        match command_path.as_ref() {
+            Some(path) => match read_ollama_models(path) {
+                Ok(models) => (models, None),
+                Err(error) => (Vec::new(), Some(error)),
+            },
+            None => (
+                Vec::new(),
+                Some(
+                    "Maabarium could not locate the Ollama CLI binary to inspect installed models."
+                        .to_owned(),
+                ),
+            ),
+        }
+    };
 
     let status_detail = if !installed {
         "Ollama is not installed on this machine yet.".to_owned()
     } else if !running {
         "Ollama appears to be installed, but the local service is not responding on port 11434."
             .to_owned()
+    } else if let Some(error) = model_discovery_error {
+        format!(
+            "Ollama is running, but Maabarium could not inspect local models yet: {error}"
+        )
     } else if models.is_empty() {
         "Ollama is running, but no local models were detected yet.".to_owned()
     } else {
@@ -321,8 +341,14 @@ pub fn start_ollama() -> Result<(), String> {
 }
 
 pub fn pull_recommended_ollama_models() -> Result<(), String> {
-    let command_path =
-        find_command("ollama").ok_or_else(|| "Ollama is not installed on this machine yet.".to_owned())?;
+    let command_path = find_ollama_command().ok_or_else(|| {
+        if ollama_app_installed() {
+            "Ollama appears to be installed, but Maabarium could not locate the CLI binary needed to pull models."
+                .to_owned()
+        } else {
+            "Ollama is not installed on this machine yet.".to_owned()
+        }
+    })?;
 
     let running = TcpStream::connect_timeout(
         &SocketAddr::from(([127, 0, 0, 1], 11434)),
@@ -336,7 +362,11 @@ pub fn pull_recommended_ollama_models() -> Result<(), String> {
         );
     }
 
-    let installed_models = read_ollama_models(&command_path);
+    let installed_models = read_ollama_models(&command_path).map_err(|error| {
+        format!(
+            "Failed to inspect installed Ollama models before pulling recommendations: {error}"
+        )
+    })?;
     let missing_models = recommended_ollama_models()
         .into_iter()
         .filter(|model_name| {
@@ -679,15 +709,55 @@ fn find_command(name: &str) -> Option<PathBuf> {
     })
 }
 
-fn read_ollama_models(command_path: &PathBuf) -> Vec<OllamaModelInfo> {
-    let output = Command::new(command_path).arg("list").output();
-    let stdout = output
-        .ok()
-        .filter(|value| value.status.success())
-        .map(|value| String::from_utf8_lossy(&value.stdout).to_string())
-        .unwrap_or_default();
+fn find_ollama_command() -> Option<PathBuf> {
+    find_command("ollama").or_else(ollama_app_command)
+}
 
-    stdout
+fn ollama_app_installed() -> bool {
+    cfg!(target_os = "macos") && Path::new(OLLAMA_MACOS_APP_PATH).exists()
+}
+
+fn ollama_app_command() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+
+    [OLLAMA_MACOS_RESOURCE_CLI_PATH, OLLAMA_MACOS_APP_BINARY_PATH]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.exists())
+}
+
+fn read_ollama_models(command_path: &Path) -> Result<Vec<OllamaModelInfo>, String> {
+    let output = Command::new(command_path)
+        .arg("list")
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to launch '{}' for model discovery: {error}",
+                command_path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("exit status {}", output.status)
+        };
+        return Err(format!(
+            "'{} list' did not succeed: {detail}",
+            command_path.display()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    Ok(stdout
         .lines()
         .skip_while(|line| line.trim_start().starts_with("NAME"))
         .filter_map(|line| {
@@ -710,7 +780,7 @@ fn read_ollama_models(command_path: &PathBuf) -> Vec<OllamaModelInfo> {
                 modified_at: None,
             })
         })
-        .collect()
+        .collect())
 }
 
 fn parent_directory_available(path: &Path) -> bool {

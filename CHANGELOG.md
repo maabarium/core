@@ -8,15 +8,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- Release manifests now publish standalone CLI archives under `cli.artifacts`, allowing packaged `maabarium` binaries to discover platform-specific self-update payloads.
 
 ### Changed
 
-- None.
+- Packaged CLI builds now embed their updater manifest/base URL configuration at build time, so `maabarium self version`, `self check`, and `self update` do not depend on runtime shell environment variables when launched outside CI.
 
 ### Fixed
 
-- None.
+- The desktop Ollama onboarding flow now detects app-bundle installs on macOS, so existing `/Applications/Ollama.app` setups are no longer misreported as missing when the `ollama` binary is not on `PATH`.
+- The desktop local-runtime status now reports Ollama model inspection failures explicitly instead of incorrectly claiming that no local models exist, and the recommended-model pull action uses the same resolved Ollama command path.
 
 ### Breaking Changes
 

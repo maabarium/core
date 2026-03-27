@@ -66,6 +66,8 @@ Current supported packaging/distribution path:
 cd crates/maabarium-desktop && pnpm tauri build
 ```
 
+Current hosted desktop releases support Apple Silicon Macs running macOS 11 or later.
+
 Expected macOS bundle output:
 
 ```text
