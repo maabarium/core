@@ -83,23 +83,25 @@ The GitHub updater workflow intentionally bundles only the macOS `app` target. T
 
 Because the desktop app embeds a Wasmtime-based sandbox validator, signed macOS release bundles also need the hardened-runtime exception `com.apple.security.cs.allow-unsigned-executable-memory`. The desktop package now declares that entitlement in `crates/maabarium-desktop/Entitlements.plist`, and release validation checks the produced `.app` bundle before upload so CI fails fast if the entitlement disappears.
 
+If GitHub Actions minutes are unavailable, you can run the same operator flow from a local checkout: `bash ./scripts/release/run-local-release-prep.sh --bump patch` for the version/tag/release step, then `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel stable` for the signed macOS publish step.
+
 ## Release Operator Checklist
 
 Use this checklist when you need to publish or republish desktop updater metadata.
 
 ### Stable release sequence
 
-1. Run `.github/workflows/release-prep.yml` with the correct semver bump.
+1. Run `.github/workflows/release-prep.yml`, or locally run `bash ./scripts/release/run-local-release-prep.sh --bump <patch|minor|major>`.
 2. Let `release-prep` create and publish the normal GitHub Release plus the `desktop-vX.Y.Z` tag.
-3. Let `.github/workflows/desktop-release-r2.yml` run from that published Release event, or rerun it manually for the same tag with `release_channel=stable` if you need to republish.
+3. Let `.github/workflows/desktop-release-r2.yml` run from that published Release event, or locally run `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel stable` if you need to publish from your workstation.
 4. Confirm the workflow published `stable/latest.json` and refreshed the root `latest.json` alias used by `install.sh`.
 5. Confirm the signed updater bundle, `.sig`, and `install.sh` were uploaded to both the GitHub Release and Cloudflare R2.
 
 ### Beta release sequence
 
 1. Create a GitHub prerelease for the tag you want to distribute as beta.
-2. Let `.github/workflows/desktop-release-r2.yml` run from that prerelease event, which automatically maps the release to the `beta` channel.
-3. If you need to rebuild or republish that same prerelease tag, run `desktop-release-r2` manually with the release tag and `release_channel=beta`.
+2. Let `.github/workflows/desktop-release-r2.yml` run from that prerelease event, or locally run `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel beta`; both paths map the release to the `beta` channel.
+3. If you need to rebuild or republish that same prerelease tag, rerun the same publish step with `release_channel=beta`.
 4. Confirm the workflow published `beta/latest.json` without replacing the root `latest.json` stable alias.
 5. Confirm the signed updater bundle, `.sig`, and `install.sh` were uploaded to the GitHub Release and Cloudflare R2.
 

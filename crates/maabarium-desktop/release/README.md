@@ -153,6 +153,8 @@ The release system now has two layers:
 - `.github/workflows/release-prep.yml` is the authoritative manual entry point. It accepts a required semver bump (`patch`, `minor`, or `major`), updates the version-bearing files, commits that change back to the selected branch, and creates the GitHub Release plus the `desktop-v*` tag.
 - `.github/workflows/desktop-release-r2.yml` reacts to published or prereleased GitHub Releases and builds a signed macOS updater bundle from the release tag. It can still be run manually with `workflow_dispatch` when you need to republish an existing tag.
 
+If GitHub Actions minutes are unavailable, the local equivalents are `bash ./scripts/release/run-local-release-prep.sh --bump <patch|minor|major>` from the repository root and `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel stable|beta` for the macOS publish step.
+
 The desktop publishing workflow publishes:
 
 - updater bundle
@@ -200,6 +202,17 @@ The semver level is intentionally explicit. The workflow does not try to infer m
 7. Publishing that Release triggers `desktop-release-r2`, which builds and publishes the signed updater artifacts plus the generated `install.sh`.
 
 to Cloudflare R2.
+
+### Local Workstation Flow
+
+Run this when you need the same release flow without consuming GitHub Actions minutes.
+
+1. From the repository root, run `bash ./scripts/release/run-local-release-prep.sh --bump patch` and add `--draft` or `--prerelease` when needed.
+2. Check out the resulting release tag locally so the workstation publish step builds the exact tagged commit.
+3. Ensure the Apple signing identity is available in Keychain, or set `APPLE_CERTIFICATE` plus `APPLE_CERTIFICATE_PASSWORD` so the script can import a temporary keychain.
+4. Export the updater signing key, updater public key, update base URL, Apple notarization values, and Cloudflare R2 credentials.
+5. Run `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel stable`.
+6. Confirm the script uploads the updater bundle, signature, CLI archive, channel manifest, and `install.sh` to the GitHub Release and Cloudflare R2.
 
 ### Required GitHub Secrets
 
