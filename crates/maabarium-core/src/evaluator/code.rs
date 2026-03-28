@@ -98,8 +98,12 @@ impl CodeEvaluator {
     }
 
     fn target_alignment(&self, proposal: &Proposal) -> f64 {
-        if proposal.file_patches.is_empty() || self.target_files.is_empty() {
+        if self.target_files.is_empty() {
             return 1.0;
+        }
+
+        if proposal.file_patches.is_empty() {
+            return 0.0;
         }
 
         let matched = proposal
@@ -122,6 +126,10 @@ impl CodeEvaluator {
         sandbox: &SandboxSummary,
         alignment: f64,
     ) -> f64 {
+        if proposal.file_patches.is_empty() {
+            return 0.0;
+        }
+
         let summary_words = proposal.summary.split_whitespace().count() as f64;
         let summary_signal = (summary_words / 20.0).clamp(0.2, 1.0);
         let patch_signal = if sandbox.file_count == 0 {
@@ -378,5 +386,39 @@ mod tests {
             .expect("evaluation should succeed");
 
         assert!((0.0..=1.0).contains(&result.weighted_total));
+    }
+
+    #[tokio::test]
+    async fn scores_noop_proposals_as_zero() {
+        if std::env::var_os("MAABARIUM_SANDBOX_SUBPROCESS").is_some() {
+            return;
+        }
+
+        let evaluator = CodeEvaluator::new(
+            vec![MetricDef {
+                name: "quality".into(),
+                weight: 1.0,
+                direction: "maximize".into(),
+                description: "Overall quality".into(),
+            }],
+            vec!["src/**/*.rs".into()],
+            false,
+            env!("CARGO_MANIFEST_DIR"),
+        );
+
+        let result = evaluator
+            .evaluate(
+                &Proposal {
+                    summary: "No file changes were proposed".into(),
+                    file_patches: vec![],
+                },
+                1,
+                &EvaluationContext::default(),
+            )
+            .await
+            .expect("evaluation should succeed");
+
+        assert_eq!(result.weighted_total, 0.0);
+        assert!(result.scores.iter().all(|score| score.value == 0.0));
     }
 }

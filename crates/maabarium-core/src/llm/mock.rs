@@ -22,6 +22,13 @@ impl LLMProvider for MockProvider {
         let content = if request.prompt.contains("Respond with only a number") {
             "0.78".to_owned()
         } else if request.prompt.contains("\"file_patches\"") {
+            if request.prompt.contains("MAABARIUM_MOCK_EMPTY_PATCHSET") {
+                return Ok(CompletionResponse {
+                    content: "{\n  \"summary\": \"Mock provider generated no file changes\",\n  \"file_patches\": []\n}".to_owned(),
+                    tokens_used: 16,
+                    latency: std::time::Duration::from_millis(5),
+                });
+            }
             let path = request
                 .prompt
                 .lines()

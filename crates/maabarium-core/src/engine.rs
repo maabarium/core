@@ -516,6 +516,23 @@ impl Engine {
                 let _ = self.git.delete_branch(&branch).await;
                 info!("Engine cancelled after iteration {iteration} completed");
                 PromotionOutcome::Cancelled
+            } else if proposal.file_patches.is_empty() {
+                info!(
+                    run_id = %self.run_id,
+                    iteration,
+                    "Rejecting no-op proposal with no file patches"
+                );
+                self.report_progress(
+                    EnginePhase::CleaningUp,
+                    Some(iteration),
+                    Some(result.weighted_total),
+                    Some(result.duration_ms),
+                    Some(format!(
+                        "Rejecting no-op proposal for branch '{branch}'"
+                    )),
+                );
+                let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                PromotionOutcome::Rejected
             } else if crate::metrics::is_improvement(
                 baseline,
                 result.weighted_total,
@@ -547,7 +564,27 @@ impl Engine {
                             committed,
                             "Promotion commit completed"
                         );
-                        if let Err(error) = self
+                        if !committed {
+                            info!(
+                                run_id = %self.run_id,
+                                iteration,
+                                "Rejecting promotion because the experiment workspace produced no commit"
+                            );
+                            self.report_progress(
+                                EnginePhase::CleaningUp,
+                                Some(iteration),
+                                Some(result.weighted_total),
+                                Some(result.duration_ms),
+                                Some(format!(
+                                    "Rejecting no-op workspace for branch '{branch}'"
+                                )),
+                            );
+                            let _ = self
+                                .git
+                                .detach_experiment_workspace(&experiment_workspace.path)
+                                .await;
+                            PromotionOutcome::Rejected
+                        } else if let Err(error) = self
                             .git
                             .create_branch_at_workspace_head(&experiment_workspace.path, &branch)
                             .await
