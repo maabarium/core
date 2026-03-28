@@ -16,6 +16,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.12] - 2026-03-28
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
 - Application workflows now reject empty proposal patchsets and no-op detached workspaces instead of promoting a retained branch when nothing was actually written to the repository.
 
 ### Breaking Changes
