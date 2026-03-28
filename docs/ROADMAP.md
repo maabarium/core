@@ -77,6 +77,19 @@ The desktop app should become a decision cockpit, not just a passive status surf
 
 ## Mid-Term Opportunities
 
+### Guided Workflow Authoring
+
+Potential improvements:
+
+- redesign the blueprint wizard around user intent first, starting from questions such as "What are you trying to produce?" and "Should this modify code, write one document, or generate a sourced brief?"
+- derive safer defaults for `language`, `target_files`, evaluator choice, and test requirements from those answers instead of forcing users to understand the raw blueprint contract up front
+- add a review step that summarizes the inferred workflow type, output type, and target paths before Maabarium writes the TOML file
+- make exact file targets versus multi-file globs explicit in the UI so document workflows do not get configured like application workflows by accident
+
+Why it matters:
+
+Blueprint authoring should feel like selecting an operating mode, not hand-assembling an internal config contract. Better guided authoring should reduce invalid workflows and shorten time-to-first-useful-run.
+
 ### 5. Reusable Workflow Intelligence
 
 Potential improvements:
@@ -117,6 +130,19 @@ Why it matters:
 The system becomes more valuable when the output is easy to review, discuss, and promote beyond a single operator.
 
 ## Longer-Term Opportunities
+
+### LLM-Assisted Workflow Intent Capture
+
+Potential improvements:
+
+- let users describe the workflow they want in natural language, then have an LLM draft structured wizard answers instead of raw TOML
+- keep the LLM in an assistant role, with deterministic product rules still deciding final field mappings and validation
+- require a mandatory review screen that shows inferred workflow type, target paths, evaluator path, and model choices before creation
+- preserve traceability by showing which parts of the blueprint were inferred automatically and which were edited by the user
+
+Why it matters:
+
+Natural-language setup can remove a lot of friction, but only if Maabarium keeps the result reviewable and safe. The right product shape is assisted authoring with strong confirmation, not opaque config generation.
 
 ### 8. Adaptive Automation And Smarter Runtime Routing
 

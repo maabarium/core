@@ -112,7 +112,7 @@ export function wizardTemplateDefaults(template: WizardTemplate) {
       return {
         label: "Code Quality",
         description:
-          "Create a starter blueprint for code changes with tests, runtime constraints, and maintainability-focused evaluation.",
+          "Use this when you want to improve existing source files and validate the result against tests, runtime behavior, and maintainability metrics.",
         language: "rust",
         targetFiles: ["src/**/*.rs", "tests/**/*.rs"],
         requireTestsPass: true,
@@ -121,7 +121,7 @@ export function wizardTemplateDefaults(template: WizardTemplate) {
       return {
         label: "Product Builder",
         description:
-          "Create a full-application blueprint that can plan, build, and refine product scope across frontend, backend, and docs.",
+          "Use this when the workflow should change an application across multiple source trees. It is not the right fit for a single named markdown deliverable.",
         language: "application",
         targetFiles: ["src/**/*", "crates/**/*", "apps/**/*", "packages/**/*"],
         requireTestsPass: true,
@@ -130,7 +130,7 @@ export function wizardTemplateDefaults(template: WizardTemplate) {
       return {
         label: "General Research",
         description:
-          "Create a research blueprint for sourced briefs, internet-backed lookups when available, and explicit citations for major claims.",
+          "Use this when the output is a sourced brief with citations, discovery traces, and markdown-style research notes rather than code changes.",
         language: "research",
         targetFiles: ["docs/**/*.md", "research/**/*.md", "notes/**/*.md"],
         requireTestsPass: false,
@@ -139,7 +139,7 @@ export function wizardTemplateDefaults(template: WizardTemplate) {
       return {
         label: "Prompt Optimization",
         description:
-          "Create a prompt-focused blueprint tuned for clarity, actionability, and concise editing loops.",
+          "Use this when the workflow should create or refine prompt or document assets. Point target files at an exact `.md` path when you want one specifically named output file.",
         language: "markdown",
         targetFiles: ["prompts/**/*.md"],
         requireTestsPass: false,
@@ -157,7 +157,7 @@ export function wizardTemplateDefaults(template: WizardTemplate) {
       return {
         label: "Custom",
         description:
-          "Create a general-purpose starter blueprint you can refine later in the TOML file.",
+          "Use this only when none of the guided workflow shapes fit. You will likely need to set language, target paths, evaluator expectations, and metrics manually.",
         language: "text",
         targetFiles: ["src/**/*"],
         requireTestsPass: false,

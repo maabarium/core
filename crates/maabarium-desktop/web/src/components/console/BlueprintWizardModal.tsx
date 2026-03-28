@@ -69,7 +69,7 @@ const TAB_ORDER: Array<{ id: WizardTab; label: string; copy: string }> = [
   {
     id: "basics",
     label: "Basics",
-    copy: "Identity, workspace scope, and template intent.",
+    copy: "Workflow type, output shape, and workspace scope.",
   },
   {
     id: "evaluation",
@@ -462,12 +462,12 @@ export function BlueprintWizardModal({
               <h2 className="mt-2 text-2xl font-black tracking-tight text-white">
                 {isEditMode
                   ? "Edit an existing workflow"
-                  : "Create a valid starter blueprint"}
+                  : "Create a workflow from the outcome you want"}
               </h2>
               <p className="mt-2 max-w-3xl text-sm text-slate-400">
                 {isEditMode
                   ? "Load a runnable workflow back into the wizard, tweak its structure, and save the TOML in place without dropping into manual editing first."
-                  : "Organize the workflow in focused tabs, keep the setup-backed model choices visible, and generate a runnable TOML file without dropping into raw configuration first."}
+                  : "Pick the workflow type first, then confirm the workspace, output paths, evaluation rules, and models before Maabarium writes the runnable TOML file."}
               </p>
             </div>
             <button
@@ -511,15 +511,24 @@ export function BlueprintWizardModal({
               })}
             </div>
 
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4 text-sm leading-relaxed text-slate-300">
+              Choose the template by the deliverable you want, not by the repo
+              alone. Use code-oriented templates for existing source-tree
+              changes, research for cited briefs, and prompt/markdown flows when
+              you want one named document or prompt asset. When the workflow
+              should create or refine one specific file, use an exact relative
+              path instead of a broad glob.
+            </div>
+
             {showHydrationReview ? (
               <div className="rounded-xl border border-teal-400/15 bg-teal-500/[0.06] px-4 py-4">
                 <div className="text-[10px] font-black uppercase tracking-[0.18em] text-teal-200">
-                  Template Hydration Review
+                  Workflow Summary
                 </div>
                 <div className="mt-2 text-sm text-slate-200">
-                  This template generates a runnable workflow in the desktop
-                  blueprint directory instead of loading the starter template
-                  directly.
+                  Maabarium will write a runnable workflow using the choices
+                  below. Check that the workflow type, output path pattern, and
+                  primary model match what you actually want before saving.
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] text-slate-400 md:grid-cols-3">
                   <div>
@@ -726,7 +735,7 @@ export function BlueprintWizardModal({
                     <div className="mt-1 text-xs text-slate-500">
                       {isResearchTemplate
                         ? "General research keeps language and target files as optional scoping hints. They are there for cases where you want research outputs organized by domain or written back into specific repo areas."
-                        : "These defaults shape where the workflow looks and what it treats as in-scope."}
+                        : "These settings define what kind of workflow this is and where it is allowed to write. Use exact file paths for one named document and globs for families of existing files."}
                     </div>
                   </div>
 
@@ -739,7 +748,7 @@ export function BlueprintWizardModal({
                         help={
                           isResearchTemplate
                             ? "Research workflows can leave this broad. Use it when you want the generated workflow to carry an explicit domain label such as policy, product, or security."
-                            : "The language value is written into the blueprint domain metadata and drives filtering in the workflow library."
+                            : "This is not just a label. It helps Maabarium choose the evaluator path. Use markdown or prompt for document outputs, research for cited briefs, and code or application for source-tree changes."
                         }
                       />
                       <input
@@ -756,8 +765,8 @@ export function BlueprintWizardModal({
                     </div>
                     <div>
                       <FieldLabel
-                        label="Target Files"
-                        help="Comma or newline separated glob patterns."
+                        label="Target Paths"
+                        help="Use an exact relative file path when one named output should be created or refined. Use comma or newline separated globs when the workflow should operate across many existing files."
                       />
                       <textarea
                         value={form.targetFilesText}
@@ -778,6 +787,28 @@ export function BlueprintWizardModal({
                       Research templates default to documentation-style output
                       paths so you can capture sourced briefs without forcing
                       code-specific targeting.
+                    </FieldHint>
+                  ) : null}
+
+                  {!isResearchTemplate &&
+                  ["markdown", "prompt"].includes(
+                    form.language.trim().toLowerCase(),
+                  ) ? (
+                    <FieldHint>
+                      For document workflows, prefer an exact relative `.md`
+                      path such as `docs/release-plan.md` when you want one
+                      specifically named output file.
+                    </FieldHint>
+                  ) : null}
+
+                  {!isResearchTemplate &&
+                  !["markdown", "prompt"].includes(
+                    form.language.trim().toLowerCase(),
+                  ) ? (
+                    <FieldHint>
+                      For code and application workflows, prefer globs that
+                      match existing source trees such as `src/**/*` or
+                      `crates/**/*`.
                     </FieldHint>
                   ) : null}
                 </div>

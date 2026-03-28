@@ -159,6 +159,15 @@ pnpm install
 pnpm tauri dev
 ```
 
+## Choosing A Workflow Type
+
+- Use `code-quality` when you want to improve existing source files and validate the result against tests or runtime behavior.
+- Use `product-builder` when the workflow should change an application across multiple source trees, not when you only want one named markdown output.
+- Use `general-research` when the deliverable is a sourced brief with citations and markdown-style output.
+- Use `prompt-improvement` when the workflow should create or refine prompt or document assets; prefer an exact `.md` target path when you want one specifically named file.
+
+When the workflow should create or refine one named document, use an exact relative target path such as `docs/project-brief.md` instead of a broad glob. Use globs like `src/**/*.rs` or `docs/**/*.md` when the workflow is meant to operate over a family of existing files.
+
 ## Blueprint Gallery
 
 - `blueprints/example.toml` — example prompt-lab workflow for improving Maabarium itself

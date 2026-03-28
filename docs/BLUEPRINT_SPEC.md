@@ -16,6 +16,17 @@ blueprints/
 └── general-research.toml
 ```
 
+## Choose Workflow Shape First
+
+Before editing individual TOML fields, decide what the workflow is supposed to produce:
+
+- Existing code or application changes: use a code-oriented language such as `rust` or `application`, point `target_files` at existing source-tree globs, and usually keep `require_tests_pass = true`.
+- One named document or prompt asset: use `language = "markdown"` or `language = "prompt"`, and prefer an exact relative path such as `docs/project-brief.md` when the workflow should create or refine one specific output file.
+- Research brief with citations: use `language = "research"`, keep targets markdown-oriented, and use research metrics such as citation coverage or factual grounding.
+- LoRA artefact validation: use `language = "lora"` and target adapter manifests and artefacts rather than source trees.
+
+The most common authoring mistake is choosing a code-oriented workflow shape for a document-oriented task. If the output is a single markdown file, the blueprint should look like a document workflow from the start.
+
 ## Complete Reference
 
 ```toml
@@ -129,6 +140,12 @@ plugin_id = "custom-evaluator"   # optional display/runtime identifier
 | `language`     | string           | ✓        | Programming language hint (used by evaluators)                        |
 
 For document-first workflows, use `language = "markdown"` or `language = "prompt"` and include markdown target paths such as `docs/**/*.md` or an exact destination like `docs/project-echo-implementation.md`. Exact markdown file targets are recommended when the workflow must create or refine one specifically named document.
+
+Use exact paths when the workflow should create or refine one named output file. Use globs when the workflow should search across many existing files. For example:
+
+- Exact path: `docs/release-plan.md`
+- Existing-file glob: `src/**/*.rs`
+- Directory-style markdown glob: `docs/**/*.md`
 
 ### `[constraints]`
 
@@ -246,6 +263,8 @@ Maabarium selects one built-in evaluator per blueprint:
 - `research`: used for research-oriented blueprints
 
 If a workflow is intended to write a document instead of mutating source code, do not leave it on the default code path. Set the language to `markdown` or `prompt`, and ensure the configured target paths include `.md` targets so the prompt evaluator and markdown-safe file creation guidance are selected.
+
+Treat `language` as behavior-selecting metadata, not cosmetic labeling. In practice it helps Maabarium choose the evaluator path, safe creation guidance, and some library affordances.
 
 The research evaluator activates when a blueprint clearly targets research work, for example:
 

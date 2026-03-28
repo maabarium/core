@@ -12,7 +12,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- Blueprint documentation and desktop wizard copy now explain workflow types, output types, and target path rules more explicitly, including when to use exact markdown output paths versus broad globs.
 
 ### Fixed
 
