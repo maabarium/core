@@ -25,7 +25,8 @@ fn configure_embedded_updater_pubkey() -> Result<(), String> {
 
     let env_pubkey = env::var("MAABARIUM_UPDATE_PUBKEY")
         .ok()
-        .map(|value| value.trim().to_owned())
+        .map(|value| normalize_updater_pubkey(&value))
+        .transpose()?
         .filter(|value| !value.is_empty());
 
     let file_pubkey = env::var("MAABARIUM_UPDATE_PUBKEY_FILE")
@@ -37,7 +38,7 @@ fn configure_embedded_updater_pubkey() -> Result<(), String> {
             println!("cargo:rerun-if-changed={}", file_path.display());
             fs::read_to_string(&file_path)
                 .map_err(|error| format!("failed to read {}: {error}", file_path.display()))
-                .map(|value| value.trim().to_owned())
+                .and_then(|value| normalize_updater_pubkey(&value))
         })
         .transpose()?;
 
@@ -46,6 +47,34 @@ fn configure_embedded_updater_pubkey() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn normalize_updater_pubkey(raw_value: &str) -> Result<String, String> {
+    let lines = raw_value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace("\\n", "\n")
+        .split('\n')
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+    if lines.is_empty() || lines.len() > 2 {
+        return Err(
+            "updater public key must be either the raw key line or the two-line minisign .pub file contents"
+                .to_owned(),
+        );
+    }
+
+    if lines.len() == 2 && !lines[0].to_ascii_lowercase().starts_with("untrusted comment:") {
+        return Err(
+            "updater public key contains two lines, but the first line is not the expected minisign comment header"
+                .to_owned(),
+        );
+    }
+
+    Ok(lines[lines.len() - 1].clone())
 }
 
 fn configure_embedded_updater_endpoint() -> Result<(), String> {

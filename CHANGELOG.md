@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Desktop release validation now rejects mismatched updater private/public minisign keypairs before publishing, preventing in-app updater failures where a downloaded release bundle cannot pass signature verification.
 
 ### Breaking Changes
 

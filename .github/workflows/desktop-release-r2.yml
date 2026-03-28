@@ -121,6 +121,7 @@ jobs:
           : "${AWS_ACCESS_KEY_ID:?CLOUDFLARE_R2_ACCESS_KEY_ID must be configured}"
           : "${AWS_SECRET_ACCESS_KEY:?CLOUDFLARE_R2_SECRET_ACCESS_KEY must be configured}"
           node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-pubkey.mjs" --github-env
+          node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-keypair.mjs"
 
       - name: Install desktop dependencies
         run: cd crates/maabarium-desktop && pnpm install --frozen-lockfile
@@ -168,7 +169,8 @@ jobs:
         run: |
           set -euo pipefail
           export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET:-}"
-          export TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$MAABARIUM_UPDATE_PUBKEY")"
+          RAW_PUBKEY="$(if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then cat "$MAABARIUM_UPDATE_PUBKEY_FILE"; else printf '%s' "$MAABARIUM_UPDATE_PUBKEY"; fi | node -e 'const fs = require("fs"); const raw = fs.readFileSync(0, "utf8").replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim(); const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean); process.stdout.write(lines[lines.length - 1]);')"
+          export TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
           cd crates/maabarium-desktop
           pnpm tauri build \
             --ci \

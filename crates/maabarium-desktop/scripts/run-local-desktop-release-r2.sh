@@ -276,6 +276,7 @@ if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
 else
   node ./scripts/validate-updater-pubkey.mjs --value "$MAABARIUM_UPDATE_PUBKEY"
 fi
+node ./scripts/validate-updater-keypair.mjs
 
 RAW_PUBKEY="$(normalize_pubkey_line)"
 TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"

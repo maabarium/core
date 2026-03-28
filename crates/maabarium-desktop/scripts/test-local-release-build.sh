@@ -62,6 +62,7 @@ if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
 else
   node ./scripts/validate-updater-pubkey.mjs --value "$MAABARIUM_UPDATE_PUBKEY"
 fi
+node ./scripts/validate-updater-keypair.mjs
 
 RAW_PUBKEY="$({
   if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
