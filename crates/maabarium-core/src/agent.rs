@@ -234,7 +234,7 @@ impl Agent {
             .collect::<HashSet<_>>();
         let suggested_create_paths = suggest_create_paths(target_files, language);
         let files_desc = if file_contexts.is_empty() {
-            if language.eq_ignore_ascii_case("research") && !suggested_create_paths.is_empty() {
+            if supports_empty_target_creation_guidance(language) && !suggested_create_paths.is_empty() {
                 format!(
                     "No existing target files were found. Create a new markdown file instead of returning an empty patch. Safe relative paths:\n{}",
                     suggested_create_paths
@@ -1048,6 +1048,11 @@ fn suggest_create_paths(target_files: &[String], language: &str) -> Vec<String> 
 
 fn suggest_create_path(pattern: &str, language: &str) -> Option<String> {
     let normalized = pattern.trim().replace('\\', "/");
+
+    if !normalized.contains('*') && Path::new(normalized.as_str()).extension().is_some() {
+        return Some(normalized);
+    }
+
     let prefix = normalized
         .split("**")
         .next()
@@ -1069,6 +1074,13 @@ fn suggest_create_path(pattern: &str, language: &str) -> Option<String> {
     };
 
     Some(format!("{prefix}/{file_name}"))
+}
+
+fn supports_empty_target_creation_guidance(language: &str) -> bool {
+    matches!(
+        language.to_ascii_lowercase().as_str(),
+        "research" | "markdown" | "prompt"
+    )
 }
 
 fn resolve_repo_root(repo_path: &str) -> Result<PathBuf, LLMError> {
@@ -1361,6 +1373,23 @@ mod tests {
                 "research/research-brief.md".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn suggests_markdown_creation_path_for_exact_target_file() {
+        let suggestions = suggest_create_paths(&["docs/project-echo-implementation.md".into()], "markdown");
+
+        assert_eq!(
+            suggestions,
+            vec!["docs/project-echo-implementation.md".to_owned()]
+        );
+    }
+
+    #[test]
+    fn suggests_markdown_creation_path_for_glob_target() {
+        let suggestions = suggest_create_paths(&["docs/**/*.md".into()], "markdown");
+
+        assert_eq!(suggestions, vec!["docs/draft.md".to_owned()]);
     }
 
     #[test]

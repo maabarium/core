@@ -128,6 +128,8 @@ plugin_id = "custom-evaluator"   # optional display/runtime identifier
 | `target_files` | array of strings | ✓        | Glob patterns for files the agent may modify                          |
 | `language`     | string           | ✓        | Programming language hint (used by evaluators)                        |
 
+For document-first workflows, use `language = "markdown"` or `language = "prompt"` and include markdown target paths such as `docs/**/*.md` or an exact destination like `docs/project-echo-implementation.md`. Exact markdown file targets are recommended when the workflow must create or refine one specifically named document.
+
 ### `[constraints]`
 
 | Field                | Type    | Required | Default | Description                                            |
@@ -242,6 +244,8 @@ Maabarium selects one built-in evaluator per blueprint:
 - `prompt`: used for prompt or markdown optimisation blueprints
 - `lora`: used for LoRA artefact validation blueprints
 - `research`: used for research-oriented blueprints
+
+If a workflow is intended to write a document instead of mutating source code, do not leave it on the default code path. Set the language to `markdown` or `prompt`, and ensure the configured target paths include `.md` targets so the prompt evaluator and markdown-safe file creation guidance are selected.
 
 The research evaluator activates when a blueprint clearly targets research work, for example:
 
