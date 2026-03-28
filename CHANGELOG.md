@@ -16,6 +16,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.2.14] - 2026-03-28
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
 - Empty markdown and prompt workflows now receive safe file-creation guidance when no target document exists yet, and exact markdown target-file paths no longer expand into invalid nested `draft.md` suggestions.
 - Prompt and markdown workflow evaluation now accepts numeric scores followed by extra model text, preventing first-iteration failures when the evaluator model returns a valid score plus a short explanation instead of a bare float.
 
