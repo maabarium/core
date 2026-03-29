@@ -38,6 +38,7 @@ export function ReadinessCenterCard({
   onStartOllama,
   onPreviewBranchCleanup,
   onCleanupBranches,
+  embedded = false,
 }: {
   readinessItems: ReadinessItem[];
   experimentBranchInventory: ExperimentBranchInventory | null;
@@ -53,6 +54,7 @@ export function ReadinessCenterCard({
   onCleanupBranches: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
+  embedded?: boolean;
 }) {
   const [thresholdMonths, setThresholdMonths] = useState(
     experimentBranchInventory?.defaultThresholdMonths ?? 3,
@@ -125,20 +127,8 @@ export function ReadinessCenterCard({
     setCleanupConfirmOpen(true);
   };
 
-  return (
-    <GlassCard
-      title="Readiness Center"
-      icon={LifeBuoy}
-      headerActions={
-        <button
-          type="button"
-          onClick={onOpenSetup}
-          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
-        >
-          Run Setup
-        </button>
-      }
-    >
+  const content = (
+    <>
       <div className="space-y-4">
         <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -158,6 +148,17 @@ export function ReadinessCenterCard({
               </Badge>
             </div>
           </div>
+          {embedded ? (
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={onOpenSetup}
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+              >
+                Run Setup
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-2">
@@ -434,7 +435,7 @@ export function ReadinessCenterCard({
                   <Trash2 size={18} />
                 </div>
                 <div>
-                  <div className="text-[10px] font-black uppercase tracking-[0.24em] text-rose-200">
+                  <div className="text-[10px] font-black uppercase tracking-[0.18em] text-rose-200">
                     Confirm Cleanup
                   </div>
                   <h2 className="mt-2 text-xl font-black tracking-tight text-white">
@@ -495,6 +496,28 @@ export function ReadinessCenterCard({
           </div>
         </div>
       ) : null}
+    </>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <GlassCard
+      title="Readiness Center"
+      icon={LifeBuoy}
+      headerActions={
+        <button
+          type="button"
+          onClick={onOpenSetup}
+          className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/10"
+        >
+          Run Setup
+        </button>
+      }
+    >
+      {content}
     </GlassCard>
   );
 }

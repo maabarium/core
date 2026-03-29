@@ -9,13 +9,15 @@ function formatScore(value: number) {
 
 export function LoraEvidenceCard({
   latestLoraExperiment,
+  embedded = false,
 }: {
   latestLoraExperiment: PersistedExperiment | null;
+  embedded?: boolean;
 }) {
   const lora = latestLoraExperiment?.lora;
 
-  return (
-    <GlassCard title="LoRA Runtime" icon={FlaskConical} className="h-full">
+  const content = (
+    <>
       {lora ? (
         <div className="flex h-full flex-col gap-4">
           <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
@@ -118,6 +120,16 @@ export function LoraEvidenceCard({
           No persisted LoRA runtime metadata is available yet.
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <GlassCard title="LoRA Runtime" icon={FlaskConical} className="h-full">
+      {content}
     </GlassCard>
   );
 }

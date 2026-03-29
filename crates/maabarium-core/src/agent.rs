@@ -16,6 +16,7 @@ use crate::llm::{CompletionRequest, LLMProvider, ResponseFormat};
 
 const MAX_CONTEXT_FILES: usize = 3;
 const MAX_FILE_CHARS: usize = 4_000;
+const MAX_INVALID_RESPONSE_SNIPPET_CHARS: usize = 1_200;
 const DEFAULT_PROPOSAL_MAX_TOKENS: u32 = 768;
 const COMPLEX_PROPOSAL_MAX_TOKENS: u32 = 1_536;
 
@@ -55,9 +56,9 @@ fn research_patch_guidance(language: &str) -> &'static str {
          Research workflow rules:\n\
          - Prefer a single markdown patch in docs/, research/, notes/, or reports/.\n\
          - Every major claim you add must include at least one inline markdown link or bare external URL.\n\
-         - If you cannot supply at least one external URL, return an empty file_patches array and explain the evidence gap in summary.\n\
          - Prefer appending a new section or creating a new markdown file instead of rewriting large existing files.\n\
          - When modifying an existing file, copy exact unchanged context lines and ensure each unified diff hunk count is exact.\n\
+         - If you cannot supply at least one external URL, return an empty file_patches array, explain the evidence gap in summary, and include a follow-up search cue using the exact phrase Search for \"...\".\n\
          - Do not invent hunk sizes or line counts."
     } else {
         ""
@@ -113,12 +114,52 @@ fn proposal_response_format() -> ResponseFormat {
     }))
 }
 
+fn proposal_repair_prompt(original_prompt: &str, raw_response: &str) -> String {
+    format!(
+        "A previous model answer for this task did not include a top-level JSON object, so it could not be parsed into a proposal.\n\n\
+         Repair the answer by converting it into valid JSON that matches the required proposal schema.\n\
+         Preserve the original intent and content where possible.\n\
+         If the original answer is incomplete or unsafe, return an empty file_patches array and explain the limitation in summary.\n\
+         Do not add markdown fences or commentary outside the JSON object.\n\n\
+         Original task prompt:\n{original_prompt}\n\n\
+         Original model answer:\n{raw_response}"
+    )
+}
+
+fn invalid_response_snippet(raw_response: &str) -> String {
+    let trimmed = raw_response.trim();
+    if trimmed.is_empty() {
+        return "<empty response>".to_owned();
+    }
+
+    let total_chars = trimmed.chars().count();
+    if total_chars <= MAX_INVALID_RESPONSE_SNIPPET_CHARS {
+        return trimmed.to_owned();
+    }
+
+    let snippet = trimmed
+        .chars()
+        .take(MAX_INVALID_RESPONSE_SNIPPET_CHARS)
+        .collect::<String>();
+    format!(
+        "{snippet}\n...[truncated {} chars]",
+        total_chars - MAX_INVALID_RESPONSE_SNIPPET_CHARS
+    )
+}
+
+fn is_missing_json_object_error(error: &LLMError) -> bool {
+    matches!(
+        error,
+        LLMError::InvalidResponse(message)
+            if message == "Model response did not include a JSON object"
+    )
+}
+
 fn diff_anchor_example(file_contexts: &[FileContext]) -> String {
-    let Some(file) = file_contexts.iter().find(|file| {
-        file.content
-            .lines()
-            .any(|line| !line.trim().is_empty())
-    }) else {
+    let Some(file) = file_contexts
+        .iter()
+        .find(|file| file.content.lines().any(|line| !line.trim().is_empty()))
+    else {
         return String::new();
     };
 
@@ -173,7 +214,9 @@ fn normalize_proposal_failure_reason(error: &LLMError) -> &'static str {
             }
         }
         LLMError::Provider(message) => {
-            if message.starts_with("HTTP 404") {
+            if message.starts_with("Ollama returned empty response content") {
+                "provider.ollama_empty_content"
+            } else if message.starts_with("HTTP 404") {
                 "provider.http_404"
             } else if message.starts_with("HTTP 429") {
                 "provider.http_429"
@@ -190,9 +233,7 @@ fn normalize_proposal_failure_reason(error: &LLMError) -> &'static str {
     }
 }
 
-fn format_proposal_failure_counters(
-    counters: &BTreeMap<(String, &'static str), u64>,
-) -> String {
+fn format_proposal_failure_counters(counters: &BTreeMap<(String, &'static str), u64>) -> String {
     counters
         .iter()
         .map(|((provider, reason), count)| format!("{provider}:{reason}={count}"))
@@ -234,7 +275,9 @@ impl Agent {
             .collect::<HashSet<_>>();
         let suggested_create_paths = suggest_create_paths(target_files, language);
         let files_desc = if file_contexts.is_empty() {
-            if supports_empty_target_creation_guidance(language) && !suggested_create_paths.is_empty() {
+            if supports_empty_target_creation_guidance(language)
+                && !suggested_create_paths.is_empty()
+            {
                 format!(
                     "No existing target files were found. Create a new markdown file instead of returning an empty patch. Safe relative paths:\n{}",
                     suggested_create_paths
@@ -293,7 +336,58 @@ impl Agent {
             response_format: Some(proposal_response_format()),
         };
         let resp = self.llm.complete(&req).await?;
-        parse_proposal_payload(&resp.content, &file_contexts, &allowed_paths, target_files)
+        match parse_proposal_payload(&resp.content, &file_contexts, &allowed_paths, target_files) {
+            Ok(proposal) => Ok(proposal),
+            Err(error) if is_missing_json_object_error(&error) => {
+                warn!(
+                    agent = %self.def.name,
+                    provider = %self.llm.provider_name(),
+                    model = %self.llm.model_name(),
+                    parse_error = %error,
+                    response_excerpt = %invalid_response_snippet(&resp.content),
+                    "Proposal response omitted a top-level JSON object; attempting repair pass"
+                );
+                let repair_request = CompletionRequest {
+                    system: self.def.system_prompt.clone(),
+                    prompt: proposal_repair_prompt(&req.prompt, &resp.content),
+                    temperature: 0.0,
+                    max_tokens: proposal_max_tokens(language),
+                    response_format: Some(proposal_response_format()),
+                };
+                let repaired = self.llm.complete(&repair_request).await?;
+                parse_proposal_payload(
+                    &repaired.content,
+                    &file_contexts,
+                    &allowed_paths,
+                    target_files,
+                )
+                .map_err(|repair_error| {
+                    warn!(
+                        agent = %self.def.name,
+                        provider = %self.llm.provider_name(),
+                        model = %self.llm.model_name(),
+                        parse_error = %repair_error,
+                        response_excerpt = %invalid_response_snippet(&repaired.content),
+                        "Proposal repair response was still invalid"
+                    );
+                    LLMError::InvalidResponse(format!(
+                        "Model response did not include a JSON object; repair pass failed: {repair_error}"
+                    ))
+                })
+            }
+            Err(error @ LLMError::InvalidResponse(_)) => {
+                warn!(
+                    agent = %self.def.name,
+                    provider = %self.llm.provider_name(),
+                    model = %self.llm.model_name(),
+                    parse_error = %error,
+                    response_excerpt = %invalid_response_snippet(&resp.content),
+                    "Proposal response was invalid"
+                );
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn debate(
@@ -372,24 +466,21 @@ impl Council {
         }
 
         let proposal_round_started = Instant::now();
-        let proposal_results = join_all(
-            self.agents
-                .iter()
-                .enumerate()
-                .map(|(agent_index, agent)| async move {
-                    let started = Instant::now();
-                    let result = agent
-                        .propose(context, repo_path, target_files, language, metrics)
-                        .await;
-                    (
-                        agent_index,
-                        agent.name().to_owned(),
-                        agent.provider_name().to_owned(),
-                        started.elapsed(),
-                        result,
-                    )
-                }),
-        )
+        let proposal_results = join_all(self.agents.iter().enumerate().map(
+            |(agent_index, agent)| async move {
+                let started = Instant::now();
+                let result = agent
+                    .propose(context, repo_path, target_files, language, metrics)
+                    .await;
+                (
+                    agent_index,
+                    agent.name().to_owned(),
+                    agent.provider_name().to_owned(),
+                    started.elapsed(),
+                    result,
+                )
+            },
+        ))
         .await;
 
         let mut proposals = Vec::new();
@@ -1207,9 +1298,12 @@ fn is_text_path(path: &str, language: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::llm::MockProvider;
+    use crate::llm::pool::{ModelPool, PoolMember};
     use crate::llm::{CompletionRequest, CompletionResponse, LLMProvider};
+    use async_trait::async_trait;
+    use std::collections::VecDeque;
+    use std::sync::Mutex as StdMutex;
     use tokio::sync::Barrier;
     use tokio::time::{Duration, timeout};
 
@@ -1241,6 +1335,50 @@ mod tests {
 
         fn model_name(&self) -> &str {
             &self.model
+        }
+    }
+
+    struct SequenceProvider {
+        provider: &'static str,
+        model: &'static str,
+        responses: StdMutex<VecDeque<&'static str>>,
+    }
+
+    impl SequenceProvider {
+        fn new(provider: &'static str, model: &'static str, responses: Vec<&'static str>) -> Self {
+            Self {
+                provider,
+                model,
+                responses: StdMutex::new(responses.into()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LLMProvider for SequenceProvider {
+        async fn complete(
+            &self,
+            _request: &CompletionRequest,
+        ) -> Result<CompletionResponse, LLMError> {
+            let content = self
+                .responses
+                .lock()
+                .expect("responses lock")
+                .pop_front()
+                .expect("response should be queued");
+            Ok(CompletionResponse {
+                content: content.to_owned(),
+                tokens_used: 8,
+                latency: Duration::from_millis(1),
+            })
+        }
+
+        fn provider_name(&self) -> &str {
+            self.provider
+        }
+
+        fn model_name(&self) -> &str {
+            self.model
         }
     }
 
@@ -1359,6 +1497,201 @@ mod tests {
         let _ = fs::remove_dir_all(repo_root);
     }
 
+    #[tokio::test]
+    async fn repairs_missing_json_object_with_same_provider() {
+        let repo_root =
+            std::env::temp_dir().join(format!("maabarium-agent-repair-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(repo_root.join("docs")).expect("temp repo should be created");
+        fs::write(repo_root.join("docs/brief.md"), "# Brief\n\nOld content.\n")
+            .expect("source file should be written");
+
+        let agent = Agent::new(
+            AgentDef {
+                name: "researcher".into(),
+                role: "researcher".into(),
+                system_prompt: "Return valid patch payloads".into(),
+                model: "repair-model".into(),
+            },
+            Arc::new(SequenceProvider::new(
+                "ollama",
+                "repair-model",
+                vec![
+                    "Here is the repaired brief in markdown:\n\n# Brief\n\nNew cited content.\n",
+                    r##"{
+  "summary": "Rewrite the brief with cited content.",
+  "file_patches": [
+    {
+      "path": "docs/brief.md",
+      "operation": "modify",
+      "unified_diff": "# Brief\n\nNew cited content.\n"
+    }
+  ]
+}"##,
+                ],
+            )),
+        );
+
+        let proposal = agent
+            .propose(
+                "Refresh the research brief",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["docs/**/*.md".into()],
+                "research",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            )
+            .await
+            .expect("repair pass should recover the proposal");
+
+        assert_eq!(proposal.summary, "Rewrite the brief with cited content.");
+        assert_eq!(proposal.file_patches.len(), 1);
+        assert_eq!(proposal.file_patches[0].path, "docs/brief.md");
+        assert_eq!(
+            proposal.file_patches[0].content.as_deref(),
+            Some("# Brief\n\nNew cited content.\n")
+        );
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[tokio::test]
+    async fn repairs_missing_json_object_through_model_pool_fallback() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "maabarium-agent-repair-pool-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(repo_root.join("docs")).expect("temp repo should be created");
+        fs::write(repo_root.join("docs/brief.md"), "# Brief\n\nOld content.\n")
+            .expect("source file should be written");
+
+        let pool = ModelPool::new(vec![
+            PoolMember::new(
+                Arc::new(SequenceProvider::new(
+                    "ollama",
+                    "primary-model",
+                    vec!["Draft answer without JSON."],
+                )),
+                None,
+            ),
+            PoolMember::new(
+                Arc::new(SequenceProvider::new(
+                    "ollama",
+                    "fallback-model",
+                    vec![
+                        r##"{
+  "summary": "Repair the brief through the fallback model.",
+  "file_patches": [
+    {
+      "path": "docs/brief.md",
+      "operation": "modify",
+      "unified_diff": "# Brief\n\nFallback content.\n"
+    }
+  ]
+}"##,
+                    ],
+                )),
+                None,
+            ),
+        ]);
+
+        let agent = Agent::new(
+            AgentDef {
+                name: "researcher".into(),
+                role: "researcher".into(),
+                system_prompt: "Return valid patch payloads".into(),
+                model: "pool".into(),
+            },
+            Arc::new(pool),
+        );
+
+        let proposal = agent
+            .propose(
+                "Refresh the research brief",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["docs/**/*.md".into()],
+                "research",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            )
+            .await
+            .expect("fallback model should repair the proposal");
+
+        assert_eq!(
+            proposal.file_patches[0].content.as_deref(),
+            Some("# Brief\n\nFallback content.\n")
+        );
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[tokio::test]
+    async fn surfaces_repair_failure_when_second_attempt_still_lacks_json() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "maabarium-agent-repair-fail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(repo_root.join("docs")).expect("temp repo should be created");
+        fs::write(repo_root.join("docs/brief.md"), "# Brief\n\nOld content.\n")
+            .expect("source file should be written");
+
+        let agent = Agent::new(
+            AgentDef {
+                name: "researcher".into(),
+                role: "researcher".into(),
+                system_prompt: "Return valid patch payloads".into(),
+                model: "repair-model".into(),
+            },
+            Arc::new(SequenceProvider::new(
+                "ollama",
+                "repair-model",
+                vec!["Plain text answer.", "Still plain text."],
+            )),
+        );
+
+        let error = agent
+            .propose(
+                "Refresh the research brief",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["docs/**/*.md".into()],
+                "research",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            )
+            .await
+            .expect_err("repair failure should be surfaced");
+
+        assert!(error.to_string().contains("repair pass failed"));
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[test]
+    fn renders_empty_invalid_response_snippets_explicitly() {
+        assert_eq!(invalid_response_snippet("   \n\t  "), "<empty response>");
+    }
+
+    #[test]
+    fn truncates_invalid_response_snippets_with_remaining_char_count() {
+        let raw = "a".repeat(MAX_INVALID_RESPONSE_SNIPPET_CHARS + 25);
+
+        let snippet = invalid_response_snippet(&raw);
+
+        assert!(snippet.starts_with(&"a".repeat(MAX_INVALID_RESPONSE_SNIPPET_CHARS)));
+        assert!(snippet.ends_with("...[truncated 25 chars]"));
+    }
+
     #[test]
     fn suggests_research_creation_paths_from_targets() {
         let suggestions = suggest_create_paths(
@@ -1377,7 +1710,8 @@ mod tests {
 
     #[test]
     fn suggests_markdown_creation_path_for_exact_target_file() {
-        let suggestions = suggest_create_paths(&["docs/project-echo-implementation.md".into()], "markdown");
+        let suggestions =
+            suggest_create_paths(&["docs/project-echo-implementation.md".into()], "markdown");
 
         assert_eq!(
             suggestions,
@@ -1456,10 +1790,10 @@ mod tests {
         assert!(error.contains("newline marker must follow a diff line"));
     }
 
-        #[test]
-        fn accepts_raw_markdown_content_for_text_targets() {
-                let proposal = parse_proposal_payload(
-                        r##"{
+    #[test]
+    fn accepts_raw_markdown_content_for_text_targets() {
+        let proposal = parse_proposal_payload(
+            r##"{
     "summary": "Rewrite the note with a clearer structure.",
     "file_patches": [
         {
@@ -1469,27 +1803,30 @@ mod tests {
         }
     ]
 }"##,
-                        &[FileContext {
-                                path: "docs/notes.md".into(),
-                                content: "# Runtime validation fixture\n\nOld content.\n".into(),
-                        }],
-                        &HashSet::from(["docs/notes.md".to_owned()]),
-                        &["docs/**/*.md".into()],
-                )
-                .expect("raw markdown fallback should parse");
+            &[FileContext {
+                path: "docs/notes.md".into(),
+                content: "# Runtime validation fixture\n\nOld content.\n".into(),
+            }],
+            &HashSet::from(["docs/notes.md".to_owned()]),
+            &["docs/**/*.md".into()],
+        )
+        .expect("raw markdown fallback should parse");
 
-                assert_eq!(proposal.file_patches.len(), 1);
-                assert_eq!(proposal.file_patches[0].operation, FilePatchOperation::Modify);
-                assert_eq!(
-                        proposal.file_patches[0].content.as_deref(),
-                        Some("# Runtime validation fixture\n\nThis note is clearer now.\n")
-                );
-        }
+        assert_eq!(proposal.file_patches.len(), 1);
+        assert_eq!(
+            proposal.file_patches[0].operation,
+            FilePatchOperation::Modify
+        );
+        assert_eq!(
+            proposal.file_patches[0].content.as_deref(),
+            Some("# Runtime validation fixture\n\nThis note is clearer now.\n")
+        );
+    }
 
-        #[test]
-        fn upgrades_missing_modify_targets_to_create_for_allowed_text_paths() {
-                let proposal = parse_proposal_payload(
-                        r##"{
+    #[test]
+    fn upgrades_missing_modify_targets_to_create_for_allowed_text_paths() {
+        let proposal = parse_proposal_payload(
+            r##"{
     "summary": "Create a focused research note.",
     "file_patches": [
         {
@@ -1499,23 +1836,26 @@ mod tests {
         }
     ]
 }"##,
-                        &[],
-                        &HashSet::new(),
-                        &["notes/**/*.md".into()],
-                )
-                .expect("missing markdown targets should be upgraded to create");
+            &[],
+            &HashSet::new(),
+            &["notes/**/*.md".into()],
+        )
+        .expect("missing markdown targets should be upgraded to create");
 
-                assert_eq!(proposal.file_patches.len(), 1);
-                assert_eq!(proposal.file_patches[0].operation, FilePatchOperation::Create);
-                assert_eq!(
-                        proposal.file_patches[0].content.as_deref(),
-                        Some("# Local-first AI workflow\n\nA starter note.\n")
-                );
-        }
+        assert_eq!(proposal.file_patches.len(), 1);
+        assert_eq!(
+            proposal.file_patches[0].operation,
+            FilePatchOperation::Create
+        );
+        assert_eq!(
+            proposal.file_patches[0].content.as_deref(),
+            Some("# Local-first AI workflow\n\nA starter note.\n")
+        );
+    }
 
-            #[test]
-            fn recovers_text_from_malformed_diffish_markdown() {
-                let proposal = parse_proposal_payload(
+    #[test]
+    fn recovers_text_from_malformed_diffish_markdown() {
+        let proposal = parse_proposal_payload(
                     r##"{
           "summary": "Rewrite the product brief with clearer sections.",
           "file_patches": [
@@ -1535,48 +1875,63 @@ mod tests {
                 )
                 .expect("diffish markdown should recover through raw fallback");
 
-                assert_eq!(proposal.file_patches.len(), 1);
-                assert!(proposal.file_patches[0]
-                    .content
-                    .as_deref()
-                    .expect("recovered content should exist")
-                    .contains("Clarify the app value and release shape."));
-            }
+        assert_eq!(proposal.file_patches.len(), 1);
+        assert!(
+            proposal.file_patches[0]
+                .content
+                .as_deref()
+                .expect("recovered content should exist")
+                .contains("Clarify the app value and release shape.")
+        );
+    }
 
-            #[test]
-            fn normalizes_proposal_failure_reasons() {
-                assert_eq!(
+    #[test]
+    fn normalizes_proposal_failure_reasons() {
+        assert_eq!(
                     normalize_proposal_failure_reason(&LLMError::InvalidResponse(
                         "Unified diff validation failed for 'src/lib.rs': context mismatch: expected 'a', found 'b'"
                             .to_owned(),
                     )),
                     "invalid_response.unified_diff.context_mismatch"
                 );
-                assert_eq!(
+        assert_eq!(
                     normalize_proposal_failure_reason(&LLMError::InvalidResponse(
                         "Unified diff validation failed for 'src/lib.rs': encountered an empty unified diff line without a prefix"
                             .to_owned(),
                     )),
                     "invalid_response.unified_diff.blank_line_without_prefix"
                 );
-                assert_eq!(
-                    normalize_proposal_failure_reason(&LLMError::Provider(
-                        "HTTP 404 Not Found: {\"error\":\"model not found\"}".to_owned(),
-                    )),
-                    "provider.http_404"
-                );
-            }
+        assert_eq!(
+            normalize_proposal_failure_reason(&LLMError::Provider(
+                "Ollama returned empty response content despite reporting 42 eval tokens"
+                    .to_owned(),
+            )),
+            "provider.ollama_empty_content"
+        );
+        assert_eq!(
+            normalize_proposal_failure_reason(&LLMError::Provider(
+                "HTTP 404 Not Found: {\"error\":\"model not found\"}".to_owned(),
+            )),
+            "provider.http_404"
+        );
+    }
 
-            #[test]
-            fn formats_proposal_failure_counters_compactly() {
-                let counters = BTreeMap::from([
-                    (("mock".to_owned(), "invalid_response.proposal_json"), 2_u64),
-                    (("ollama".to_owned(), "invalid_response.unified_diff.context_mismatch"), 1_u64),
-                ]);
+    #[test]
+    fn formats_proposal_failure_counters_compactly() {
+        let counters = BTreeMap::from([
+            (("mock".to_owned(), "invalid_response.proposal_json"), 2_u64),
+            (
+                (
+                    "ollama".to_owned(),
+                    "invalid_response.unified_diff.context_mismatch",
+                ),
+                1_u64,
+            ),
+        ]);
 
-                assert_eq!(
-                    format_proposal_failure_counters(&counters),
-                    "mock:invalid_response.proposal_json=2, ollama:invalid_response.unified_diff.context_mismatch=1"
-                );
-            }
+        assert_eq!(
+            format_proposal_failure_counters(&counters),
+            "mock:invalid_response.proposal_json=2, ollama:invalid_response.unified_diff.context_mismatch=1"
+        );
+    }
 }

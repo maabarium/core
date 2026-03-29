@@ -256,8 +256,10 @@ function downloadResearchMarkdown(experiment: PersistedExperiment) {
 
 export function ResearchEvidenceCard({
   latestResearchExperiment,
+  embedded = false,
 }: {
   latestResearchExperiment: PersistedExperiment | null;
+  embedded?: boolean;
 }) {
   const providerSummary = latestResearchExperiment
     ? summarizeResearchProviders(latestResearchExperiment)
@@ -273,8 +275,8 @@ export function ResearchEvidenceCard({
     ? buildResearchBriefing(latestResearchExperiment)
     : [];
 
-  return (
-    <GlassCard title="Research Evidence" icon={Search} className="h-full">
+  const content = (
+    <>
       {latestResearchExperiment?.research ? (
         <div className="flex h-full flex-col gap-4">
           <div className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
@@ -505,6 +507,16 @@ export function ResearchEvidenceCard({
           blueprint to inspect verified sources and citation snippets here.
         </div>
       )}
+    </>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <GlassCard title="Research Evidence" icon={Search} className="h-full">
+      {content}
     </GlassCard>
   );
 }

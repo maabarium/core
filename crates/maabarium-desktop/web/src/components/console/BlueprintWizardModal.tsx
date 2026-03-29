@@ -1,20 +1,48 @@
-import { CircleHelp } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  CircleHelp,
+  Cpu,
+  FileText,
+  FolderOpen,
+  LayoutDashboard,
+  Save,
+  Search,
+  Settings2,
+  Target,
+  type LucideIcon,
+} from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
+  Component,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
   useEffect,
   useMemo,
   useState,
 } from "react";
 import {
+  applyWizardDeliverable,
+  applyWizardGoal,
   applyWizardTemplate,
+  inferWizardDeliverableFromForm,
+  inferWizardGoalFromForm,
+  normalizeWizardForm,
+  parseWizardTargetFilesText,
+  wizardDeliverableOptions,
+  wizardEvaluatorLabel,
+  wizardGoalOptions,
+  wizardTargetMode,
   wizardTemplateDefaults,
 } from "../../lib/blueprints";
 import type {
   BlueprintWizardForm,
   WorkspaceGitStatus,
   WizardAgentForm,
+  WizardDeliverable,
+  WizardGoal,
   WizardMetricForm,
   WizardModelForm,
   WizardTemplate,
@@ -65,6 +93,8 @@ type BlueprintWizardModalProps = {
 
 type WizardTab = "basics" | "evaluation" | "agents" | "models";
 
+type WizardStep = "goal" | "output" | "workspace" | "runtime" | "review";
+
 const TAB_ORDER: Array<{ id: WizardTab; label: string; copy: string }> = [
   {
     id: "basics",
@@ -95,6 +125,38 @@ const TEMPLATE_ORDER: WizardTemplate[] = [
   "prompt_optimization",
   "lora_validation",
   "custom",
+];
+
+const WIZARD_STEPS: Array<{
+  id: WizardStep;
+  label: string;
+  copy: string;
+}> = [
+  {
+    id: "goal",
+    label: "Goal",
+    copy: "Pick the outcome family before touching low-level blueprint fields.",
+  },
+  {
+    id: "output",
+    label: "Output",
+    copy: "Choose whether the workflow should target one file or a broader file family.",
+  },
+  {
+    id: "workspace",
+    label: "Workspace",
+    copy: "Confirm where the workflow runs and where its outputs are allowed to land.",
+  },
+  {
+    id: "runtime",
+    label: "Runtime",
+    copy: "Tune guardrails, evaluation thresholds, and council behavior.",
+  },
+  {
+    id: "review",
+    label: "Review",
+    copy: "Verify the derived workflow summary before saving the generated TOML.",
+  },
 ];
 
 const textFieldClass =
@@ -196,11 +258,204 @@ function TabButton({
   );
 }
 
-export function BlueprintWizardModal({
+function StepButton({
+  active,
+  completed,
+  enabled,
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  completed: boolean;
+  enabled: boolean;
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!enabled}
+      className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${
+        active
+          ? "border-teal-400/35 bg-teal-500/10 text-teal-50"
+          : completed
+            ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
+            : enabled
+              ? "border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.05]"
+              : "cursor-not-allowed border-white/10 bg-white/[0.02] text-slate-600"
+      }`}
+    >
+      <div
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[10px] font-black uppercase tracking-[0.16em] ${
+          active
+            ? "border-teal-400/40 bg-teal-500/15 text-teal-100"
+            : completed
+              ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-100"
+              : enabled
+                ? "border-white/10 bg-slate-950/60 text-slate-300"
+                : "border-white/5 bg-white/[0.03] text-slate-600"
+        }`}
+      >
+        {completed && !active ? <CheckCircle2 size={14} /> : <Icon size={14} />}
+      </div>
+      <div className="min-w-0">
+        <div className="text-[10px] font-black uppercase tracking-[0.18em]">
+          {label}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function SummaryRow({
+  label,
+  value,
+  icon: Icon,
+  active,
+}: {
+  label: string;
+  value: string;
+  icon: LucideIcon;
+  active: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-start gap-3 rounded-xl border px-3 py-3 transition ${
+        active
+          ? "border-teal-400/25 bg-teal-500/10"
+          : "border-white/10 bg-slate-950/50"
+      }`}
+    >
+      <div
+        className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+          active ? "bg-teal-400 text-slate-950" : "bg-white/5 text-slate-400"
+        }`}
+      >
+        <Icon size={16} />
+      </div>
+      <div className="min-w-0">
+        <div
+          className={`text-[10px] font-black uppercase tracking-[0.16em] ${
+            active ? "text-teal-200" : "text-slate-500"
+          }`}
+        >
+          {label}
+        </div>
+        <div className="mt-1 break-words text-sm text-slate-100 [overflow-wrap:anywhere]">
+          {value}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type WizardRenderBoundaryProps = {
+  children: ReactNode;
+  onClose: () => void;
+};
+
+type WizardRenderBoundaryState = {
+  error: Error | null;
+};
+
+class WizardRenderBoundary extends Component<
+  WizardRenderBoundaryProps,
+  WizardRenderBoundaryState
+> {
+  state: WizardRenderBoundaryState = {
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): WizardRenderBoundaryState {
+    return { error };
+  }
+
+  componentDidUpdate(previousProps: WizardRenderBoundaryProps) {
+    if (this.state.error && previousProps.children !== this.props.children) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-6 py-6 text-rose-50 shadow-2xl">
+          <div className="text-[10px] font-black uppercase tracking-[0.24em] text-rose-200">
+            Blueprint Wizard
+          </div>
+          <h2 className="mt-2 text-2xl font-black tracking-tight">
+            The wizard hit a runtime problem
+          </h2>
+          <p className="mt-3 max-w-3xl text-sm leading-relaxed text-rose-100/90">
+            The modal stayed open, but one of the live values it received was
+            not valid enough to render safely. Close it, reopen it, and keep the
+            current desktop state if the problem returns.
+          </p>
+          <div className="mt-4 rounded-xl border border-rose-300/20 bg-slate-950/40 px-4 py-3 text-xs leading-relaxed text-rose-100/85">
+            {this.state.error.message || "Unknown wizard render error."}
+          </div>
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={this.props.onClose}
+              className={secondaryButtonClass}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+const WIZARD_STEP_ICONS: Record<WizardStep, LucideIcon> = {
+  goal: Target,
+  output: FileText,
+  workspace: FolderOpen,
+  runtime: Cpu,
+  review: Save,
+};
+
+const WIZARD_GOAL_ICONS: Record<WizardGoal, LucideIcon> = {
+  code_improvement: Target,
+  application_change: LayoutDashboard,
+  document_workflow: FileText,
+  research_brief: Search,
+  lora_validation: Cpu,
+  custom_workflow: Settings2,
+};
+
+function deliverableIcon(
+  deliverable: WizardDeliverable,
+  goal: WizardGoal,
+  targetFiles: string[],
+): LucideIcon {
+  if (goal === "research_brief") {
+    return Search;
+  }
+
+  if (goal === "lora_validation") {
+    return Cpu;
+  }
+
+  if (goal === "custom_workflow") {
+    return Settings2;
+  }
+
+  return wizardTargetMode(targetFiles) === "exact" ? FileText : FolderOpen;
+}
+
+function BlueprintWizardModalBody({
   open,
   isCreating,
   isEngineRunning,
-  form,
+  form: rawForm,
   metricWeightTotal,
   modelNames,
   localModelOptions,
@@ -221,10 +476,14 @@ export function BlueprintWizardModal({
   onClose,
   onSubmit,
 }: BlueprintWizardModalProps) {
+  const [activeStep, setActiveStep] = useState<WizardStep>("goal");
   const [activeTab, setActiveTab] = useState<WizardTab>("basics");
+  const [showAdvancedControls, setShowAdvancedControls] = useState(false);
+  const [furthestStepIndex, setFurthestStepIndex] = useState(0);
   const [workspaceStatus, setWorkspaceStatus] =
     useState<WorkspaceGitStatus | null>(null);
   const [inspectingWorkspace, setInspectingWorkspace] = useState(false);
+  const form = useMemo(() => normalizeWizardForm(rawForm), [rawForm]);
 
   const isEditMode = mode === "edit";
   const providerOptionsById = useMemo(
@@ -241,11 +500,77 @@ export function BlueprintWizardModal({
       ]),
     [localModelOptions, modelNames, providerOptions],
   );
+  const primaryModelOptions = useMemo(
+    () =>
+      uniqueStrings([
+        ...form.models.map((model) => model.name),
+        ...combinedModelOptions,
+      ]).map((modelName) => {
+        const existingModel = form.models.find(
+          (model) => model.name.trim() === modelName,
+        );
+        const providerId = existingModel?.provider.trim();
+        const inferredProviderLabel = localModelOptions.includes(modelName)
+          ? "Ollama Local"
+          : providerOptions.find(
+              (provider) => provider.defaultModelName.trim() === modelName,
+            )?.label;
+        const providerLabel =
+          providerOptionsById.get(providerId ?? "")?.label ||
+          inferredProviderLabel ||
+          providerId ||
+          "Model";
+
+        return {
+          value: modelName,
+          label: `${providerLabel} • ${modelName.trim() || "Unnamed model"}`,
+        };
+      }),
+    [
+      combinedModelOptions,
+      form.models,
+      localModelOptions,
+      providerOptions,
+      providerOptionsById,
+    ],
+  );
+
+  const selectedGoal = useMemo<WizardGoal>(
+    () => inferWizardGoalFromForm(form),
+    [form],
+  );
+  const selectedDeliverable = useMemo<WizardDeliverable>(
+    () => inferWizardDeliverableFromForm(form),
+    [form],
+  );
+  const deliverableOptions = useMemo(
+    () => wizardDeliverableOptions(selectedGoal),
+    [selectedGoal],
+  );
+  const normalizedLanguage = form.language?.trim() ?? "";
+  const normalizedTargetFilesText = form.targetFilesText ?? "";
+  const safeRepoPath = form.repoPath ?? "";
+  const safeMetricCount = Array.isArray(form.metrics) ? form.metrics.length : 0;
+  const safeAgentCount = Array.isArray(form.agents) ? form.agents.length : 0;
+  const safeModelCount = Array.isArray(form.models) ? form.models.length : 0;
+  const primaryModelName = form.models[0]?.name?.trim() || "Not set";
+  const targetFiles = useMemo(
+    () => parseWizardTargetFilesText(normalizedTargetFilesText),
+    [normalizedTargetFilesText],
+  );
+  const targetMode = useMemo(
+    () => wizardTargetMode(targetFiles),
+    [targetFiles],
+  );
+  const evaluatorLabel = useMemo(
+    () => wizardEvaluatorLabel(normalizedLanguage),
+    [normalizedLanguage],
+  );
 
   const showHydrationReview = form.template !== "custom";
   const isResearchTemplate = form.template === "general_research";
   const normalizedSavedWorkspace = savedWorkspacePath?.trim() ?? "";
-  const normalizedWizardWorkspace = form.repoPath.trim();
+  const normalizedWizardWorkspace = safeRepoPath.trim();
   const workspaceDiffersFromSavedDefault =
     normalizedWizardWorkspace.length > 0 &&
     normalizedWizardWorkspace !== normalizedSavedWorkspace;
@@ -264,9 +589,30 @@ export function BlueprintWizardModal({
 
   useEffect(() => {
     if (open) {
+      setActiveStep("goal");
       setActiveTab("basics");
+      setShowAdvancedControls(false);
+      setFurthestStepIndex(isEditMode ? WIZARD_STEPS.length - 1 : 0);
     }
-  }, [open, form.template]);
+  }, [isEditMode, open]);
+
+  useEffect(() => {
+    if (
+      activeStep === "goal" ||
+      activeStep === "output" ||
+      activeStep === "workspace"
+    ) {
+      setActiveTab("basics");
+      return;
+    }
+
+    if (activeStep === "runtime") {
+      setActiveTab("evaluation");
+      return;
+    }
+
+    setActiveTab("evaluation");
+  }, [activeStep]);
 
   useEffect(() => {
     if (!open) {
@@ -305,8 +651,9 @@ export function BlueprintWizardModal({
     }
 
     setForm((current) => {
+      const normalizedCurrent = normalizeWizardForm(current);
       let changed = false;
-      const nextModels = current.models.map((model) => {
+      const nextModels = normalizedCurrent.models.map((model) => {
         let nextModel = model;
         const providerId = model.provider.trim() || "ollama";
         const providerOption = providerOptionsById.get(providerId);
@@ -356,7 +703,9 @@ export function BlueprintWizardModal({
         return nextModel;
       });
 
-      return changed ? { ...current, models: nextModels } : current;
+      return changed
+        ? normalizeWizardForm({ ...normalizedCurrent, models: nextModels })
+        : current;
     });
   }, [
     combinedModelOptions,
@@ -375,32 +724,110 @@ export function BlueprintWizardModal({
     setActiveTab("basics");
   };
 
+  const applyGoal = (goal: WizardGoal) => {
+    setForm((current) => applyWizardGoal(current, goal));
+  };
+
+  const applyDeliverable = (deliverable: WizardDeliverable) => {
+    setForm((current) => applyWizardDeliverable(current, deliverable));
+    setActiveStep("workspace");
+  };
+
+  const updatePrimaryModel = (selectedModelName: string) => {
+    setForm((current) => {
+      const normalizedCurrent = normalizeWizardForm(current);
+      const selectedIndex = normalizedCurrent.models.findIndex(
+        (model) => model.name.trim() === selectedModelName,
+      );
+      const existingModel =
+        selectedIndex >= 0 ? normalizedCurrent.models[selectedIndex] : null;
+      const matchingProviderOption = providerOptions.find(
+        (provider) => provider.defaultModelName.trim() === selectedModelName,
+      );
+      const nextPrimaryModel = existingModel
+        ? existingModel
+        : {
+            ...(normalizedCurrent.models[0] ?? {
+              name: selectedModelName,
+              provider: "ollama",
+              endpoint: "http://localhost:11434",
+              apiKeyEnv: "",
+              temperature: 0.7,
+              maxTokens: 2048,
+              requestsPerMinute: "60",
+            }),
+            name: selectedModelName,
+            provider: localModelOptions.includes(selectedModelName)
+              ? "ollama"
+              : matchingProviderOption?.id ||
+                normalizedCurrent.models[0]?.provider ||
+                "ollama",
+            endpoint: localModelOptions.includes(selectedModelName)
+              ? "http://localhost:11434"
+              : matchingProviderOption?.endpoint ||
+                normalizedCurrent.models[0]?.endpoint ||
+                "",
+          };
+
+      if (!nextPrimaryModel) {
+        return normalizedCurrent;
+      }
+
+      const reorderedModels = existingModel
+        ? [
+            nextPrimaryModel,
+            ...normalizedCurrent.models.filter(
+              (_, modelIndex) => modelIndex !== selectedIndex,
+            ),
+          ]
+        : [nextPrimaryModel, ...normalizedCurrent.models.slice(1)];
+      const nextPrimaryModelName = reorderedModels[0]?.name.trim();
+
+      if (!nextPrimaryModelName) {
+        return normalizedCurrent;
+      }
+
+      return normalizeWizardForm({
+        ...normalizedCurrent,
+        models: reorderedModels,
+        agents: normalizedCurrent.agents.map((agent) => ({
+          ...agent,
+          model: nextPrimaryModelName,
+        })),
+      });
+    });
+  };
+
   const updateModelProvider = (index: number, nextProviderId: string) => {
     const providerOption = providerOptionsById.get(nextProviderId);
     const nextLocalModel =
       localModelOptions[0] ?? combinedModelOptions[0] ?? "";
 
-    setForm((current) => ({
-      ...current,
-      models: current.models.map((entry, modelIndex) => {
-        if (modelIndex !== index) {
-          return entry;
-        }
+    setForm((current) => {
+      const normalizedCurrent = normalizeWizardForm(current);
 
-        return {
-          ...entry,
-          provider: nextProviderId,
-          endpoint:
-            nextProviderId === "ollama"
-              ? "http://localhost:11434"
-              : providerOption?.endpoint || entry.endpoint,
-          name:
-            nextProviderId === "ollama"
-              ? nextLocalModel || entry.name
-              : providerOption?.defaultModelName || entry.name,
-        };
-      }),
-    }));
+      return {
+        ...normalizedCurrent,
+        models: normalizedCurrent.models.map((entry, modelIndex) => {
+          if (modelIndex !== index) {
+            return entry;
+          }
+
+          return {
+            ...entry,
+            provider: nextProviderId,
+            endpoint:
+              nextProviderId === "ollama"
+                ? "http://localhost:11434"
+                : providerOption?.endpoint || entry.endpoint,
+            name:
+              nextProviderId === "ollama"
+                ? nextLocalModel || entry.name
+                : providerOption?.defaultModelName || entry.name,
+          };
+        }),
+      };
+    });
   };
 
   const renderModelNameField = (model: WizardModelForm, index: number) => {
@@ -450,6 +877,137 @@ export function BlueprintWizardModal({
     }));
   };
 
+  const stepIndex = WIZARD_STEPS.findIndex((step) => step.id === activeStep);
+
+  useEffect(() => {
+    setFurthestStepIndex((current) => Math.max(current, stepIndex));
+  }, [stepIndex]);
+
+  const canGoBack = stepIndex > 0;
+  const canGoForward = stepIndex < WIZARD_STEPS.length - 1;
+  const previousStep = canGoBack ? WIZARD_STEPS[stepIndex - 1]?.id : null;
+  const nextStep = canGoForward ? WIZARD_STEPS[stepIndex + 1]?.id : null;
+
+  const canOpenStep = (step: WizardStep) => {
+    const requestedIndex = WIZARD_STEPS.findIndex((entry) => entry.id === step);
+    return isEditMode || requestedIndex <= furthestStepIndex;
+  };
+
+  const scopeHint =
+    targetMode === "exact"
+      ? "One exact relative target path"
+      : targetMode === "glob"
+        ? "Glob-based file family"
+        : targetMode === "mixed"
+          ? "Mixed exact paths and globs"
+          : "No target paths yet";
+
+  const derivedSummary = [
+    {
+      label: "Goal",
+      value:
+        wizardGoalOptions().find((goal) => goal.id === selectedGoal)?.label ??
+        "Custom",
+    },
+    {
+      label: "Deliverable",
+      value:
+        deliverableOptions.find((option) => option.id === selectedDeliverable)
+          ?.label ?? selectedDeliverable,
+    },
+    { label: "Evaluator", value: evaluatorLabel },
+    { label: "Scope", value: scopeHint },
+    { label: "Workspace", value: normalizedWizardWorkspace || "Not set" },
+    { label: "Primary model", value: primaryModelName },
+  ];
+
+  const summaryRows: Array<{
+    label: string;
+    value: string;
+    icon: LucideIcon;
+    active: boolean;
+  }> = [
+    {
+      label: "Goal",
+      value: derivedSummary[0]?.value ?? "Not set",
+      icon: Target,
+      active: activeStep === "goal" || activeStep === "review",
+    },
+    {
+      label: "Output",
+      value: `${derivedSummary[1]?.value ?? "Not set"} • ${derivedSummary[3]?.value ?? "Not set"}`,
+      icon: FileText,
+      active: activeStep === "output" || activeStep === "review",
+    },
+    {
+      label: "Workspace",
+      value: derivedSummary[4]?.value ?? "Not set",
+      icon: FolderOpen,
+      active: activeStep === "workspace" || activeStep === "review",
+    },
+    {
+      label: "Runtime",
+      value: `${derivedSummary[2]?.value ?? "Not set"} • ${primaryModelName}`,
+      icon: Cpu,
+      active: activeStep === "runtime" || activeStep === "review",
+    },
+  ];
+
+  const workspaceStatusLabel = inspectingWorkspace
+    ? "Inspecting"
+    : workspaceMissing
+      ? "Missing"
+      : workspaceNotDirectory
+        ? "Invalid Folder"
+        : workspaceNeedsGitInit
+          ? "Needs Git Init"
+          : workspaceStatus?.isGitRepository
+            ? "Git Ready"
+            : normalizedWizardWorkspace
+              ? "Ready"
+              : "Choose Folder";
+
+  const workspaceStatusTone: "emerald" | "amber" | "rose" | "slate" =
+    inspectingWorkspace
+      ? "slate"
+      : workspaceMissing || workspaceNotDirectory
+        ? "rose"
+        : workspaceNeedsGitInit
+          ? "amber"
+          : workspaceStatus?.isGitRepository || normalizedWizardWorkspace
+            ? "emerald"
+            : "slate";
+
+  const runtimeStatusLabel = form.requireTestsPass
+    ? "Tests Required"
+    : isResearchTemplate
+      ? "Research Review"
+      : "Manual Review";
+
+  const primaryActionLabel = isCreating
+    ? isEditMode
+      ? "Saving..."
+      : "Generating..."
+    : canGoForward && nextStep
+      ? "Next Step"
+      : isEditMode
+        ? "Save Changes"
+        : showHydrationReview
+          ? "Generate Workflow"
+          : "Create Blueprint";
+
+  const workspaceSidebarNote = inspectingWorkspace
+    ? "Inspecting folder and repository status."
+    : workspaceMissing
+      ? "The selected workspace path does not exist yet."
+      : workspaceNotDirectory
+        ? "The selected workspace path is not a folder."
+        : workspaceNeedsGitInit
+          ? "Git initialization will be required before the workflow can run here."
+          : workspaceDiffersFromSavedDefault
+            ? "This workflow points at a workspace that differs from the saved default."
+            : null;
+
   return (
     <div className="fixed inset-0 z-[140] overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
       <div className="mx-auto max-w-6xl">
@@ -467,7 +1025,7 @@ export function BlueprintWizardModal({
               <p className="mt-2 max-w-3xl text-sm text-slate-400">
                 {isEditMode
                   ? "Load a runnable workflow back into the wizard, tweak its structure, and save the TOML in place without dropping into manual editing first."
-                  : "Pick the workflow type first, then confirm the workspace, output paths, evaluation rules, and models before Maabarium writes the runnable TOML file."}
+                  : "Start from the outcome you want, then confirm workspace, output paths, evaluation rules, and models before Maabarium writes the runnable TOML file."}
               </p>
             </div>
             <button
@@ -480,184 +1038,389 @@ export function BlueprintWizardModal({
             </button>
           </div>
 
-          <div className="space-y-6 p-6">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {TEMPLATE_ORDER.map((template) => {
-                const defaults = wizardTemplateDefaults(template);
-                const active = form.template === template;
-
-                return (
-                  <button
-                    key={template}
-                    type="button"
-                    onClick={() => applyTemplate(template)}
-                    className={`rounded-xl border px-4 py-4 text-left transition ${
-                      active
-                        ? "border-amber-400/40 bg-amber-500/10"
-                        : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
-                    }`}
-                  >
-                    <div className="text-sm font-semibold text-slate-100">
-                      {defaults.label}
-                    </div>
-                    <div className="mt-2 text-xs leading-relaxed text-slate-400">
-                      {defaults.description}
-                    </div>
-                    <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      {defaults.language} • {defaults.targetFiles[0]}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4 text-sm leading-relaxed text-slate-300">
-              Choose the template by the deliverable you want, not by the repo
-              alone. Use code-oriented templates for existing source-tree
-              changes, research for cited briefs, and prompt/markdown flows when
-              you want one named document or prompt asset. When the workflow
-              should create or refine one specific file, use an exact relative
-              path instead of a broad glob.
-            </div>
-
-            {showHydrationReview ? (
-              <div className="rounded-xl border border-teal-400/15 bg-teal-500/[0.06] px-4 py-4">
-                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-teal-200">
-                  Workflow Summary
-                </div>
-                <div className="mt-2 text-sm text-slate-200">
-                  Maabarium will write a runnable workflow using the choices
-                  below. Check that the workflow type, output path pattern, and
-                  primary model match what you actually want before saving.
-                </div>
-                <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] text-slate-400 md:grid-cols-3">
-                  <div>
-                    <span className="font-semibold text-slate-200">
-                      Workspace:
-                    </span>{" "}
-                    {form.repoPath || "Not set"}
+          <div className="p-6">
+            <div
+              className={`grid grid-cols-1 gap-6 ${showAdvancedControls ? "" : "xl:grid-cols-[minmax(0,1fr)_20rem]"}`}
+            >
+              <div className="space-y-6">
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                  <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                    Workflow Steps
                   </div>
-                  <div>
-                    <span className="font-semibold text-slate-200">
-                      Language:
-                    </span>{" "}
-                    {form.language || "Not set"}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {WIZARD_STEPS.map((step, index) => (
+                      <StepButton
+                        key={step.id}
+                        active={activeStep === step.id}
+                        completed={index < stepIndex}
+                        enabled={canOpenStep(step.id)}
+                        icon={WIZARD_STEP_ICONS[step.id]}
+                        label={step.label}
+                        onClick={() => {
+                          if (canOpenStep(step.id)) {
+                            setActiveStep(step.id);
+                          }
+                        }}
+                      />
+                    ))}
                   </div>
-                  <div>
-                    <span className="font-semibold text-slate-200">
-                      Primary model:
-                    </span>{" "}
-                    {form.models[0]?.name || "Not set"}
+                  <div className="mt-3 text-xs leading-relaxed text-slate-500">
+                    {WIZARD_STEPS[stepIndex]?.copy}
                   </div>
                 </div>
-              </div>
-            ) : null}
-
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
-              {TAB_ORDER.map((tab) => (
-                <TabButton
-                  key={tab.id}
-                  active={activeTab === tab.id}
-                  label={tab.label}
-                  copy={tab.copy}
-                  onClick={() => setActiveTab(tab.id)}
-                />
-              ))}
-            </div>
-
-            {activeTab === "basics" ? (
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <div className={sectionCardClass}>
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Workflow Identity
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      Keep the top-level metadata compact and readable.
-                    </div>
-                  </div>
-
-                  <div>
-                    <FieldLabel label="Blueprint Name" />
-                    <input
-                      value={form.name}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          name: event.target.value,
-                        }))
-                      }
-                      placeholder="my-awesome-blueprint"
-                      className={textFieldClass}
-                      type="text"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel label="Description" />
-                    <textarea
-                      value={form.description}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          description: event.target.value,
-                        }))
-                      }
-                      rows={4}
-                      className={textAreaClass}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <div className="mb-2 flex flex-wrap items-center gap-2">
-                        <FieldLabel label="Repo Path" />
-                        {inspectingWorkspace ? (
-                          <StatusChip label="Inspecting" tone="slate" />
-                        ) : workspaceMissing ? (
-                          <StatusChip label="Missing" tone="rose" />
-                        ) : workspaceNotDirectory ? (
-                          <StatusChip label="Not Folder" tone="rose" />
-                        ) : workspaceNeedsGitInit ? (
-                          <StatusChip label="Needs Init" tone="amber" />
-                        ) : workspaceStatus?.isGitRepository ? (
-                          <StatusChip label="Git Ready" tone="emerald" />
-                        ) : null}
-                        {workspaceDiffersFromSavedDefault ? (
-                          <StatusChip label="Differs Default" tone="slate" />
-                        ) : null}
-                      </div>
-                      <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
-                        <div className="break-all text-sm text-slate-200">
-                          {form.repoPath || "No workspace folder selected yet."}
+                {activeStep === "goal" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Workflow Name
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void chooseWorkspaceFolder()}
-                            className={secondaryButtonClass}
-                          >
-                            Choose Folder
-                          </button>
-                          {form.repoPath ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          Give the workflow a stable name before choosing the
+                          goal that will shape its defaults.
+                        </div>
+                      </div>
+
+                      <div>
+                        <FieldLabel label="Blueprint Name" />
+                        <input
+                          value={form.name}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              name: event.target.value,
+                            }))
+                          }
+                          placeholder="my-awesome-blueprint"
+                          className={textFieldClass}
+                          type="text"
+                        />
+                      </div>
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Outcome First
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Pick the workflow family that best matches the end
+                          result you want to keep. The wizard updates defaults,
+                          but you stay on this step until you choose Next Step.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {wizardGoalOptions().map((goal) => {
+                          const active = goal.id === selectedGoal;
+                          const GoalIcon = WIZARD_GOAL_ICONS[goal.id];
+                          return (
                             <button
+                              key={goal.id}
                               type="button"
-                              onClick={() =>
-                                setForm((current) => ({
-                                  ...current,
-                                  repoPath: "",
-                                }))
-                              }
-                              className={secondaryButtonClass}
+                              onClick={() => applyGoal(goal.id)}
+                              className={`group rounded-xl border px-4 py-4 text-left transition ${
+                                active
+                                  ? "border-teal-400/35 bg-teal-500/10 ring-1 ring-teal-500/20"
+                                  : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                              }`}
                             >
-                              Clear
+                              <div
+                                className={`mb-4 flex h-10 w-10 items-center justify-center rounded-lg transition ${
+                                  active
+                                    ? "bg-teal-400 text-slate-950"
+                                    : "bg-white/5 text-teal-300 group-hover:scale-105"
+                                }`}
+                              >
+                                <GoalIcon size={18} />
+                              </div>
+                              <div className="text-sm font-semibold text-slate-100">
+                                {goal.label}
+                              </div>
+                              <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                                {goal.description}
+                              </div>
                             </button>
-                          ) : null}
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Success Description
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Refine the description after choosing the goal so any
+                          derived wording starts from the right workflow family.
                         </div>
                       </div>
+
+                      <div>
+                        <FieldLabel label="Description" />
+                        <textarea
+                          value={form.description}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              description: event.target.value,
+                            }))
+                          }
+                          rows={4}
+                          className={textAreaClass}
+                        />
+                      </div>
+
+                      <FieldHint>
+                        Custom description text is preserved when you switch
+                        goals, so you can still compare workflow families
+                        without losing edits.
+                      </FieldHint>
+                    </div>
+                  </div>
+                ) : null}
+
+                {activeStep === "output" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Deliverable Shape
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Choose whether this workflow should target one exact
+                          file or a broader area.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {deliverableOptions.map((option) => {
+                          const active = option.id === selectedDeliverable;
+                          const DeliverableIcon = deliverableIcon(
+                            option.id,
+                            selectedGoal,
+                            option.targetFiles,
+                          );
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => applyDeliverable(option.id)}
+                              className={`group rounded-xl border px-4 py-4 text-left transition ${
+                                active
+                                  ? "border-amber-400/35 bg-amber-500/10 ring-1 ring-amber-400/20"
+                                  : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                              }`}
+                            >
+                              <div
+                                className={`mb-4 flex h-10 w-10 items-center justify-center rounded-lg transition ${
+                                  active
+                                    ? "bg-amber-300 text-slate-950"
+                                    : "bg-white/5 text-amber-200 group-hover:scale-105"
+                                }`}
+                              >
+                                <DeliverableIcon size={18} />
+                              </div>
+                              <div className="text-sm font-semibold text-slate-100">
+                                {option.label}
+                              </div>
+                              <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                                {option.description}
+                              </div>
+                              <div className="mt-3 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                                {option.language} • {option.targetFiles[0]}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Derived Scope
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          These fields stay editable, but the wizard derives a
+                          safe starting point from your output choice.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+                        <div>
+                          <FieldLabel
+                            label={
+                              isResearchTemplate
+                                ? "Research Domain"
+                                : "Language"
+                            }
+                          />
+                          <input
+                            value={form.language ?? ""}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                language: event.target.value,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="text"
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel label="Target Paths" />
+                          <textarea
+                            value={form.targetFilesText ?? ""}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                targetFilesText: event.target.value,
+                              }))
+                            }
+                            rows={5}
+                            className={textAreaClass}
+                          />
+                        </div>
+                      </div>
+
+                      <FieldHint>
+                        {targetMode === "exact"
+                          ? "This workflow currently targets exact relative paths, which is the right fit for one named document or prompt asset."
+                          : targetMode === "glob"
+                            ? "This workflow currently uses globs, which is the right fit for existing source trees or document directories."
+                            : targetMode === "mixed"
+                              ? "This workflow mixes exact paths and globs. That is valid, but make sure the scope is still intentional."
+                              : "Add at least one relative target path or glob so the workflow has an explicit scope."}
+                      </FieldHint>
+                    </div>
+                  </div>
+                ) : null}
+
+                {activeStep === "workspace" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Workspace
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Choose the repo or folder where the workflow runs and
+                          writes output.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Workspace Status
+                          </div>
+                          <div className="mt-2">
+                            <StatusChip
+                              label={workspaceStatusLabel}
+                              tone={workspaceStatusTone}
+                            />
+                          </div>
+                          <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                            {normalizedWizardWorkspace
+                              ? "The wizard is validating the selected runtime folder and its git readiness."
+                              : "Pick the repo or folder that should own this workflow run."}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Saved Default
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {normalizedSavedWorkspace || "No default workspace"}
+                          </div>
+                          <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                            {workspaceDiffersFromSavedDefault
+                              ? "This workflow points somewhere else, so save-time follow-up will ask whether to replace the global default."
+                              : "This workflow currently aligns with the saved default workspace."}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Output Scope
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {scopeHint}
+                          </div>
+                          <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                            {targetFiles.length > 0
+                              ? `${targetFiles.length} target ${targetFiles.length === 1 ? "path" : "paths"} currently derived from the output choice.`
+                              : "No target paths are configured yet."}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.65fr)]">
+                        <div>
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <FieldLabel label="Repo Path" />
+                            <StatusChip
+                              label={workspaceStatusLabel}
+                              tone={workspaceStatusTone}
+                            />
+                            {workspaceDiffersFromSavedDefault ? (
+                              <StatusChip
+                                label="Differs Default"
+                                tone="slate"
+                              />
+                            ) : null}
+                          </div>
+                          <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+                            <div className="break-all text-sm text-slate-200">
+                              {safeRepoPath ||
+                                "No workspace folder selected yet."}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void chooseWorkspaceFolder()}
+                                className={secondaryButtonClass}
+                              >
+                                Choose Folder
+                              </button>
+                              {safeRepoPath ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setForm((current) => ({
+                                      ...current,
+                                      repoPath: "",
+                                    }))
+                                  }
+                                  className={secondaryButtonClass}
+                                >
+                                  Clear
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Version" />
+                          <input
+                            value={form.version}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                version: event.target.value,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="text"
+                          />
+                        </div>
+                      </div>
+
                       {normalizedWizardWorkspace ? (
                         <div
-                          className={`mt-3 rounded-lg border px-3 py-3 text-xs leading-relaxed ${workspaceMissing || workspaceNotDirectory ? "border-rose-400/20 bg-rose-500/10 text-rose-100" : workspaceNeedsGitInit || workspaceDiffersFromSavedDefault ? "border-amber-300/20 bg-amber-500/10 text-amber-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"}`}
+                          className={`rounded-lg border px-3 py-3 text-xs leading-relaxed ${workspaceMissing || workspaceNotDirectory ? "border-rose-400/20 bg-rose-500/10 text-rose-100" : workspaceNeedsGitInit || workspaceDiffersFromSavedDefault ? "border-amber-300/20 bg-amber-500/10 text-amber-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"}`}
                         >
                           {inspectingWorkspace ? (
                             <div>
@@ -710,344 +1473,610 @@ export function BlueprintWizardModal({
                         </div>
                       ) : null}
                     </div>
-                    <div>
-                      <FieldLabel label="Version" />
-                      <input
-                        value={form.version}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            version: event.target.value,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="text"
-                      />
+
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Current Scope Review
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Confirm that the workspace, evaluator, and output
+                          paths describe the same job before you tune runtime
+                          behavior.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Evaluator
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {evaluatorLabel}
+                          </div>
+                          <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                            This is the scoring mode the runtime will apply to
+                            the generated output for this workflow family.
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Scope Mode
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {scopeHint}
+                          </div>
+                          <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                            Exact paths keep output tightly bounded. Globs are
+                            better when the workflow should range over a file
+                            family.
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                          Target Path Review
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {targetFiles.length > 0 ? (
+                            targetFiles.map((target) => (
+                              <div
+                                key={target}
+                                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200"
+                              >
+                                {target}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-lg border border-dashed border-white/10 bg-white/[0.03] px-3 py-3 text-sm text-slate-400">
+                              Add at least one relative target path or glob so
+                              the workflow has a concrete output scope.
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : null}
 
-                <div className={sectionCardClass}>
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Scope Hints
+                {activeStep === "runtime" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Runtime Guardrails
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Set the loop limits and acceptance threshold before
+                          reviewing advanced evaluator details.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Evaluator
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {evaluatorLabel}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Acceptance
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {form.minImprovement.toFixed(2)} minimum gain
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Council
+                          </div>
+                          <div className="mt-2 text-sm text-slate-100">
+                            {form.councilSize} agents • {form.debateRounds}{" "}
+                            rounds
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-white/10 bg-slate-950/50 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Gate
+                          </div>
+                          <div className="mt-2">
+                            <StatusChip
+                              label={runtimeStatusLabel}
+                              tone="slate"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+                        <div>
+                          <FieldLabel label="Max Iterations" />
+                          <input
+                            value={form.maxIterations}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                maxIterations: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Timeout Seconds" />
+                          <input
+                            value={form.timeoutSeconds}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                timeoutSeconds: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Min Improvement" />
+                          <input
+                            value={form.minImprovement}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                minImprovement: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={0}
+                            step="0.01"
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel label="Require Tests Pass" />
+                          <select
+                            value={form.requireTestsPass ? "true" : "false"}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                requireTestsPass: event.target.value === "true",
+                              }))
+                            }
+                            className={textFieldClass}
+                          >
+                            <option value="true">Yes</option>
+                            <option value="false">No</option>
+                          </select>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {isResearchTemplate
-                        ? "General research keeps language and target files as optional scoping hints. They are there for cases where you want research outputs organized by domain or written back into specific repo areas."
-                        : "These settings define what kind of workflow this is and where it is allowed to write. Use exact file paths for one named document and globs for families of existing files."}
+
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Council And Model Strategy
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Keep the high-level strategy here. Use advanced
+                          controls below when you need to edit individual
+                          metrics, agents, or model entries.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                        <div>
+                          <FieldLabel label="Model Assignment" />
+                          <select
+                            value={form.modelAssignment}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                modelAssignment: event.target.value as
+                                  | "explicit"
+                                  | "round_robin",
+                              }))
+                            }
+                            className={textFieldClass}
+                          >
+                            <option value="explicit">Explicit</option>
+                            <option value="round_robin">Round Robin</option>
+                          </select>
+                        </div>
+                        <div>
+                          <FieldLabel label="Primary Model" />
+                          <select
+                            value={primaryModelName}
+                            onChange={(event) =>
+                              updatePrimaryModel(event.target.value)
+                            }
+                            className={textFieldClass}
+                          >
+                            {primaryModelOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <FieldHint>
+                            Changing the primary model reorders the current
+                            model pool and updates the guided council baseline.
+                            Use Advanced when you need per-agent overrides or
+                            deeper model-pool edits.
+                          </FieldHint>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                        <div>
+                          <FieldLabel label="Council Size" />
+                          <input
+                            value={form.councilSize}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                councilSize: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel label="Debate Rounds" />
+                          <input
+                            value={form.debateRounds}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                debateRounds: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Metrics
+                          </div>
+                          <div className="mt-2 text-sm text-slate-200">
+                            {safeMetricCount}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Agents
+                          </div>
+                          <div className="mt-2 text-sm text-slate-200">
+                            {safeAgentCount}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                            Models
+                          </div>
+                          <div className="mt-2 text-sm text-slate-200">
+                            {safeModelCount}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
+                ) : null}
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <FieldLabel
-                        label={
-                          isResearchTemplate ? "Research Domain" : "Language"
-                        }
-                        help={
-                          isResearchTemplate
-                            ? "Research workflows can leave this broad. Use it when you want the generated workflow to carry an explicit domain label such as policy, product, or security."
-                            : "This is not just a label. It helps Maabarium choose the evaluator path. Use markdown or prompt for document outputs, research for cited briefs, and code or application for source-tree changes."
-                        }
-                      />
-                      <input
-                        value={form.language}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            language: event.target.value,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="text"
-                      />
-                    </div>
-                    <div>
-                      <FieldLabel
-                        label="Target Paths"
-                        help="Use an exact relative file path when one named output should be created or refined. Use comma or newline separated globs when the workflow should operate across many existing files."
-                      />
-                      <textarea
-                        value={form.targetFilesText}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            targetFilesText: event.target.value,
-                          }))
-                        }
-                        rows={4}
-                        className={textAreaClass}
-                      />
-                    </div>
+                {activeStep === "review" ? (
+                  <div className="space-y-6">
+                    {showHydrationReview ? (
+                      <div className="rounded-xl border border-teal-400/15 bg-teal-500/[0.06] px-4 py-4">
+                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-teal-200">
+                          Workflow Summary
+                        </div>
+                        <div className="mt-2 text-sm text-slate-200">
+                          Maabarium will write a runnable workflow using the
+                          derived choices below. Verify the workflow family,
+                          output scope, evaluator, and workspace before saving.
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3 text-[11px] text-slate-400 md:grid-cols-2 xl:grid-cols-3">
+                          {derivedSummary.map((item) => (
+                            <div key={item.label}>
+                              <span className="font-semibold text-slate-200">
+                                {item.label}:
+                              </span>{" "}
+                              {item.value}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+                ) : null}
 
-                  {isResearchTemplate ? (
-                    <FieldHint>
-                      Research templates default to documentation-style output
-                      paths so you can capture sourced briefs without forcing
-                      code-specific targeting.
-                    </FieldHint>
-                  ) : null}
-
-                  {!isResearchTemplate &&
-                  ["markdown", "prompt"].includes(
-                    form.language.trim().toLowerCase(),
-                  ) ? (
-                    <FieldHint>
-                      For document workflows, prefer an exact relative `.md`
-                      path such as `docs/release-plan.md` when you want one
-                      specifically named output file.
-                    </FieldHint>
-                  ) : null}
-
-                  {!isResearchTemplate &&
-                  !["markdown", "prompt"].includes(
-                    form.language.trim().toLowerCase(),
-                  ) ? (
-                    <FieldHint>
-                      For code and application workflows, prefer globs that
-                      match existing source trees such as `src/**/*` or
-                      `crates/**/*`.
-                    </FieldHint>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-
-            {activeTab === "evaluation" ? (
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-                <div className={sectionCardClass}>
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Constraints
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      Runtime guardrails and acceptance thresholds for the loop.
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <FieldLabel label="Max Iterations" />
-                      <input
-                        value={form.maxIterations}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            maxIterations: Number(event.target.value) || 0,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="number"
-                        min={1}
-                      />
-                    </div>
-                    <div>
-                      <FieldLabel label="Timeout Seconds" />
-                      <input
-                        value={form.timeoutSeconds}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            timeoutSeconds: Number(event.target.value) || 0,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="number"
-                        min={1}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <FieldLabel label="Min Improvement" />
-                      <input
-                        value={form.minImprovement}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            minImprovement: Number(event.target.value) || 0,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="number"
-                        min={0}
-                        step="0.01"
-                      />
-                    </div>
-                    <div>
-                      <FieldLabel label="Require Tests Pass" />
-                      <select
-                        value={form.requireTestsPass ? "true" : "false"}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            requireTestsPass: event.target.value === "true",
-                          }))
-                        }
-                        className={textFieldClass}
-                      >
-                        <option value="true">Yes</option>
-                        <option value="false">No</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className={sectionCardClass}>
-                  <div className="flex items-center justify-between gap-3">
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                        Metrics
+                        Advanced Controls
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
-                        Current metric weight total:{" "}
-                        {metricWeightTotal.toFixed(2)}
+                        Open the raw blueprint controls when you need to edit
+                        templates, metrics, agents, or the full model pool
+                        directly.
                       </div>
                     </div>
                     <button
                       type="button"
-                      onClick={addMetric}
+                      onClick={() =>
+                        setShowAdvancedControls((current) => !current)
+                      }
                       className={secondaryButtonClass}
                     >
-                      Add Metric
+                      {showAdvancedControls ? "Hide Advanced" : "Show Advanced"}
                     </button>
                   </div>
+                </div>
 
-                  <div className="space-y-4">
-                    {form.metrics.map((metric, index) => (
-                      <div
-                        key={`${metric.name}-${index}`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-4"
-                      >
-                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_8rem_10rem_auto]">
-                          <div>
-                            <FieldLabel label="Metric Name" />
-                            <input
-                              value={metric.name}
-                              onChange={(event) =>
-                                updateMetric(index, "name", event.target.value)
-                              }
-                              className={textFieldClass}
-                              type="text"
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel label="Weight" />
-                            <input
-                              value={metric.weight}
-                              onChange={(event) =>
-                                updateMetric(
-                                  index,
-                                  "weight",
-                                  Number(event.target.value) || 0,
-                                )
-                              }
-                              className={textFieldClass}
-                              type="number"
-                              step="0.01"
-                              min={0}
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel label="Direction" />
-                            <select
-                              value={metric.direction}
-                              onChange={(event) =>
-                                updateMetric(
-                                  index,
-                                  "direction",
-                                  event.target.value,
-                                )
-                              }
-                              className={textFieldClass}
-                            >
-                              <option value="maximize">Maximize</option>
-                              <option value="minimize">Minimize</option>
-                            </select>
-                          </div>
-                          <div className="flex items-end">
-                            <button
-                              type="button"
-                              onClick={() => removeMetric(index)}
-                              disabled={form.metrics.length <= 1}
-                              className={secondaryButtonClass}
-                            >
-                              Remove
-                            </button>
-                          </div>
+                {showAdvancedControls ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {TEMPLATE_ORDER.map((template) => {
+                        const defaults = wizardTemplateDefaults(template);
+                        const active = form.template === template;
+
+                        return (
+                          <button
+                            key={template}
+                            type="button"
+                            onClick={() => applyTemplate(template)}
+                            className={`rounded-xl border px-4 py-4 text-left transition ${
+                              active
+                                ? "border-amber-400/40 bg-amber-500/10"
+                                : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
+                            }`}
+                          >
+                            <div className="text-sm font-semibold text-slate-100">
+                              {defaults.label}
+                            </div>
+                            <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                              {defaults.description}
+                            </div>
+                            <div className="mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                              {defaults.language} • {defaults.targetFiles[0]}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
+                      {TAB_ORDER.map((tab) => (
+                        <TabButton
+                          key={tab.id}
+                          active={activeTab === tab.id}
+                          label={tab.label}
+                          copy={tab.copy}
+                          onClick={() => setActiveTab(tab.id)}
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+
+                {showAdvancedControls && activeTab === "basics" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Workflow Identity
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Keep the top-level metadata compact and readable.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                        <div>
+                          <FieldLabel label="Blueprint Name" />
+                          <input
+                            value={form.name}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                name: event.target.value,
+                              }))
+                            }
+                            placeholder="my-awesome-blueprint"
+                            className={textFieldClass}
+                            type="text"
+                          />
                         </div>
 
-                        <div className="mt-4">
+                        <div>
                           <FieldLabel label="Description" />
                           <textarea
-                            value={metric.description}
+                            value={form.description}
                             onChange={(event) =>
-                              updateMetric(
-                                index,
-                                "description",
-                                event.target.value,
-                              )
+                              setForm((current) => ({
+                                ...current,
+                                description: event.target.value,
+                              }))
                             }
-                            rows={3}
+                            rows={4}
                             className={textAreaClass}
                           />
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : null}
 
-            {activeTab === "agents" ? (
-              <div className={sectionCardClass}>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Agents
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      Agent model selections are pulled from the configured
-                      model pool below and prefer the choices you made during
-                      setup.
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addAgent}
-                    className={secondaryButtonClass}
-                  >
-                    Add Agent
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  {form.agents.map((agent, index) => (
-                    <div
-                      key={`${agent.name}-${index}`}
-                      className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-4"
-                    >
-                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1fr)_auto]">
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.65fr)]">
                         <div>
-                          <FieldLabel label="Agent Name" />
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <FieldLabel label="Repo Path" />
+                            {inspectingWorkspace ? (
+                              <StatusChip label="Inspecting" tone="slate" />
+                            ) : workspaceMissing ? (
+                              <StatusChip label="Missing" tone="rose" />
+                            ) : workspaceNotDirectory ? (
+                              <StatusChip label="Not Folder" tone="rose" />
+                            ) : workspaceNeedsGitInit ? (
+                              <StatusChip label="Needs Init" tone="amber" />
+                            ) : workspaceStatus?.isGitRepository ? (
+                              <StatusChip label="Git Ready" tone="emerald" />
+                            ) : null}
+                            {workspaceDiffersFromSavedDefault ? (
+                              <StatusChip
+                                label="Differs Default"
+                                tone="slate"
+                              />
+                            ) : null}
+                          </div>
+                          <div className="space-y-3 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+                            <div className="break-all text-sm text-slate-200">
+                              {form.repoPath ||
+                                "No workspace folder selected yet."}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void chooseWorkspaceFolder()}
+                                className={secondaryButtonClass}
+                              >
+                                Choose Folder
+                              </button>
+                              {form.repoPath ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setForm((current) => ({
+                                      ...current,
+                                      repoPath: "",
+                                    }))
+                                  }
+                                  className={secondaryButtonClass}
+                                >
+                                  Clear
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                          {normalizedWizardWorkspace ? (
+                            <div
+                              className={`mt-3 rounded-lg border px-3 py-3 text-xs leading-relaxed ${workspaceMissing || workspaceNotDirectory ? "border-rose-400/20 bg-rose-500/10 text-rose-100" : workspaceNeedsGitInit || workspaceDiffersFromSavedDefault ? "border-amber-300/20 bg-amber-500/10 text-amber-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"}`}
+                            >
+                              {inspectingWorkspace ? (
+                                <div>
+                                  Inspecting folder and repository status...
+                                </div>
+                              ) : workspaceMissing ? (
+                                <div>
+                                  This path does not exist yet. You can still
+                                  save the workflow, but runs will fail until
+                                  the folder exists.
+                                </div>
+                              ) : workspaceNotDirectory ? (
+                                <div>
+                                  This path is not a folder. Pick a workspace
+                                  directory instead of a file.
+                                </div>
+                              ) : workspaceNeedsGitInit &&
+                                workspaceDiffersFromSavedDefault ? (
+                                <div>
+                                  This folder is not a git repository and it
+                                  differs from the saved default workspace.
+                                  After save, Maabarium will ask whether to
+                                  initialize git here and whether this should
+                                  replace the global default workspace.
+                                </div>
+                              ) : workspaceNeedsGitInit ? (
+                                <div>
+                                  This folder is not a git repository. After
+                                  save, Maabarium will ask whether to initialize
+                                  git here before you run the workflow.
+                                </div>
+                              ) : workspaceDiffersFromSavedDefault ? (
+                                <div>
+                                  This workflow points at a different folder
+                                  than the saved default workspace. After save,
+                                  Maabarium will ask whether to make it the new
+                                  global default.
+                                </div>
+                              ) : workspaceStatus?.isGitRepository ? (
+                                <div>
+                                  Repository detected
+                                  {workspaceStatus.repositoryRoot
+                                    ? ` at ${workspaceStatus.repositoryRoot}`
+                                    : "."}{" "}
+                                  This already matches the saved default
+                                  workspace.
+                                </div>
+                              ) : (
+                                <div>The selected folder is ready to save.</div>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div>
+                          <FieldLabel label="Version" />
                           <input
-                            value={agent.name}
+                            value={form.version}
                             onChange={(event) =>
-                              updateAgent(index, "name", event.target.value)
+                              setForm((current) => ({
+                                ...current,
+                                version: event.target.value,
+                              }))
                             }
                             className={textFieldClass}
                             type="text"
                           />
                         </div>
+                      </div>
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Scope Hints
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {isResearchTemplate
+                            ? "General research keeps language and target files as optional scoping hints. They are there for cases where you want research outputs organized by domain or written back into specific repo areas."
+                            : "These settings define what kind of workflow this is and where it is allowed to write. Use exact file paths for one named document and globs for families of existing files."}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
                         <div>
-                          <FieldLabel label="Role" />
+                          <FieldLabel
+                            label={
+                              isResearchTemplate
+                                ? "Research Domain"
+                                : "Language"
+                            }
+                            help={
+                              isResearchTemplate
+                                ? "Research workflows can leave this broad. Use it when you want the generated workflow to carry an explicit domain label such as policy, product, or security."
+                                : "This is not just a label. It helps Maabarium choose the evaluator path. Use markdown or prompt for document outputs, research for cited briefs, and code or application for source-tree changes."
+                            }
+                          />
                           <input
-                            value={agent.role}
+                            value={form.language}
                             onChange={(event) =>
-                              updateAgent(index, "role", event.target.value)
+                              setForm((current) => ({
+                                ...current,
+                                language: event.target.value,
+                              }))
                             }
                             className={textFieldClass}
                             type="text"
@@ -1055,308 +2084,697 @@ export function BlueprintWizardModal({
                         </div>
                         <div>
                           <FieldLabel
-                            label="Model"
-                            help="This list is derived from the model pool tab and setup-backed local or remote defaults."
+                            label="Target Paths"
+                            help="Use an exact relative file path when one named output should be created or refined. Use comma or newline separated globs when the workflow should operate across many existing files."
                           />
-                          <select
-                            value={agent.model}
+                          <textarea
+                            value={form.targetFilesText}
                             onChange={(event) =>
-                              updateAgent(index, "model", event.target.value)
+                              setForm((current) => ({
+                                ...current,
+                                targetFilesText: event.target.value,
+                              }))
+                            }
+                            rows={4}
+                            className={textAreaClass}
+                          />
+                        </div>
+                      </div>
+
+                      {isResearchTemplate ? (
+                        <FieldHint>
+                          Research templates default to documentation-style
+                          output paths so you can capture sourced briefs without
+                          forcing code-specific targeting.
+                        </FieldHint>
+                      ) : null}
+
+                      {!isResearchTemplate &&
+                      ["markdown", "prompt"].includes(
+                        form.language.trim().toLowerCase(),
+                      ) ? (
+                        <FieldHint>
+                          For document workflows, prefer an exact relative `.md`
+                          path such as `docs/release-plan.md` when you want one
+                          specifically named output file.
+                        </FieldHint>
+                      ) : null}
+
+                      {!isResearchTemplate &&
+                      !["markdown", "prompt"].includes(
+                        form.language.trim().toLowerCase(),
+                      ) ? (
+                        <FieldHint>
+                          For code and application workflows, prefer globs that
+                          match existing source trees such as `src/**/*` or
+                          `crates/**/*`.
+                        </FieldHint>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {showAdvancedControls && activeTab === "evaluation" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Constraints
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Runtime guardrails and acceptance thresholds for the
+                          loop.
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
+                        <div>
+                          <FieldLabel label="Max Iterations" />
+                          <input
+                            value={form.maxIterations}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                maxIterations: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Timeout Seconds" />
+                          <input
+                            value={form.timeoutSeconds}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                timeoutSeconds: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel label="Min Improvement" />
+                          <input
+                            value={form.minImprovement}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                minImprovement: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={0}
+                            step="0.01"
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel label="Require Tests Pass" />
+                          <select
+                            value={form.requireTestsPass ? "true" : "false"}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                requireTestsPass: event.target.value === "true",
+                              }))
                             }
                             className={textFieldClass}
                           >
-                            {combinedModelOptions.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
+                            <option value="true">Yes</option>
+                            <option value="false">No</option>
                           </select>
                         </div>
-                        <div className="flex items-end">
-                          <button
-                            type="button"
-                            onClick={() => removeAgent(index)}
-                            disabled={form.agents.length <= 1}
-                            className={secondaryButtonClass}
+                      </div>
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                            Metrics
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Current metric weight total:{" "}
+                            {metricWeightTotal.toFixed(2)}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addMetric}
+                          className={secondaryButtonClass}
+                        >
+                          Add Metric
+                        </button>
+                      </div>
+
+                      <div className="space-y-4">
+                        {form.metrics.map((metric, index) => (
+                          <div
+                            key={`${metric.name}-${index}`}
+                            className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-4"
                           >
-                            Remove
-                          </button>
+                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_8rem_10rem_auto]">
+                              <div>
+                                <FieldLabel label="Metric Name" />
+                                <input
+                                  value={metric.name}
+                                  onChange={(event) =>
+                                    updateMetric(
+                                      index,
+                                      "name",
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="text"
+                                />
+                              </div>
+                              <div>
+                                <FieldLabel label="Weight" />
+                                <input
+                                  value={metric.weight}
+                                  onChange={(event) =>
+                                    updateMetric(
+                                      index,
+                                      "weight",
+                                      Number(event.target.value) || 0,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="number"
+                                  step="0.01"
+                                  min={0}
+                                />
+                              </div>
+                              <div>
+                                <FieldLabel label="Direction" />
+                                <select
+                                  value={metric.direction}
+                                  onChange={(event) =>
+                                    updateMetric(
+                                      index,
+                                      "direction",
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                >
+                                  <option value="maximize">Maximize</option>
+                                  <option value="minimize">Minimize</option>
+                                </select>
+                              </div>
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => removeMetric(index)}
+                                  disabled={form.metrics.length <= 1}
+                                  className={secondaryButtonClass}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mt-4">
+                              <FieldLabel label="Description" />
+                              <textarea
+                                value={metric.description}
+                                onChange={(event) =>
+                                  updateMetric(
+                                    index,
+                                    "description",
+                                    event.target.value,
+                                  )
+                                }
+                                rows={3}
+                                className={textAreaClass}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {showAdvancedControls && activeTab === "agents" ? (
+                  <div className={sectionCardClass}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Agents
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Agent model selections are pulled from the configured
+                          model pool below and prefer the choices you made
+                          during setup.
                         </div>
                       </div>
-
-                      <div className="mt-4">
-                        <FieldLabel label="System Prompt" />
-                        <textarea
-                          value={agent.systemPrompt}
-                          onChange={(event) =>
-                            updateAgent(
-                              index,
-                              "systemPrompt",
-                              event.target.value,
-                            )
-                          }
-                          rows={4}
-                          className={textAreaClass}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {activeTab === "models" ? (
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-                <div className={sectionCardClass}>
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                      Assignment Strategy
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      Decide how the configured pool should be consumed by the
-                      loop.
-                    </div>
-                  </div>
-
-                  <div>
-                    <FieldLabel
-                      label="Model Assignment"
-                      help="Explicit keeps per-agent selection stable. Round robin rotates requests across the configured model pool."
-                    />
-                    <select
-                      value={form.modelAssignment}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          modelAssignment: event.target.value as
-                            | "explicit"
-                            | "round_robin",
-                        }))
-                      }
-                      className={textFieldClass}
-                    >
-                      <option value="explicit">Explicit</option>
-                      <option value="round_robin">Round Robin</option>
-                    </select>
-                    <FieldHint>
-                      Explicit means each agent keeps the exact model you
-                      selected on the Agents tab. Round robin uses this pool as
-                      an ordered list and rotates requests across it.
-                    </FieldHint>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <FieldLabel label="Council Size" />
-                      <input
-                        value={form.councilSize}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            councilSize: Number(event.target.value) || 0,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="number"
-                        min={1}
-                      />
-                    </div>
-                    <div>
-                      <FieldLabel label="Debate Rounds" />
-                      <input
-                        value={form.debateRounds}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            debateRounds: Number(event.target.value) || 0,
-                          }))
-                        }
-                        className={textFieldClass}
-                        type="number"
-                        min={1}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div className={sectionCardClass}>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                        Model Pool
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Local Ollama entries use setup-backed model choices.
-                        Remote entries keep an editable model name because
-                        providers may expose many possible model ids.
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={addModel}
-                      className={secondaryButtonClass}
-                    >
-                      Add Model
-                    </button>
-                  </div>
-
-                  <div className="space-y-4">
-                    {form.models.map((model, index) => (
-                      <div
-                        key={`${model.provider}-${model.name}-${index}`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-4"
+                      <button
+                        type="button"
+                        onClick={addAgent}
+                        className={secondaryButtonClass}
                       >
-                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_auto]">
-                          <div>
-                            <FieldLabel
-                              label="Provider"
-                              help="Choose the runtime that serves this model entry. Local Ollama entries become dropdown-backed when setup has discovered local models."
-                            />
-                            <select
-                              value={model.provider}
+                        Add Agent
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      {form.agents.map((agent, index) => (
+                        <div
+                          key={`${agent.name}-${index}`}
+                          className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-4"
+                        >
+                          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1fr)_auto]">
+                            <div>
+                              <FieldLabel label="Agent Name" />
+                              <input
+                                value={agent.name}
+                                onChange={(event) =>
+                                  updateAgent(index, "name", event.target.value)
+                                }
+                                className={textFieldClass}
+                                type="text"
+                              />
+                            </div>
+                            <div>
+                              <FieldLabel label="Role" />
+                              <input
+                                value={agent.role}
+                                onChange={(event) =>
+                                  updateAgent(index, "role", event.target.value)
+                                }
+                                className={textFieldClass}
+                                type="text"
+                              />
+                            </div>
+                            <div>
+                              <FieldLabel
+                                label="Model"
+                                help="This list is derived from the model pool tab and setup-backed local or remote defaults."
+                              />
+                              <select
+                                value={agent.model}
+                                onChange={(event) =>
+                                  updateAgent(
+                                    index,
+                                    "model",
+                                    event.target.value,
+                                  )
+                                }
+                                className={textFieldClass}
+                              >
+                                {combinedModelOptions.map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex items-end">
+                              <button
+                                type="button"
+                                onClick={() => removeAgent(index)}
+                                disabled={form.agents.length <= 1}
+                                className={secondaryButtonClass}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mt-4">
+                            <FieldLabel label="System Prompt" />
+                            <textarea
+                              value={agent.systemPrompt}
                               onChange={(event) =>
-                                updateModelProvider(index, event.target.value)
-                              }
-                              className={textFieldClass}
-                            >
-                              {providerOptions.map((provider) => (
-                                <option key={provider.id} value={provider.id}>
-                                  {provider.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <FieldLabel
-                              label="Model Name"
-                              help="For local Ollama providers this is a validated dropdown. For remote providers it stays editable because the provider may support more model ids than the saved defaults expose."
-                            />
-                            {renderModelNameField(model, index)}
-                          </div>
-
-                          <div className="flex items-end">
-                            <button
-                              type="button"
-                              onClick={() => removeModel(index)}
-                              disabled={form.models.length <= 1}
-                              className={secondaryButtonClass}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 text-xs text-slate-500">
-                          This model entry is part of the shared pool used by
-                          the assignment strategy above.
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-                          <div>
-                            <FieldLabel
-                              label="Endpoint"
-                              help="The runtime endpoint used to reach the provider. Ollama defaults to localhost; remote providers inherit the saved endpoint but can be overridden here."
-                            />
-                            <input
-                              value={model.endpoint}
-                              onChange={(event) =>
-                                updateModel(
+                                updateAgent(
                                   index,
-                                  "endpoint",
+                                  "systemPrompt",
                                   event.target.value,
                                 )
                               }
-                              className={textFieldClass}
-                              type="text"
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel
-                              label="API Key Env"
-                              help="Optional environment variable name for provider auth when the runtime expects one."
-                            />
-                            <input
-                              value={model.apiKeyEnv}
-                              onChange={(event) =>
-                                updateModel(
-                                  index,
-                                  "apiKeyEnv",
-                                  event.target.value,
-                                )
-                              }
-                              className={textFieldClass}
-                              type="text"
+                              rows={4}
+                              className={textAreaClass}
                             />
                           </div>
                         </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
-                        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-                          <div>
-                            <FieldLabel
-                              label="Temperature"
-                              help="Sampling temperature for this model entry. Lower values are more deterministic."
-                            />
-                            <input
-                              value={model.temperature}
-                              onChange={(event) =>
-                                updateModel(
-                                  index,
-                                  "temperature",
-                                  Number(event.target.value) || 0,
-                                )
-                              }
-                              className={textFieldClass}
-                              type="number"
-                              step="0.1"
-                              min={0}
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel
-                              label="Max Tokens"
-                              help="Upper bound for completion length when the provider supports a max token parameter."
-                            />
-                            <input
-                              value={model.maxTokens}
-                              onChange={(event) =>
-                                updateModel(
-                                  index,
-                                  "maxTokens",
-                                  Number(event.target.value) || 0,
-                                )
-                              }
-                              className={textFieldClass}
-                              type="number"
-                              min={1}
-                            />
-                          </div>
-                          <div>
-                            <FieldLabel
-                              label="Requests / Minute"
-                              help="Optional throttle for providers with hard rate limits. Leave blank when you do not need a per-model cap."
-                            />
-                            <input
-                              value={model.requestsPerMinute}
-                              onChange={(event) =>
-                                updateModel(
-                                  index,
-                                  "requestsPerMinute",
-                                  event.target.value,
-                                )
-                              }
-                              className={textFieldClass}
-                              type="text"
-                              inputMode="numeric"
-                            />
+                {showAdvancedControls && activeTab === "models" ? (
+                  <div className="space-y-6">
+                    <div className={sectionCardClass}>
+                      <div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                          Assignment Strategy
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Decide how the configured pool should be consumed by
+                          the loop.
+                        </div>
+                      </div>
+
+                      <div>
+                        <FieldLabel
+                          label="Model Assignment"
+                          help="Explicit keeps per-agent selection stable. Round robin rotates requests across the configured model pool."
+                        />
+                        <select
+                          value={form.modelAssignment}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              modelAssignment: event.target.value as
+                                | "explicit"
+                                | "round_robin",
+                            }))
+                          }
+                          className={textFieldClass}
+                        >
+                          <option value="explicit">Explicit</option>
+                          <option value="round_robin">Round Robin</option>
+                        </select>
+                        <FieldHint>
+                          Explicit means each agent keeps the exact model you
+                          selected on the Agents tab. Round robin uses this pool
+                          as an ordered list and rotates requests across it.
+                        </FieldHint>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                        <div>
+                          <FieldLabel label="Council Size" />
+                          <input
+                            value={form.councilSize}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                councilSize: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel label="Debate Rounds" />
+                          <input
+                            value={form.debateRounds}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                debateRounds: Number(event.target.value) || 0,
+                              }))
+                            }
+                            className={textFieldClass}
+                            type="number"
+                            min={1}
+                          />
+                        </div>
+                        <div>
+                          <FieldLabel label="Pool Mode Summary" />
+                          <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-sm text-slate-200">
+                            {form.modelAssignment === "round_robin"
+                              ? "Requests rotate across the configured model pool."
+                              : "Agents keep explicit model assignments from the pool."}
                           </div>
                         </div>
                       </div>
-                    ))}
+                    </div>
+
+                    <div className={sectionCardClass}>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                            Model Pool
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Local Ollama entries use setup-backed model choices.
+                            Remote entries keep an editable model name because
+                            providers may expose many possible model ids.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addModel}
+                          className={secondaryButtonClass}
+                        >
+                          Add Model
+                        </button>
+                      </div>
+
+                      <div className="space-y-4">
+                        {form.models.map((model, index) => (
+                          <div
+                            key={`${model.provider}-${model.name}-${index}`}
+                            className="rounded-xl border border-white/10 bg-slate-950/40 px-4 py-4"
+                          >
+                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_auto]">
+                              <div>
+                                <FieldLabel
+                                  label="Provider"
+                                  help="Choose the runtime that serves this model entry. Local Ollama entries become dropdown-backed when setup has discovered local models."
+                                />
+                                <select
+                                  value={model.provider}
+                                  onChange={(event) =>
+                                    updateModelProvider(
+                                      index,
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                >
+                                  {providerOptions.map((provider) => (
+                                    <option
+                                      key={provider.id}
+                                      value={provider.id}
+                                    >
+                                      {provider.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <FieldLabel
+                                  label="Model Name"
+                                  help="For local Ollama providers this is a validated dropdown. For remote providers it stays editable because the provider may support more model ids than the saved defaults expose."
+                                />
+                                {renderModelNameField(model, index)}
+                              </div>
+
+                              <div className="flex items-end">
+                                <button
+                                  type="button"
+                                  onClick={() => removeModel(index)}
+                                  disabled={form.models.length <= 1}
+                                  className={secondaryButtonClass}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mt-2 text-xs text-slate-500">
+                              This model entry is part of the shared pool used
+                              by the assignment strategy above.
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                              <div>
+                                <FieldLabel
+                                  label="Endpoint"
+                                  help="The runtime endpoint used to reach the provider. Ollama defaults to localhost; remote providers inherit the saved endpoint but can be overridden here."
+                                />
+                                <input
+                                  value={model.endpoint}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "endpoint",
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="text"
+                                />
+                              </div>
+                              <div>
+                                <FieldLabel
+                                  label="API Key Env"
+                                  help="Optional environment variable name for provider auth when the runtime expects one."
+                                />
+                                <input
+                                  value={model.apiKeyEnv}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "apiKeyEnv",
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="text"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+                              <div>
+                                <FieldLabel
+                                  label="Temperature"
+                                  help="Sampling temperature for this model entry. Lower values are more deterministic."
+                                />
+                                <input
+                                  value={model.temperature}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "temperature",
+                                      Number(event.target.value) || 0,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="number"
+                                  step="0.1"
+                                  min={0}
+                                />
+                              </div>
+                              <div>
+                                <FieldLabel
+                                  label="Max Tokens"
+                                  help="Upper bound for completion length when the provider supports a max token parameter."
+                                />
+                                <input
+                                  value={model.maxTokens}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "maxTokens",
+                                      Number(event.target.value) || 0,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="number"
+                                  min={1}
+                                />
+                              </div>
+                              <div>
+                                <FieldLabel
+                                  label="Requests / Minute"
+                                  help="Optional throttle for providers with hard rate limits. Leave blank when you do not need a per-model cap."
+                                />
+                                <input
+                                  value={model.requestsPerMinute}
+                                  onChange={(event) =>
+                                    updateModel(
+                                      index,
+                                      "requestsPerMinute",
+                                      event.target.value,
+                                    )
+                                  }
+                                  className={textFieldClass}
+                                  type="text"
+                                  inputMode="numeric"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : null}
               </div>
-            ) : null}
+
+              {!showAdvancedControls ? (
+                <aside className="space-y-4 self-start overflow-x-hidden xl:sticky xl:top-6 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1">
+                  <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                    <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                      <LayoutDashboard size={14} className="text-teal-300" />
+                      Live Blueprint Summary
+                    </div>
+                    <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                      The guided flow keeps this summary live so you can see how
+                      each step changes the workflow before you save.
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {summaryRows.map((item) => (
+                        <SummaryRow
+                          key={item.label}
+                          label={item.label}
+                          value={item.value}
+                          icon={item.icon}
+                          active={item.active}
+                        />
+                      ))}
+                    </div>
+                    {workspaceSidebarNote ? (
+                      <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-500/10 px-3 py-3 text-xs leading-relaxed text-amber-100">
+                        {workspaceSidebarNote}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
+                    <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                      Step Actions
+                    </div>
+                    <div className="mt-2 text-xs leading-relaxed text-slate-400">
+                      Guided navigation stays visible here, and the footer keeps
+                      mirrored actions while you scroll through the form.
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (canGoForward && nextStep) {
+                            setActiveStep(nextStep);
+                            return;
+                          }
+                          onSubmit();
+                        }}
+                        disabled={isCreating || isEngineRunning}
+                        className={`${
+                          canGoForward && nextStep
+                            ? secondaryButtonClass
+                            : accentButtonClass
+                        } flex w-full items-center justify-center gap-2 py-3`}
+                      >
+                        {primaryActionLabel}
+                        {canGoForward && nextStep ? (
+                          <ChevronRight size={14} />
+                        ) : null}
+                      </button>
+                      {canGoBack && previousStep ? (
+                        <button
+                          type="button"
+                          onClick={() => setActiveStep(previousStep)}
+                          disabled={isCreating}
+                          className={`${secondaryButtonClass} flex w-full items-center justify-center gap-2 py-3`}
+                        >
+                          <ChevronLeft size={14} />
+                          Previous Step
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </aside>
+              ) : null}
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/5 bg-white/[0.03] px-6 py-4">
@@ -1373,6 +2791,26 @@ export function BlueprintWizardModal({
                 : ""}
             </div>
             <div className="flex flex-wrap items-center gap-3">
+              {canGoBack && previousStep ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveStep(previousStep)}
+                  disabled={isCreating}
+                  className={secondaryButtonClass}
+                >
+                  Previous Step
+                </button>
+              ) : null}
+              {canGoForward && nextStep ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveStep(nextStep)}
+                  disabled={isCreating || isEngineRunning}
+                  className={secondaryButtonClass}
+                >
+                  Next Step
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={onClose}
@@ -1402,5 +2840,17 @@ export function BlueprintWizardModal({
         </div>
       </div>
     </div>
+  );
+}
+
+export function BlueprintWizardModal(props: BlueprintWizardModalProps) {
+  if (!props.open) {
+    return null;
+  }
+
+  return (
+    <WizardRenderBoundary onClose={props.onClose}>
+      <BlueprintWizardModalBody {...props} />
+    </WizardRenderBoundary>
   );
 }

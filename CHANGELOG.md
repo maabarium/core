@@ -13,10 +13,33 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Changed
 
 - Blueprint documentation and desktop wizard copy now explain workflow types, output types, and target path rules more explicitly, including when to use exact markdown output paths versus broad globs.
+- The desktop blueprint wizard now starts with a guided goal, output, workspace, runtime, and review flow that derives safer defaults from the outcome you want, while keeping the full raw template, metric, agent, and model controls available under an advanced section.
+- The desktop Blueprint Wizard now uses a denser breadcrumb-style guided layout with a persistent live summary sidebar, mirrored navigation actions, more tactile goal and deliverable cards, and a full-width advanced mode that temporarily takes over the canvas.
+- The desktop Blueprint Wizard now hardens its guided render path against malformed live state instead of blanking the full app, and the workspace/runtime steps now surface clearer operational status cards and target-path review blocks so the new shell reads more cleanly.
+- The desktop Blueprint Wizard now normalizes malformed live metric, agent, and model state before hook selectors and modal rendering run, and its render boundary now wraps the full body so bad persisted wizard state falls back to an in-modal error instead of a blank screen.
+- The guided Blueprint Wizard step bodies now stack their main content cards in cleaner full-width rows instead of splitting each step into narrow side-by-side columns, which makes the step content easier to scan and use on wide desktop layouts.
+- The Blueprint Wizard now surfaces workflow identity before goal selection in the guided flow, and the advanced basics, evaluation, and model tabs have been flattened into broader stacked sections instead of older split-column panels.
+- Selecting a goal in the guided Blueprint Wizard no longer auto-advances to the output step; the flow now waits for the explicit Next Step action so the goal step feels less jumpy.
+- The goal step now reads as name, goal, then description, and custom description text is preserved when the workflow goal changes instead of being reset by template-derived defaults.
+- The desktop console now lets operators collapse Run Analytics, Evidence, Workflow Library, and Maintenance independently, restores that layout after restart, and keeps the Blueprint Wizard summary rail sticky with its own scroll window so review actions stay visible during long guided forms.
+- The embedded Maintenance readiness tab once again exposes a visible `Run Setup` action, so the guided onboarding modal remains reachable even when the old global setup shortcut is absent.
+- The guided Blueprint Wizard runtime step now lets operators change the primary model directly without opening Advanced mode; selecting it reorders the current model pool and updates the simplified council baseline.
+- The guided Blueprint Wizard now honors Ollama models explicitly selected in desktop setup even when the live Ollama snapshot has not surfaced them yet, so setup-chosen local models appear in the runtime-step primary-model selector and seed new wizard model pools consistently.
+- The desktop console now keeps retained promoted winners and their persisted proposal patchsets in the active workflow snapshot, shows a compact retained winner history with explicit export actions, lets the activity diff jump directly to the selected retained winner, and can export the actual promoted winner files as a backend-built tar.gz archive instead of only downloading persisted patch metadata.
+- The desktop console now consolidates retained artifacts, research evidence, and LoRA runtime inspection into a single tabbed evidence panel, keeps manual evidence-tab selection stable, and expands that area to use the freed vertical space in the main console column.
+- The maintenance row now combines Readiness Center, Updates, and Persisted Stack into one full-width tabbed maintenance panel instead of splitting those controls across separate cards and the right sidebar.
+- The desktop console now remembers the last selected maintenance and evidence tabs across app reloads, so console operators return to the same inspection surface after restart.
+- The Blueprint Wizard guided flow now stays goal-first by default: the old template picker is hidden behind advanced controls, and the stepped header renders a derived summary instead of leaking raw guidance text and model names into the main flow.
 
 ### Fixed
 
-- None.
+- Promoting a winner onto `main` or `master` now refreshes a clean checked-out target branch immediately after the ref move, preventing the repository checkout from showing staged deletions or stale tracked files until the user manually resets.
+- Proposal generation now performs one structured repair pass when a model reply omits the top-level JSON proposal envelope, letting the same model or a pooled fallback model convert otherwise-usable content into Maabarium's proposal schema before the iteration fails.
+- Ollama proposal runs now recover completion content from the provider's `thinking` field when `response` is empty, and still log a bounded raw payload excerpt plus an explicit provider diagnostic when both fields are blank despite reported eval tokens.
+- The desktop Evidence > Retained export flow now shows in-card progress while packaging a retained winner archive and confirms the saved `.tar.gz` location after export, so retained file exports no longer read like silent no-ops.
+- Retained patchset and persisted-preview downloads now show immediate in-card feedback, and retained archive export now normalizes the chosen save path to `.tar.gz` without relying on a brittle multi-dot file filter in the native save dialog.
+- Retained winner archive export now downloads the generated `.tar.gz` directly from the desktop backend instead of relying on the macOS save-dialog path that was still failing to produce an archive.
+- Research evidence-gap proposals with no file patches now degrade into scored rejections instead of hard parse errors when discovery still cannot resolve a source, so later iterations can continue without being derailed by citation-free fallback summaries.
 
 ### Breaking Changes
 

@@ -119,7 +119,7 @@ fn build_proposal_context(bp: &BlueprintFile, iteration: u64, baseline: f64) -> 
         };
         context.push_str(
             &format!(
-                "\nResearch proposal contract:\n- {search_provider_note}\n- Prefer one narrow markdown patch instead of broad rewrites.\n- Every major claim added must include at least one external URL inline.\n- If evidence is weak or no external URL is available, return no patch and explain the evidence gap in summary.\n- Prefer appending to an existing research note or creating one new markdown note in the configured target paths.\n- Unified diff hunk headers and line counts must be exact; do not invent them."
+                "\nResearch proposal contract:\n- {search_provider_note}\n- Prefer one narrow markdown patch instead of broad rewrites.\n- Every major claim added must include at least one external URL inline.\n- If evidence is weak or no external URL is available, return no patch, explain the evidence gap in summary, and include a follow-up search cue using the exact phrase Search for \"...\".\n- Prefer appending to an existing research note or creating one new markdown note in the configured target paths.\n- Unified diff hunk headers and line counts must be exact; do not invent them."
             ),
         );
     }
@@ -502,6 +502,9 @@ impl Engine {
             );
 
             let decision_started = std::time::Instant::now();
+            let mut promoted_branch_name: Option<String> = None;
+            let mut promoted_commit_oid: Option<String> = None;
+
             let promotion_outcome = if self.cancel.is_cancelled() {
                 self.report_progress(
                     EnginePhase::Cancelled,
@@ -605,6 +608,17 @@ impl Engine {
                                 .await;
                             PromotionOutcome::PromotionFailed
                         } else {
+                            promoted_branch_name = Some(branch.clone());
+                            match self.git.branch_head_commit_oid(&branch).await {
+                                Ok(commit_oid) => {
+                                    promoted_commit_oid = Some(commit_oid);
+                                }
+                                Err(error) => {
+                                    warn!(
+                                        "Failed to resolve promoted commit for branch '{branch}': {error}"
+                                    );
+                                }
+                            }
                             baseline = result.weighted_total;
                             PromotionOutcome::Promoted
                         }
@@ -667,7 +681,13 @@ impl Engine {
 
             if let Err(e) = self
                 .persistence
-                .log_experiment(&bp_name, &result, promotion_outcome)
+                .log_experiment(
+                    &bp_name,
+                    &result,
+                    promotion_outcome,
+                    promoted_branch_name.as_deref(),
+                    promoted_commit_oid.as_deref(),
+                )
             {
                 error!("Failed to persist experiment: {e}");
             }

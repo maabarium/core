@@ -556,6 +556,19 @@ fn is_unusable_discovery_summary(summary: &str) -> bool {
         || lowered.contains("insufficient evidence to create a new patch")
 }
 
+    fn is_explicit_evidence_gap_summary(summary: &str) -> bool {
+        let lowered = summary.to_ascii_lowercase();
+
+        lowered.contains("evidence gap")
+        || lowered.contains("no external url")
+        || lowered.contains("no external urls")
+        || lowered.contains("return no patch")
+        || lowered.contains("return an empty file_patches array")
+        || lowered.contains("cannot verify")
+        || lowered.contains("no credible")
+        || lowered.contains("insufficient evidence")
+    }
+
 fn extract_quoted_phrase(input: &str) -> Option<String> {
     for delimiter in ['\'', '"'] {
         if let Some(start) = input.find(delimiter) {
@@ -592,6 +605,34 @@ impl Evaluator for ResearchEvaluator {
         let sources = self.merge_sources(verified_sources, discovered_sources);
 
         if citations.is_empty() && sources.is_empty() {
+            if proposal.file_patches.is_empty() && is_explicit_evidence_gap_summary(&proposal.summary)
+            {
+                let scores = self
+                    .metrics
+                    .iter()
+                    .map(|metric| MetricScore {
+                        name: metric.name.clone(),
+                        value: self.score_metric(metric, proposal, &citations, &sources),
+                        weight: metric.weight,
+                    })
+                    .collect::<Vec<_>>();
+                let weighted_total = ExperimentResult::compute_weighted_total(&scores);
+
+                return Ok(ExperimentResult {
+                    iteration,
+                    proposal: proposal.clone(),
+                    scores,
+                    weighted_total,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    research: Some(ResearchArtifacts {
+                        sources,
+                        citations,
+                        query_traces,
+                    }),
+                    lora: None,
+                });
+            }
+
             let message = if self.discovery_provider.is_some() {
                 "research proposals must include at least one external citation URL or a resolvable discovery query"
             } else if self.provider_hint == "brave_api" {
@@ -1189,5 +1230,33 @@ mod tests {
             evaluator.build_discovery_query(&proposal).as_deref(),
             Some("Research the best way to perfect cake icing.")
         );
+    }
+
+    #[tokio::test]
+    async fn evidence_gap_no_patch_proposals_score_instead_of_error() {
+        let evaluator = ResearchEvaluator {
+            client: Client::new(),
+            metrics: vec![research_metric("source_quality")],
+            discovery_provider: None,
+            provider_hint: "duckduckgo_scrape",
+            topic_hint: None,
+            verify_discovered_urls: true,
+        };
+        let proposal = Proposal {
+            summary: "Evidence gap: No external URLs were available to verify the claim set. Search for \"Qwen-3.5:27b VRAM requirements RTX 4060 Ti 16GB pricing\" before attempting another patch.".to_owned(),
+            file_patches: Vec::new(),
+        };
+
+        let result = evaluator
+            .evaluate(&proposal, 2, &EvaluationContext::default())
+            .await
+            .expect("explicit evidence-gap proposals should score instead of erroring");
+
+        assert_eq!(result.iteration, 2);
+        assert!(result.proposal.file_patches.is_empty());
+        assert!(result.weighted_total >= 0.0);
+        let research = result.research.expect("research artifacts should be captured");
+        assert!(research.sources.is_empty());
+        assert!(research.citations.is_empty());
     }
 }

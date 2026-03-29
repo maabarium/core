@@ -143,6 +143,8 @@ export type PersistedExperiment = {
     | "rejected"
     | "cancelled"
     | "promotion_failed";
+  promoted_branch_name: string | null;
+  promoted_commit_oid: string | null;
   created_at: string;
   metrics: MetricScore[];
   research: ResearchArtifacts | null;
@@ -437,6 +439,30 @@ export type WizardTemplate =
   | "general_research"
   | "lora_validation"
   | "custom";
+
+export type WizardGoal =
+  | "code_improvement"
+  | "application_change"
+  | "document_workflow"
+  | "research_brief"
+  | "lora_validation"
+  | "custom_workflow";
+
+export type WizardDeliverable =
+  | "source_files"
+  | "source_files_with_tests"
+  | "application_code_areas"
+  | "application_plus_docs"
+  | "named_document"
+  | "markdown_directory"
+  | "prompt_asset"
+  | "named_research_brief"
+  | "research_notes_directory"
+  | "research_docs_directory"
+  | "lora_manifest_and_artifacts"
+  | "lora_adapter_directory"
+  | "custom_exact_file"
+  | "custom_glob_scope";
 
 export type AvailableBlueprint = {
   path: string;

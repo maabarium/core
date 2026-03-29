@@ -1,9 +1,14 @@
 use crate::error::GitError;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use git2::{BranchType, Repository};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use tar::{Builder, Header};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposal {
@@ -126,14 +131,145 @@ impl GitManager {
         let branch = branch.to_owned();
         tokio::task::spawn_blocking(move || -> Result<(), GitError> {
             let repo = discover_repository(&path)?;
+            let target_branch_name = repo
+                .find_branch("main", BranchType::Local)
+                .map(|_| "main")
+                .or_else(|_| repo.find_branch("master", BranchType::Local).map(|_| "master"))?;
+            let workdir = repo.workdir().map(Path::to_path_buf);
+            let checked_out_branch = repo
+                .head()
+                .ok()
+                .and_then(|head| head.is_branch().then(|| head.shorthand().map(str::to_owned)))
+                .flatten();
+            let checkout_was_clean = workdir
+                .as_ref()
+                .map(|workdir| is_checkout_clean(workdir))
+                .transpose()?;
             let branch_ref = repo.find_branch(&branch, BranchType::Local)?;
             let branch_commit = branch_ref.get().peel_to_commit()?;
             let mut main = repo
-                .find_branch("main", BranchType::Local)
+                .find_branch(target_branch_name, BranchType::Local)
                 .or_else(|_| repo.find_branch("master", BranchType::Local))?;
             main.get_mut()
                 .set_target(branch_commit.id(), &format!("Promote {branch}"))?;
+
+            if checked_out_branch.as_deref() == Some(target_branch_name)
+                && checkout_was_clean == Some(true)
+            {
+                let commit_id = branch_commit.id().to_string();
+                if let Some(workdir) = workdir.as_ref() {
+                    run_git(workdir, ["reset", "--hard", commit_id.as_str()])?;
+                }
+            }
             Ok(())
+        })
+        .await
+        .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
+    }
+
+    pub async fn branch_head_commit_oid(&self, branch: &str) -> Result<String, GitError> {
+        let path = self.repo_path.clone();
+        let branch = branch.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<String, GitError> {
+            let repo = discover_repository(&path)?;
+            let branch_ref = repo.find_branch(&branch, BranchType::Local)?;
+            let commit = branch_ref.get().peel_to_commit()?;
+            Ok(commit.id().to_string())
+        })
+        .await
+        .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
+    }
+
+    pub async fn export_commit_paths_as_tar_gz(
+        &self,
+        commit_oid: &str,
+        paths: &[String],
+        output_path: &Path,
+    ) -> Result<(), GitError> {
+        let archive_bytes = self
+            .export_commit_paths_as_tar_gz_bytes(commit_oid, paths)
+            .await?;
+        let output_path = output_path.to_path_buf();
+        tokio::task::spawn_blocking(move || -> Result<(), GitError> {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output_path, archive_bytes)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
+    }
+
+    pub async fn export_commit_paths_as_tar_gz_bytes(
+        &self,
+        commit_oid: &str,
+        paths: &[String],
+    ) -> Result<Vec<u8>, GitError> {
+        let repo_path = self.repo_path.clone();
+        let commit_oid = commit_oid.to_owned();
+        let export_paths = paths.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, GitError> {
+            let repo = discover_repository(&repo_path)?;
+            let commit = repo.find_commit(git2::Oid::from_str(&commit_oid)?)?;
+            let tree = commit.tree()?;
+
+            let encoder = GzEncoder::new(Vec::new(), Compression::default());
+            let mut builder = Builder::new(encoder);
+            let mut missing_paths = Vec::new();
+            let mut exported_paths = BTreeSet::new();
+
+            for export_path in export_paths {
+                if !exported_paths.insert(export_path.clone()) {
+                    continue;
+                }
+
+                let entry = match tree.get_path(Path::new(&export_path)) {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        missing_paths.push(export_path.clone());
+                        continue;
+                    }
+                };
+
+                let Some(git2::ObjectType::Blob) = entry.kind() else {
+                    missing_paths.push(export_path.clone());
+                    continue;
+                };
+
+                let blob = repo.find_blob(entry.id())?;
+                let blob_content = blob.content();
+                let mut header = Header::new_gnu();
+                header.set_size(blob_content.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append_data(&mut header, export_path.as_str(), Cursor::new(blob_content))?;
+            }
+
+            if !missing_paths.is_empty() {
+                let manifest = serde_json::json!({
+                    "promoted_commit_oid": commit.id().to_string(),
+                    "exported_paths": exported_paths.into_iter().collect::<Vec<_>>(),
+                    "missing_paths": missing_paths,
+                    "note": "Missing paths were not present in the promoted commit. This usually means the retained winner deleted them or the experiment predates commit tracking."
+                });
+                let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+                    .map_err(|error| GitError::Io(std::io::Error::other(error.to_string())))?;
+                let mut header = Header::new_gnu();
+                header.set_size(manifest_bytes.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append_data(
+                    &mut header,
+                    "maabarium-export-manifest.json",
+                    Cursor::new(manifest_bytes),
+                )?;
+            }
+
+            builder.finish()?;
+            let encoder = builder.into_inner()?;
+            let bytes = encoder.finish()?;
+            Ok(bytes)
         })
         .await
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
@@ -374,10 +510,31 @@ fn is_branch_attached(workspace_path: &Path) -> bool {
     matches!(run_git_status(workspace_path, ["symbolic-ref", "-q", "HEAD"]), Ok(0))
 }
 
+fn is_checkout_clean(repo_path: &Path) -> Result<bool, GitError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_path)
+        .args(["status", "--short"])
+        .output()
+        .map_err(GitError::Io)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        return Err(GitError::Io(std::io::Error::other(
+            if !stderr.is_empty() { stderr } else { stdout },
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::GzDecoder;
     use git2::{Repository, Signature};
+    use tar::Archive;
 
     fn create_test_repo() -> tempfile::TempDir {
         let temp_dir = tempfile::tempdir().expect("tempdir should be created");
@@ -634,6 +791,159 @@ mod tests {
         assert_eq!(second_applied.timing.checkout_target_branch_ms, 0);
 
         git.cleanup_experiment_workspace(&second_applied.workspace.path)
+            .await
+            .expect("workspace should clean up");
+    }
+
+    #[tokio::test]
+    async fn promotion_refreshes_clean_checked_out_target_branch() {
+        let temp_dir = create_test_repo();
+        let git = GitManager::new(temp_dir.path());
+
+        let branch = GitManager::experiment_branch_name("runpromote2", 1);
+        let applied = git
+            .apply_proposal(
+                &branch,
+                &Proposal {
+                    summary: "create doc".into(),
+                    file_patches: vec![FilePatch {
+                        path: "docs/project-echo-implementation.md".into(),
+                        operation: FilePatchOperation::Create,
+                        content: Some("# Project Echo\n".into()),
+                    }],
+                },
+                None,
+            )
+            .await
+            .expect("proposal should apply");
+
+        git.commit_experiment_workspace(&applied.workspace.path, "create doc")
+            .await
+            .expect("workspace should commit successfully");
+        git.create_branch_at_workspace_head(&applied.workspace.path, &branch)
+            .await
+            .expect("branch should be created from detached workspace head");
+
+        assert!(
+            !temp_dir
+                .path()
+                .join("docs/project-echo-implementation.md")
+                .exists(),
+            "target branch content should not exist before promotion"
+        );
+
+        git.promote_branch(&branch)
+            .await
+            .expect("branch should promote");
+
+        assert!(
+            temp_dir
+                .path()
+                .join("docs/project-echo-implementation.md")
+                .exists(),
+            "promotion should refresh the checked out target branch"
+        );
+
+        let status_output = Command::new("git")
+            .arg("-C")
+            .arg(temp_dir.path())
+            .args(["status", "--short"])
+            .output()
+            .expect("git status should succeed");
+        assert!(status_output.status.success());
+        assert!(
+            String::from_utf8_lossy(&status_output.stdout).trim().is_empty(),
+            "promotion should not leave a dirty index or worktree"
+        );
+
+        git.cleanup_experiment_workspace(&applied.workspace.path)
+            .await
+            .expect("workspace should clean up");
+    }
+
+    #[tokio::test]
+    async fn exports_actual_files_from_a_promoted_commit_archive() {
+        let temp_dir = create_test_repo();
+        let git = GitManager::new(temp_dir.path());
+
+        let branch = GitManager::experiment_branch_name("runexport1", 1);
+        let applied = git
+            .apply_proposal(
+                &branch,
+                &Proposal {
+                    summary: "create retained doc".into(),
+                    file_patches: vec![FilePatch {
+                        path: "docs/project-echo-implementation.md".into(),
+                        operation: FilePatchOperation::Create,
+                        content: Some("# Project Echo\n\nRetained winner\n".into()),
+                    }],
+                },
+                None,
+            )
+            .await
+            .expect("proposal should apply");
+
+        git.commit_experiment_workspace(&applied.workspace.path, "create retained doc")
+            .await
+            .expect("workspace should commit successfully");
+        git.create_branch_at_workspace_head(&applied.workspace.path, &branch)
+            .await
+            .expect("branch should be created from detached workspace head");
+
+        let commit_oid = git
+            .branch_head_commit_oid(&branch)
+            .await
+            .expect("branch head commit should resolve");
+        let archive_path = temp_dir.path().join("retained-winner.tar.gz");
+
+        git.export_commit_paths_as_tar_gz(
+            &commit_oid,
+            &[
+                "docs/project-echo-implementation.md".to_owned(),
+                "docs/missing.md".to_owned(),
+            ],
+            &archive_path,
+        )
+        .await
+        .expect("archive export should succeed");
+
+        let archive_file = std::fs::File::open(&archive_path).expect("archive should exist");
+        let decoder = GzDecoder::new(archive_file);
+        let mut archive = Archive::new(decoder);
+        let mut exported_doc = None;
+        let mut export_manifest = None;
+
+        for entry in archive.entries().expect("archive entries should load") {
+            let mut entry = entry.expect("archive entry should read");
+            let path = entry
+                .path()
+                .expect("archive entry path should load")
+                .to_string_lossy()
+                .to_string();
+            let mut contents = String::new();
+            use std::io::Read;
+            entry
+                .read_to_string(&mut contents)
+                .expect("archive entry should decode as utf-8");
+            match path.as_str() {
+                "docs/project-echo-implementation.md" => exported_doc = Some(contents),
+                "maabarium-export-manifest.json" => export_manifest = Some(contents),
+                _ => {}
+            }
+        }
+
+        assert_eq!(
+            exported_doc.as_deref(),
+            Some("# Project Echo\n\nRetained winner\n")
+        );
+        assert!(
+            export_manifest
+                .as_deref()
+                .is_some_and(|manifest| manifest.contains("docs/missing.md")),
+            "export manifest should record missing retained paths"
+        );
+
+        git.cleanup_experiment_workspace(&applied.workspace.path)
             .await
             .expect("workspace should clean up");
     }

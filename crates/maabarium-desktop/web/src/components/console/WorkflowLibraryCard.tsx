@@ -22,6 +22,8 @@ type WorkflowLibraryCardProps = {
   pendingBlueprintPath: string | null;
   isEngineRunning: boolean;
   activeBlueprintPath: string;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onOpenWizard: () => void;
   onDensityChange: (density: BlueprintDensity) => void;
   onSearchQueryChange: (value: string) => void;
@@ -50,6 +52,8 @@ export function WorkflowLibraryCard({
   pendingBlueprintPath,
   isEngineRunning,
   activeBlueprintPath,
+  collapsed,
+  onToggleCollapsed,
   onOpenWizard,
   onDensityChange,
   onSearchQueryChange,
@@ -65,6 +69,9 @@ export function WorkflowLibraryCard({
       title="Workflow Library"
       icon={FileText}
       glow
+      collapsible
+      collapsed={collapsed}
+      onToggleCollapsed={onToggleCollapsed}
       headerActions={
         <button
           type="button"

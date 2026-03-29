@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { Activity, History, Terminal } from "lucide-react";
 import { buildPatchPreview } from "../../lib/analytics";
 import type {
@@ -23,6 +24,8 @@ export function ConsoleActivityPanel({
   activeTab,
   history,
   latestProposal,
+  winnerProposal,
+  selectedWinnerProposal,
   logs,
   logPath,
   onChangeTab,
@@ -31,11 +34,101 @@ export function ConsoleActivityPanel({
   activeTab: ConsoleTab;
   history: HistoryRow[];
   latestProposal: PersistedProposal | null;
+  winnerProposal: PersistedProposal | null;
+  selectedWinnerProposal: PersistedProposal | null;
   logs: string[];
   logPath: string;
   onChangeTab: (tab: ConsoleTab) => void;
   onOpenLogFile: () => void;
 }) {
+  const focusedWinnerProposal = selectedWinnerProposal ?? winnerProposal;
+  const diffOptions = useMemo(() => {
+    const options: Array<{
+      id: "latest" | "winner";
+      label: string;
+      proposal: PersistedProposal;
+    }> = [];
+
+    if (latestProposal) {
+      options.push({
+        id: "latest",
+        label:
+          focusedWinnerProposal &&
+          focusedWinnerProposal.id === latestProposal.id
+            ? "Latest • Winner"
+            : "Latest Proposal",
+        proposal: latestProposal,
+      });
+    }
+
+    if (
+      focusedWinnerProposal &&
+      focusedWinnerProposal.id !== latestProposal?.id
+    ) {
+      options.push({
+        id: "winner",
+        label: selectedWinnerProposal
+          ? "Selected Retained Winner"
+          : "Winning Proposal",
+        proposal: focusedWinnerProposal,
+      });
+    }
+
+    return options;
+  }, [focusedWinnerProposal, latestProposal, selectedWinnerProposal]);
+  const [selectedDiffSource, setSelectedDiffSource] = useState<
+    "latest" | "winner"
+  >("latest");
+
+  useEffect(() => {
+    if (!diffOptions.length) {
+      setSelectedDiffSource("latest");
+      return;
+    }
+
+    if (!diffOptions.some((option) => option.id === selectedDiffSource)) {
+      setSelectedDiffSource(diffOptions[0].id);
+    }
+  }, [diffOptions, selectedDiffSource]);
+
+  useEffect(() => {
+    if (
+      selectedWinnerProposal &&
+      diffOptions.some((option) => option.id === "winner")
+    ) {
+      setSelectedDiffSource("winner");
+    }
+  }, [diffOptions, selectedWinnerProposal]);
+
+  const activeDiffProposal =
+    diffOptions.find((option) => option.id === selectedDiffSource)?.proposal ??
+    diffOptions[0]?.proposal ??
+    null;
+  const [selectedPatchPath, setSelectedPatchPath] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const nextPath = activeDiffProposal?.file_patches[0]?.path ?? null;
+    if (
+      selectedPatchPath === null ||
+      !activeDiffProposal?.file_patches.some(
+        (patch) => patch.path === selectedPatchPath,
+      )
+    ) {
+      setSelectedPatchPath(nextPath);
+    }
+  }, [activeDiffProposal, selectedPatchPath]);
+
+  const activePatch =
+    activeDiffProposal?.file_patches.find(
+      (patch) => patch.path === selectedPatchPath,
+    ) ??
+    activeDiffProposal?.file_patches[0] ??
+    null;
+  const activePatchPreview = activePatch ? buildPatchPreview(activePatch) : [];
+  const truncatedPatchPreview = activePatchPreview.slice(0, 40);
+
   return (
     <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
       <div className="flex border-b border-slate-800">
@@ -109,36 +202,95 @@ export function ConsoleActivityPanel({
             </div>
           )
         ) : activeTab === "diff" ? (
-          latestProposal ? (
+          activeDiffProposal ? (
             <div className="space-y-4 font-mono text-[11px] text-slate-500 leading-loose">
+              {diffOptions.length > 1 ? (
+                <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 p-1">
+                  {diffOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setSelectedDiffSource(option.id)}
+                      className={`px-3 py-2 rounded-md text-[10px] font-black uppercase tracking-[0.18em] transition ${selectedDiffSource === option.id ? "bg-amber-500/15 text-amber-200" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div>
                 <div className="text-white font-bold">
-                  Latest proposal #{latestProposal.id}
+                  {diffOptions.find(
+                    (option) => option.id === selectedDiffSource,
+                  )?.label ?? "Latest Proposal"}{" "}
+                  #{activeDiffProposal.id}
                 </div>
                 <div className="text-slate-400 not-italic font-sans text-sm mt-1">
-                  {latestProposal.summary}
+                  {activeDiffProposal.summary}
                 </div>
               </div>
-              {latestProposal.file_patches.length === 0 ? (
+
+              {activeDiffProposal.file_patches.length === 0 ? (
                 <div>Waiting for persisted proposal patch data.</div>
               ) : (
-                latestProposal.file_patches.map((patch) => (
-                  <div key={`${patch.path}-${patch.operation}`}>
-                    <div className="text-white">
-                      {patch.operation.toUpperCase()} {patch.path}
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[15rem_minmax(0,1fr)]">
+                  <div className="max-h-64 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-slate-950/60 p-3">
+                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                      {activeDiffProposal.file_patches.length} files changed
                     </div>
-                    {buildPatchPreview(patch)
-                      .slice(0, 8)
-                      .map((previewLine, index) => (
-                        <div
-                          key={`${previewLine.line}-${index}`}
-                          className={previewLine.color}
-                        >
-                          {previewLine.line}
+                    {activeDiffProposal.file_patches.map((patch) => (
+                      <button
+                        key={`${patch.path}-${patch.operation}`}
+                        type="button"
+                        onClick={() => setSelectedPatchPath(patch.path)}
+                        className={`flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left transition ${activePatch?.path === patch.path ? "border-teal-400/35 bg-teal-500/10" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.05]"}`}
+                      >
+                        <div className="min-w-0 flex-1 truncate text-slate-300">
+                          {patch.path}
                         </div>
-                      ))}
+                        <Badge color="slate">{patch.operation}</Badge>
+                      </button>
+                    ))}
                   </div>
-                ))
+
+                  <div className="rounded-xl border border-white/10 bg-slate-950/60 p-4">
+                    {activePatch ? (
+                      <>
+                        <div className="text-white">
+                          {activePatch.operation.toUpperCase()}{" "}
+                          {activePatch.path}
+                        </div>
+                        <div className="mt-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                          {activePatchPreview.length >
+                          truncatedPatchPreview.length
+                            ? `Showing first ${truncatedPatchPreview.length} changed lines for readability`
+                            : "Full preview loaded"}
+                        </div>
+                        <div className="mt-4 space-y-1">
+                          {truncatedPatchPreview.length > 0 ? (
+                            truncatedPatchPreview.map((previewLine, index) => (
+                              <div
+                                key={`${previewLine.line}-${index}`}
+                                className={previewLine.color}
+                              >
+                                {previewLine.line}
+                              </div>
+                            ))
+                          ) : (
+                            <div>
+                              Persisted patch metadata has no inline content for
+                              this file.
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        Select a changed file to inspect its diff preview.
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           ) : (

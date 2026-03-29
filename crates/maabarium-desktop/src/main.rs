@@ -1,6 +1,7 @@
 use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate};
 use git2::{IndexAddOption, Repository, Signature};
+use maabarium_core::git_manager::GitManager;
 use maabarium_core::blueprint::{
     AgentDef, AgentsConfig, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintMeta,
     BlueprintTemplateKind, ConstraintsConfig, DomainConfig, EvaluatorKind, MetricDef,
@@ -15,6 +16,7 @@ use maabarium_core::{
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +55,9 @@ const APP_DISPLAY_NAME: &str = "Maabarium";
 const ABOUT_MENU_ID: &str = "about_maabarium";
 const LICENSE_MENU_ID: &str = "open_repository_license";
 const ABOUT_MENU_EVENT: &str = "maabarium://open-about";
+const CONSOLE_EXPERIMENT_LIMIT: usize = 12;
+const CONSOLE_PROPOSAL_LIMIT: usize = 5;
+const RETAINED_WINNER_LIMIT: usize = 3;
 
 struct AppState {
     blueprints_dir: PathBuf,
@@ -89,6 +94,13 @@ struct LiveRunState {
     current_iteration_elapsed_ms: Option<u64>,
     started_at_epoch_ms: Option<u64>,
     message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetainedWinnerArchiveDownload {
+    file_name: String,
+    bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -519,6 +531,7 @@ fn main() {
             open_blueprint_file,
             open_blueprint_directory,
             open_repository_license,
+            export_retained_winner_files,
             inspect_workspace_git_status,
             initialize_workspace_git,
             load_blueprint_for_wizard,
@@ -1404,6 +1417,40 @@ fn reconcile_managed_cli_link(cli_path: &Path) -> anyhow::Result<()> {
     }
 }
 
+fn merge_console_experiments(
+    recent_experiments: Vec<PersistedExperiment>,
+    retained_winners: Vec<PersistedExperiment>,
+) -> Vec<PersistedExperiment> {
+    let mut seen_ids = HashSet::new();
+    let mut experiments = Vec::new();
+
+    for experiment in recent_experiments.into_iter().chain(retained_winners) {
+        if seen_ids.insert(experiment.id) {
+            experiments.push(experiment);
+        }
+    }
+
+    experiments.sort_by(|left, right| right.id.cmp(&left.id));
+    experiments
+}
+
+fn merge_console_proposals(
+    recent_proposals: Vec<PersistedProposal>,
+    retained_winner_proposals: Vec<PersistedProposal>,
+) -> Vec<PersistedProposal> {
+    let mut seen_ids = HashSet::new();
+    let mut proposals = Vec::new();
+
+    for proposal in recent_proposals.into_iter().chain(retained_winner_proposals) {
+        if seen_ids.insert(proposal.id) {
+            proposals.push(proposal);
+        }
+    }
+
+    proposals.sort_by(|left, right| right.id.cmp(&left.id));
+    proposals
+}
+
 fn build_console_state(state: &AppState) -> ConsoleState {
     let blueprint_path = current_blueprint_path(state);
     let run_state = current_run_state(state);
@@ -1445,27 +1492,53 @@ fn build_console_state(state: &AppState) -> ConsoleState {
                 let recent_experiments = persistence.recent_experiments(400).unwrap_or_default();
                 let console_experiments = active_blueprint_name
                     .as_deref()
-                    .and_then(|blueprint_name| {
-                        persistence
-                            .recent_experiments_for_blueprint(blueprint_name, 12)
-                            .ok()
+                    .map(|blueprint_name| {
+                        let recent_experiments = persistence
+                            .recent_experiments_for_blueprint(
+                                blueprint_name,
+                                CONSOLE_EXPERIMENT_LIMIT,
+                            )
+                            .unwrap_or_default();
+                        let retained_winners = persistence
+                            .promoted_experiments_for_blueprint(
+                                blueprint_name,
+                                RETAINED_WINNER_LIMIT,
+                            )
+                            .unwrap_or_default();
+                        merge_console_experiments(recent_experiments, retained_winners)
                     })
                     .unwrap_or_else(|| {
                         recent_experiments
                             .iter()
-                            .take(12)
+                            .take(CONSOLE_EXPERIMENT_LIMIT)
                             .cloned()
                             .collect::<Vec<_>>()
                     });
                 let run_analytics = build_run_analytics(&recent_experiments, &state.log_path);
+                let retained_winner_ids = console_experiments
+                    .iter()
+                    .filter(|experiment| experiment.promotion_outcome == maabarium_core::PromotionOutcome::Promoted)
+                    .map(|experiment| experiment.id)
+                    .collect::<Vec<_>>();
                 let proposals = active_blueprint_name
                     .as_deref()
-                    .and_then(|blueprint_name| {
-                        persistence
-                            .recent_proposals_for_blueprint(blueprint_name, 5)
-                            .ok()
+                    .map(|blueprint_name| {
+                        let recent_proposals = persistence
+                            .recent_proposals_for_blueprint(
+                                blueprint_name,
+                                CONSOLE_PROPOSAL_LIMIT,
+                            )
+                            .unwrap_or_default();
+                        let retained_winner_proposals = persistence
+                            .proposals_for_experiment_ids(&retained_winner_ids)
+                            .unwrap_or_default();
+                        merge_console_proposals(recent_proposals, retained_winner_proposals)
                     })
-                    .unwrap_or_else(|| persistence.recent_proposals(5).unwrap_or_default());
+                    .unwrap_or_else(|| {
+                        persistence
+                            .recent_proposals(CONSOLE_PROPOSAL_LIMIT)
+                            .unwrap_or_default()
+                    });
                 (console_experiments, run_analytics, proposals)
             })
             .unwrap_or_else(|_| (Vec::new(), empty_run_analytics(), Vec::new()));
@@ -2556,6 +2629,69 @@ fn get_console_state(state: tauri::State<'_, AppState>) -> Result<ConsoleState, 
 }
 
 #[tauri::command]
+async fn export_retained_winner_files(
+    state: tauri::State<'_, AppState>,
+    experiment_id: i64,
+) -> Result<RetainedWinnerArchiveDownload, String> {
+    let blueprint_path = current_blueprint_path(&state);
+    let blueprint = BlueprintFile::load(&blueprint_path).map_err(|error| {
+        format!(
+            "Failed to load blueprint {}: {error}",
+            blueprint_path.display()
+        )
+    })?;
+
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|error| format!("Failed to open persistence store: {error}"))?;
+    let experiment = persistence
+        .experiment_by_id(experiment_id)
+        .map_err(|error| format!("Failed to load retained winner metadata: {error}"))?
+        .ok_or_else(|| format!("No retained winner exists for experiment id {experiment_id}"))?;
+
+    if experiment.promotion_outcome != maabarium_core::PromotionOutcome::Promoted {
+        return Err(format!(
+            "Experiment #{experiment_id} was not retained as a promoted winner"
+        ));
+    }
+
+    let promoted_commit_oid = experiment.promoted_commit_oid.ok_or_else(|| {
+        format!(
+            "Retained winner #{experiment_id} predates promoted file export support, so the promoted commit is unavailable"
+        )
+    })?;
+
+    let proposal = persistence
+        .proposals_for_experiment_ids(&[experiment_id])
+        .map_err(|error| format!("Failed to load retained winner proposal: {error}"))?
+        .into_iter()
+        .find(|proposal| proposal.experiment_id == experiment_id)
+        .ok_or_else(|| format!("No retained proposal patchset exists for experiment #{experiment_id}"))?;
+
+    let export_paths = proposal
+        .file_patches
+        .iter()
+        .map(|patch| patch.path.clone())
+        .collect::<Vec<_>>();
+
+    if export_paths.is_empty() {
+        return Err(format!(
+            "Retained winner #{experiment_id} has no file paths to export"
+        ));
+    }
+
+    let git = GitManager::new(&blueprint.domain.repo_path);
+    let archive_bytes = git
+        .export_commit_paths_as_tar_gz_bytes(&promoted_commit_oid, &export_paths)
+        .await
+        .map_err(|error| format!("Failed to export retained winner files: {error}"))?;
+
+    Ok(RetainedWinnerArchiveDownload {
+        file_name: format!("maabarium-retained-winner-{experiment_id}.tar.gz"),
+        bytes: archive_bytes,
+    })
+}
+
+#[tauri::command]
 fn open_log_file(state: tauri::State<'_, AppState>) -> Result<(), String> {
     open_path_in_system_viewer(&state.log_path)
 }
@@ -3199,6 +3335,36 @@ fn slugify_blueprint_name(input: &str) -> String {
 mod tests {
     use super::*;
 
+    fn test_console_experiment(
+        id: i64,
+        promotion_outcome: maabarium_core::PromotionOutcome,
+    ) -> PersistedExperiment {
+        PersistedExperiment {
+            id,
+            iteration: id as u64,
+            blueprint_name: "project-echo".to_owned(),
+            proposal_summary: format!("Experiment {id}"),
+            weighted_total: 0.8,
+            duration_ms: 1_000,
+            error: None,
+            promotion_outcome,
+            created_at: "2026-03-28T00:00:00Z".to_owned(),
+            metrics: Vec::new(),
+            research: None,
+            lora: None,
+        }
+    }
+
+    fn test_console_proposal(id: i64, experiment_id: i64) -> PersistedProposal {
+        PersistedProposal {
+            id,
+            experiment_id,
+            summary: format!("Proposal {id}"),
+            created_at: "2026-03-28T00:00:00Z".to_owned(),
+            file_patches: Vec::new(),
+        }
+    }
+
     fn unique_test_directory(name: &str) -> PathBuf {
         let unique_id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3480,5 +3646,43 @@ mod tests {
         assert_eq!(resolved, expected_cli);
 
         std::fs::remove_dir_all(&resource_dir).expect("resource dir should be removed");
+    }
+
+    #[test]
+    fn merge_console_experiments_keeps_retained_winner_outside_recent_window() {
+        let recent_experiments = (14..=25)
+            .rev()
+            .map(|id| test_console_experiment(id, maabarium_core::PromotionOutcome::Rejected))
+            .collect::<Vec<_>>();
+        let retained_winners = vec![test_console_experiment(
+            1,
+            maabarium_core::PromotionOutcome::Promoted,
+        )];
+
+        let merged = merge_console_experiments(recent_experiments, retained_winners);
+
+        assert_eq!(merged.len(), 13);
+        assert_eq!(merged[0].id, 25);
+        assert_eq!(merged.last().map(|experiment| experiment.id), Some(1));
+        assert!(merged.iter().any(|experiment| {
+            experiment.id == 1
+                && experiment.promotion_outcome == maabarium_core::PromotionOutcome::Promoted
+        }));
+    }
+
+    #[test]
+    fn merge_console_proposals_keeps_retained_winner_patchset() {
+        let recent_proposals = vec![
+            test_console_proposal(30, 30),
+            test_console_proposal(29, 29),
+            test_console_proposal(28, 28),
+        ];
+        let retained_winner_proposals = vec![test_console_proposal(5, 1)];
+
+        let merged = merge_console_proposals(recent_proposals, retained_winner_proposals);
+
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[0].id, 30);
+        assert_eq!(merged.last().map(|proposal| proposal.experiment_id), Some(1));
     }
 }

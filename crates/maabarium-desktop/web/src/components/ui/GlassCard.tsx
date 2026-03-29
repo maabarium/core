@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export function GlassCard({
@@ -9,6 +10,9 @@ export function GlassCard({
   glow = false,
   headerActions,
   allowOverflow = false,
+  collapsible = false,
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   children: ReactNode;
   className?: string;
@@ -17,7 +21,12 @@ export function GlassCard({
   glow?: boolean;
   headerActions?: ReactNode;
   allowOverflow?: boolean;
+  collapsible?: boolean;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
+  const collapseLabel = title ?? "section";
+
   return (
     <div className={`relative group transition-all duration-500 ${className}`}>
       {glow && (
@@ -32,8 +41,24 @@ export function GlassCard({
               {Icon ? <Icon size={14} className="text-teal-300" /> : null}
               {title}
             </h3>
-            {headerActions ? (
-              <div className="flex items-center gap-3">{headerActions}</div>
+            {headerActions || collapsible ? (
+              <div className="flex items-center gap-3">
+                {headerActions}
+                {collapsible ? (
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    aria-label={`${collapsed ? "Expand" : "Collapse"} ${collapseLabel}`}
+                    onClick={onToggleCollapsed}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/5 text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
+                  >
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform ${collapsed ? "rotate-0" : "rotate-180"}`}
+                    />
+                  </button>
+                ) : null}
+              </div>
             ) : (
               <div className="flex gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-slate-700" />
@@ -42,7 +67,7 @@ export function GlassCard({
             )}
           </div>
         )}
-        <div className="p-5">{children}</div>
+        {!collapsed ? <div className="p-5">{children}</div> : null}
       </div>
     </div>
   );

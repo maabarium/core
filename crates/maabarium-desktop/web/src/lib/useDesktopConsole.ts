@@ -36,6 +36,11 @@ type DesktopErrorState = {
   message: string;
 };
 
+type RetainedWinnerArchiveDownload = {
+  fileName: string;
+  bytes: number[];
+};
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -389,6 +394,27 @@ export function useDesktopConsole({
         "The desktop app could not hand the bundled or local LICENSE file off to the system viewer.",
         error,
       );
+    }
+  };
+
+  const exportRetainedWinnerFiles = async (experimentId: number) => {
+    try {
+      const archive = await invoke<RetainedWinnerArchiveDownload>(
+        "export_retained_winner_files",
+        {
+          experimentId,
+        },
+      );
+      setActionError(null);
+      return archive;
+    } catch (error) {
+      presentDesktopError(
+        "Artifact Export Error",
+        "The retained winner files could not be exported",
+        "The desktop app could not package the promoted files for this retained winner. Review the error details below, then retry the export.",
+        error,
+      );
+      return null;
     }
   };
 
@@ -1031,6 +1057,7 @@ export function useDesktopConsole({
     pullRecommendedOllamaModels,
     installCliLink,
     removeCliLink,
+    exportRetainedWinnerFiles,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
   };

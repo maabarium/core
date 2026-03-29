@@ -5,7 +5,8 @@ import {
   buildSuggestedWizardModel,
   buildSuggestedWizardModels,
   buildWizardForm,
-  normalizeWizardAgentModels,
+  normalizeWizardForm,
+  parseWizardTargetFilesText,
 } from "./blueprints";
 import type {
   BlueprintFile,
@@ -48,17 +49,15 @@ export function useBlueprintWizard({
     value,
   ) => {
     setWizardFormState((current) =>
-      normalizeWizardAgentModels(
-        typeof value === "function" ? value(current) : value,
-      ),
+      normalizeWizardForm(typeof value === "function" ? value(current) : value),
     );
   };
 
   const wizardMetricWeightTotal = useMemo(
     () =>
-      wizardForm.metrics.reduce(
+      (Array.isArray(wizardForm.metrics) ? wizardForm.metrics : []).reduce(
         (sum, metric) =>
-          sum + (Number.isFinite(metric.weight) ? metric.weight : 0),
+          sum + (metric && Number.isFinite(metric.weight) ? metric.weight : 0),
         0,
       ),
     [wizardForm.metrics],
@@ -68,8 +67,10 @@ export function useBlueprintWizard({
     () =>
       Array.from(
         new Set(
-          wizardForm.models
-            .map((model) => model.name.trim())
+          (Array.isArray(wizardForm.models) ? wizardForm.models : [])
+            .map((model) =>
+              typeof model?.name === "string" ? model.name.trim() : "",
+            )
             .filter((name) => name.length > 0),
         ),
       ),
@@ -257,23 +258,23 @@ export function useBlueprintWizard({
   };
 
   const buildWizardRequest = (): BlueprintWizardRequest | null => {
-    const targetFiles = wizardForm.targetFilesText
-      .split(/[\n,]/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const metrics = wizardForm.metrics.map((metric) => ({
+    const normalizedForm = normalizeWizardForm(wizardForm);
+    const targetFiles = parseWizardTargetFilesText(
+      normalizedForm.targetFilesText,
+    );
+    const metrics = normalizedForm.metrics.map((metric) => ({
       name: metric.name.trim(),
       weight: metric.weight,
       direction: metric.direction,
       description: metric.description.trim(),
     }));
-    const agents = wizardForm.agents.map((agent) => ({
+    const agents = normalizedForm.agents.map((agent) => ({
       name: agent.name.trim(),
       role: agent.role.trim(),
       system_prompt: agent.systemPrompt.trim(),
       model: agent.model.trim(),
     }));
-    const models = wizardForm.models.map((model) => ({
+    const models = normalizedForm.models.map((model) => ({
       name: model.name.trim(),
       provider: model.provider.trim(),
       endpoint: model.endpoint.trim(),
@@ -285,18 +286,40 @@ export function useBlueprintWizard({
         : null,
     }));
 
-    if (!wizardForm.name.trim()) {
+    if (!normalizedForm.name.trim()) {
       presentWizardError("Blueprint name is required");
       return null;
     }
 
-    if (!wizardForm.description.trim()) {
+    if (!normalizedForm.description.trim()) {
       presentWizardError("Blueprint description is required");
+      return null;
+    }
+
+    if (!normalizedForm.version.trim()) {
+      presentWizardError("Blueprint version is required");
+      return null;
+    }
+
+    if (!normalizedForm.repoPath.trim()) {
+      presentWizardError("Repo path is required");
+      return null;
+    }
+
+    if (!normalizedForm.language.trim()) {
+      presentWizardError("Language is required");
       return null;
     }
 
     if (targetFiles.length === 0) {
       presentWizardError("Add at least one target file pattern");
+      return null;
+    }
+
+    if (targetFiles.some((target) => /^(?:\/|[A-Za-z]:[\\/])/.test(target))) {
+      presentWizardError(
+        "Target paths must be relative to the selected workspace",
+      );
       return null;
     }
 
@@ -364,23 +387,37 @@ export function useBlueprintWizard({
       return null;
     }
 
+    if (normalizedForm.maxIterations < 1 || normalizedForm.timeoutSeconds < 1) {
+      presentWizardError(
+        "Max iterations and timeout seconds must both be greater than zero",
+      );
+      return null;
+    }
+
+    if (normalizedForm.councilSize < 1 || normalizedForm.debateRounds < 1) {
+      presentWizardError(
+        "Council size and debate rounds must both be greater than zero",
+      );
+      return null;
+    }
+
     return {
-      name: wizardForm.name.trim(),
-      description: wizardForm.description.trim(),
-      version: wizardForm.version.trim(),
-      template: wizardForm.template,
-      repoPath: wizardForm.repoPath.trim(),
-      language: wizardForm.language.trim(),
+      name: normalizedForm.name.trim(),
+      description: normalizedForm.description.trim(),
+      version: normalizedForm.version.trim(),
+      template: normalizedForm.template,
+      repoPath: normalizedForm.repoPath.trim(),
+      language: normalizedForm.language.trim(),
       targetFiles,
-      maxIterations: wizardForm.maxIterations,
-      timeoutSeconds: wizardForm.timeoutSeconds,
-      requireTestsPass: wizardForm.requireTestsPass,
-      minImprovement: wizardForm.minImprovement,
-      councilSize: wizardForm.councilSize,
-      debateRounds: wizardForm.debateRounds,
+      maxIterations: normalizedForm.maxIterations,
+      timeoutSeconds: normalizedForm.timeoutSeconds,
+      requireTestsPass: normalizedForm.requireTestsPass,
+      minImprovement: normalizedForm.minImprovement,
+      councilSize: normalizedForm.councilSize,
+      debateRounds: normalizedForm.debateRounds,
       metrics,
       agents,
-      modelAssignment: wizardForm.modelAssignment,
+      modelAssignment: normalizedForm.modelAssignment,
       models,
     };
   };

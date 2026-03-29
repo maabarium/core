@@ -166,6 +166,17 @@ pnpm tauri dev
 - Use `general-research` when the deliverable is a sourced brief with citations and markdown-style output.
 - Use `prompt-improvement` when the workflow should create or refine prompt or document assets; prefer an exact `.md` target path when you want one specifically named file.
 
+In the desktop Blueprint Wizard, the guided flow now works in this order:
+
+1. set the workflow name
+2. choose the goal and workflow family
+3. refine the description after the goal-derived defaults are in place
+4. confirm the output shape
+5. verify workspace and runtime details
+6. review before save
+
+Choosing a goal updates the derived workflow defaults but does not auto-advance the wizard. Custom description text is preserved when you switch goals, and you can use the explicit `Next Step` action when you are ready to move on. Advanced controls still expose the raw template, metric, agent, and model tabs when you need lower-level editing.
+
 When the workflow should create or refine one named document, use an exact relative target path such as `docs/project-brief.md` instead of a broad glob. Use globs like `src/**/*.rs` or `docs/**/*.md` when the workflow is meant to operate over a family of existing files.
 
 ## Blueprint Gallery

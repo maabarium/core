@@ -16,15 +16,12 @@ import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { AboutModal } from "./components/console/AboutModal";
 import { BlueprintWizardModal } from "./components/console/BlueprintWizardModal";
 import { ConsoleActivityPanel } from "./components/console/ConsoleActivityPanel";
+import { ConsoleEvidencePanel } from "./components/console/ConsoleEvidencePanel";
+import { ConsoleMaintenancePanel } from "./components/console/ConsoleMaintenancePanel";
 import { CouncilRosterCard } from "./components/console/CouncilRosterCard";
 import { DesktopSetupModal } from "./components/console/DesktopSetupModal";
-import { LoraEvidenceCard } from "./components/console/LoraEvidenceCard";
 import { MetricPanelCard } from "./components/console/MetricPanelCard";
-import { PersistedStackCard } from "./components/console/PersistedStackCard";
-import { ReadinessCenterCard } from "./components/console/ReadinessCenterCard";
-import { ResearchEvidenceCard } from "./components/console/ResearchEvidenceCard";
 import { RunLoopModal } from "./components/console/RunLoopModal";
-import { UpdatesCard } from "./components/console/UpdatesCard";
 import { WorkflowLibraryCard } from "./components/console/WorkflowLibraryCard";
 import { Badge } from "./components/ui/Badge";
 import { GlassCard } from "./components/ui/GlassCard";
@@ -46,8 +43,21 @@ import {
 } from "./lib/formatters";
 import { listOllamaModelNames } from "./lib/ollama";
 import { useBlueprintLibraryViewModel } from "./lib/useBlueprintLibraryViewModel";
+import {
+  loadCollapsedConsolePanels,
+  saveCollapsedConsolePanels,
+  type CollapsibleConsolePanel,
+} from "./lib/consolePanels";
 import { useDesktopConsole } from "./lib/useDesktopConsole";
 import { useBlueprintWizard } from "./lib/useBlueprintWizard";
+import {
+  selectPreviousWinnerExperiment,
+  selectPromotedSuccessfulExperiments,
+  selectRetainedWinnerHistory,
+  selectSuccessfulExperiments,
+  selectWinnerExperiment,
+  selectWinnerProposal,
+} from "./lib/winners";
 import type {
   AnalyticsBucket,
   AnalyticsRange,
@@ -138,6 +148,12 @@ export default function App() {
   const [updatePreferencesSaving, setUpdatePreferencesSaving] = useState(false);
   const [autoOpenedSetup, setAutoOpenedSetup] = useState(false);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const [collapsedPanels, setCollapsedPanels] = useState(() =>
+    loadCollapsedConsolePanels(),
+  );
+  const [selectedRetainedWinnerId, setSelectedRetainedWinnerId] = useState<
+    number | null
+  >(null);
   const [workflowWorkspacePrompt, setWorkflowWorkspacePrompt] =
     useState<WorkflowWorkspacePromptState | null>(null);
   const [workflowWorkspaceApplying, setWorkflowWorkspaceApplying] =
@@ -176,6 +192,7 @@ export default function App() {
     pullRecommendedOllamaModels,
     installCliLink,
     removeCliLink,
+    exportRetainedWinnerFiles,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
   } = useDesktopConsole();
@@ -229,8 +246,12 @@ export default function App() {
   });
 
   const wizardLocalModelOptions = useMemo(
-    () => listOllamaModelNames(state?.ollama),
-    [state?.ollama],
+    () =>
+      listOllamaModelNames(
+        state?.ollama,
+        state?.desktopSetup.selectedLocalModels,
+      ),
+    [state?.desktopSetup.selectedLocalModels, state?.ollama],
   );
 
   useEffect(() => {
@@ -298,14 +319,65 @@ export default function App() {
     Boolean(state?.engineRunning) ||
     runStatus === "stopping" ||
     runLoopStarting;
+  const successfulExperiments = useMemo(
+    () => selectSuccessfulExperiments(state?.experiments ?? []),
+    [state?.experiments],
+  );
+  const promotedSuccessfulExperiments = useMemo(
+    () => selectPromotedSuccessfulExperiments(state?.experiments ?? []),
+    [state?.experiments],
+  );
+  const winnerExperiment = useMemo(
+    () => selectWinnerExperiment(state?.experiments ?? []),
+    [state?.experiments],
+  );
+  const previousWinnerExperiment = useMemo(
+    () => selectPreviousWinnerExperiment(state?.experiments ?? []),
+    [state?.experiments],
+  );
+  const latestProposal = state?.proposals[0] ?? null;
+  const winnerProposal = useMemo(
+    () => selectWinnerProposal(state?.proposals ?? [], winnerExperiment),
+    [state?.proposals, winnerExperiment],
+  );
+  const retainedWinnerHistory = useMemo(
+    () =>
+      selectRetainedWinnerHistory(
+        state?.experiments ?? [],
+        state?.proposals ?? [],
+      ),
+    [state?.experiments, state?.proposals],
+  );
+  const selectedRetainedWinner = useMemo(
+    () =>
+      retainedWinnerHistory.find(
+        (entry) => entry.experiment.id === selectedRetainedWinnerId,
+      ) ??
+      retainedWinnerHistory[0] ??
+      null,
+    [retainedWinnerHistory, selectedRetainedWinnerId],
+  );
+  const selectedRetainedWinnerProposal =
+    selectedRetainedWinner?.proposal ?? null;
+
+  useEffect(() => {
+    if (!retainedWinnerHistory.length) {
+      setSelectedRetainedWinnerId(null);
+      return;
+    }
+
+    if (
+      selectedRetainedWinnerId === null ||
+      !retainedWinnerHistory.some(
+        (entry) => entry.experiment.id === selectedRetainedWinnerId,
+      )
+    ) {
+      setSelectedRetainedWinnerId(retainedWinnerHistory[0].experiment.id);
+    }
+  }, [retainedWinnerHistory, selectedRetainedWinnerId]);
 
   const dashboard = useMemo(() => {
-    const experiments = state?.experiments ?? [];
-    const successful = experiments.filter((experiment) => !experiment.error);
-    const promotedSuccessful = successful.filter(
-      (experiment) => experiment.promotion_outcome === "promoted",
-    );
-    const legacySuccessful = successful.filter(
+    const legacySuccessful = successfulExperiments.filter(
       (experiment) => experiment.promotion_outcome === "unknown",
     );
     const logs = state?.logs ?? [];
@@ -313,30 +385,17 @@ export default function App() {
       .map(parseTokenUsage)
       .filter((value): value is number => value !== null);
 
-    const current = successful[0];
-    const previous = successful[1];
-    const winner =
-      promotedSuccessful[0] ??
-      legacySuccessful.reduce<(typeof successful)[number] | null>(
-        (best, experiment) => {
-          if (!best || experiment.weighted_total > best.weighted_total) {
-            return experiment;
-          }
-          return best;
-        },
-        null,
-      );
-    const previousWinner =
-      promotedSuccessful.length > 1 ? promotedSuccessful[1] : null;
-    const currentScoreSeries = successful
+    const current = successfulExperiments[0];
+    const previous = successfulExperiments[1];
+    const currentScoreSeries = successfulExperiments
       .slice(0, 6)
       .map((experiment) =>
         Math.max(0, Math.min(100, experiment.weighted_total * 100)),
       )
       .reverse();
     const winnerScoreSeries =
-      promotedSuccessful.length > 0
-        ? promotedSuccessful
+      promotedSuccessfulExperiments.length > 0
+        ? promotedSuccessfulExperiments
             .slice(0, 6)
             .map((experiment) =>
               Math.max(0, Math.min(100, experiment.weighted_total * 100)),
@@ -349,7 +408,7 @@ export default function App() {
             .map((experiment) =>
               Math.max(0, Math.min(100, experiment.weighted_total * 100)),
             );
-    const avgDurationSeries = successful
+    const avgDurationSeries = successfulExperiments
       .slice(0, 6)
       .map((experiment) => experiment.duration_ms / 1000)
       .reverse();
@@ -369,15 +428,15 @@ export default function App() {
     const liveDurationValue =
       typeof runState?.currentIterationElapsedMs === "number"
         ? formatDuration(runState.currentIterationElapsedMs)
-        : successful.length > 0
+        : successfulExperiments.length > 0
           ? formatDuration(
               Math.round(
-                successful
+                successfulExperiments
                   .slice(0, 6)
                   .reduce(
                     (sum, experiment) => sum + experiment.duration_ms,
                     0,
-                  ) / successful.slice(0, 6).length,
+                  ) / successfulExperiments.slice(0, 6).length,
               ),
             )
           : "--";
@@ -392,20 +451,24 @@ export default function App() {
               current.weighted_total,
               previous.weighted_total,
             )
-          : successful.length > 0
+          : successfulExperiments.length > 0
             ? "Single run"
             : "No persisted runs",
       currentScoreSeries: currentScoreSeries,
       winnerScoreLabel: "Winner Score",
-      winnerScore: winner ? winner.weighted_total.toFixed(2) : "--",
+      winnerScore: winnerExperiment
+        ? winnerExperiment.weighted_total.toFixed(2)
+        : "--",
       winnerScoreTrend:
-        promotedSuccessful.length > 1 && winner && previousWinner
+        promotedSuccessfulExperiments.length > 1 &&
+        winnerExperiment &&
+        previousWinnerExperiment
           ? formatPercentageDelta(
-              winner.weighted_total,
-              previousWinner.weighted_total,
+              winnerExperiment.weighted_total,
+              previousWinnerExperiment.weighted_total,
             )
-          : promotedSuccessful.length === 1
-            ? `Retained via experiment #${winner?.id ?? "--"}`
+          : promotedSuccessfulExperiments.length === 1
+            ? `Retained via experiment #${winnerExperiment?.id ?? "--"}`
             : legacySuccessful.length > 0
               ? "Legacy winner inferred"
               : "No retained winner",
@@ -418,7 +481,7 @@ export default function App() {
           ? invertDelta(
               formatPercentageDelta(current.duration_ms, previous.duration_ms),
             )
-          : successful.length > 0
+          : successfulExperiments.length > 0
             ? "Single run"
             : "No persisted runs",
       avgIterationSeries: avgDurationSeries,
@@ -434,15 +497,25 @@ export default function App() {
           : "No recent LLM traffic",
       tokenUsageSeries: tokenSeries,
     };
-  }, [runIterationLabel, runPhaseLabel, runState, runStatus, state]);
+  }, [
+    previousWinnerExperiment,
+    promotedSuccessfulExperiments,
+    runIterationLabel,
+    runPhaseLabel,
+    runState,
+    runStatus,
+    state,
+    successfulExperiments,
+    winnerExperiment,
+  ]);
 
   const history = useMemo(
     () => buildHistory(state?.experiments ?? []),
     [state],
   );
   const latestSuccessfulExperiment = useMemo(
-    () => state?.experiments.find((experiment) => !experiment.error) ?? null,
-    [state],
+    () => successfulExperiments[0] ?? null,
+    [successfulExperiments],
   );
   const failedExperiments = useMemo(
     () =>
@@ -521,7 +594,6 @@ export default function App() {
       labels: configuredMetrics.map((metric) => metric.name.replace(/_/g, " ")),
     };
   }, [latestSuccessfulExperiment, state]);
-  const latestProposal = state?.proposals[0] ?? null;
   const latestResearchExperiment = useMemo(
     () =>
       state?.experiments.find(
@@ -587,6 +659,17 @@ export default function App() {
     () => selectedAnalytics[selectedAnalytics.length - 1] ?? null,
     [selectedAnalytics],
   );
+
+  const toggleCollapsedPanel = (panel: CollapsibleConsolePanel) => {
+    setCollapsedPanels((current) => ({
+      ...current,
+      [panel]: !current[panel],
+    }));
+  };
+
+  useEffect(() => {
+    saveCollapsedConsolePanels(collapsedPanels);
+  }, [collapsedPanels]);
 
   useEffect(() => {
     if (
@@ -1626,7 +1709,14 @@ export default function App() {
           </section>
 
           <section>
-            <GlassCard title="Run Analytics" icon={Activity} glow>
+            <GlassCard
+              title="Run Analytics"
+              icon={Activity}
+              glow
+              collapsible
+              collapsed={collapsedPanels.analytics}
+              onToggleCollapsed={() => toggleCollapsedPanel("analytics")}
+            >
               <div className="space-y-5">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div>
@@ -1737,21 +1827,42 @@ export default function App() {
                 activeTab={activeTab}
                 history={history}
                 latestProposal={latestProposal}
+                winnerProposal={winnerProposal}
+                selectedWinnerProposal={selectedRetainedWinnerProposal}
                 logs={state?.logs ?? []}
                 logPath={state?.logPath ?? "loading"}
                 onChangeTab={setActiveTab}
                 onOpenLogFile={() => void openLogFile()}
               />
 
-              <div className="lg:flex-1">
-                <ResearchEvidenceCard
-                  latestResearchExperiment={latestResearchExperiment}
-                />
-              </div>
-
-              <div className="lg:flex-1">
-                <LoraEvidenceCard latestLoraExperiment={latestLoraExperiment} />
-              </div>
+              <ConsoleEvidencePanel
+                className={
+                  collapsedPanels.evidence ? "" : "min-h-[22rem] flex-1"
+                }
+                collapsed={collapsedPanels.evidence}
+                onToggleCollapsed={() => toggleCollapsedPanel("evidence")}
+                winnerHistory={retainedWinnerHistory}
+                selectedExperimentId={
+                  selectedRetainedWinner?.experiment.id ?? null
+                }
+                onSelectExperimentId={(experimentId) => {
+                  setSelectedRetainedWinnerId(experimentId);
+                  setActiveTab("diff");
+                }}
+                onExportFiles={async (entry) => {
+                  const exportedArchive = await exportRetainedWinnerFiles(
+                    entry.experiment.id,
+                  );
+                  if (exportedArchive) {
+                    setSuccessToast(
+                      `Retained winner archive download started: ${exportedArchive.fileName}`,
+                    );
+                  }
+                  return exportedArchive;
+                }}
+                latestResearchExperiment={latestResearchExperiment}
+                latestLoraExperiment={latestLoraExperiment}
+              />
             </div>
 
             <div className="lg:col-span-3 space-y-6 self-start pb-2">
@@ -1773,22 +1884,6 @@ export default function App() {
                   onOpenBlueprintDirectory={() => void openBlueprintDirectory()}
                 />
               </div>
-
-              <UpdatesCard
-                updater={state?.updater}
-                desktopSetup={state?.desktopSetup}
-                updateCheck={updateCheck}
-                checkingForUpdates={checkingForUpdates}
-                installingUpdate={installingUpdate}
-                savingPreferences={updatePreferencesSaving}
-                onCheckForUpdates={() => void checkForUpdates()}
-                onInstallUpdate={() => void installAvailableUpdate()}
-                onSelectChannel={(channel) =>
-                  void handleSelectUpdateChannel(channel)
-                }
-                onRemindLater={() => void handleRemindLater()}
-                onClearReminder={() => void handleClearUpdateReminder()}
-              />
             </div>
           </section>
 
@@ -1806,6 +1901,8 @@ export default function App() {
               pendingBlueprintPath={switchingBlueprintPath}
               isEngineRunning={Boolean(state?.engineRunning)}
               activeBlueprintPath={state?.blueprintPath ?? ""}
+              collapsed={collapsedPanels.workflowLibrary}
+              onToggleCollapsed={() => toggleCollapsedPanel("workflowLibrary")}
               onOpenWizard={openBlueprintWizard}
               onDensityChange={setBlueprintDensity}
               onSearchQueryChange={setBlueprintQuery}
@@ -1821,45 +1918,52 @@ export default function App() {
           </section>
 
           <section id="maintenance-section" className="pt-2">
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-              <div className="xl:col-span-8">
-                <ReadinessCenterCard
-                  readinessItems={state?.readinessItems ?? []}
-                  experimentBranchInventory={
-                    state?.experimentBranchInventory ?? null
-                  }
-                  gitDependency={
-                    state?.gitDependency ?? {
-                      installed: false,
-                      commandPath: null,
-                      autoInstallSupported: false,
-                      installerLabel: null,
-                      installCommand: null,
-                      statusDetail: "Git status is unavailable.",
-                    }
-                  }
-                  ollama={state?.ollama ?? null}
-                  onOpenSetup={() => setSetupOpen(true)}
-                  onInstallGit={() => void installGit()}
-                  onInstallOllama={() => void installOllama()}
-                  onStartOllama={() => void startOllama()}
-                  onPreviewBranchCleanup={(thresholdMonths) =>
-                    previewExperimentBranchCleanup(thresholdMonths)
-                  }
-                  onCleanupBranches={(thresholdMonths) =>
-                    cleanupExperimentBranches(thresholdMonths)
-                  }
-                />
-              </div>
-              <div className="xl:col-span-4">
-                <PersistedStackCard
-                  experimentCount={state?.experiments.length ?? 0}
-                  proposalCount={state?.proposals.length ?? 0}
-                  logCount={state?.logs.length ?? 0}
-                  onOpenPanel={openPersistedPanel}
-                />
-              </div>
-            </div>
+            <ConsoleMaintenancePanel
+              collapsed={collapsedPanels.maintenance}
+              readinessItems={state?.readinessItems ?? []}
+              experimentBranchInventory={
+                state?.experimentBranchInventory ?? null
+              }
+              gitDependency={
+                state?.gitDependency ?? {
+                  installed: false,
+                  commandPath: null,
+                  autoInstallSupported: false,
+                  installerLabel: null,
+                  installCommand: null,
+                  statusDetail: "Git status is unavailable.",
+                }
+              }
+              ollama={state?.ollama ?? null}
+              updater={state?.updater}
+              desktopSetup={state?.desktopSetup}
+              updateCheck={updateCheck}
+              checkingForUpdates={checkingForUpdates}
+              installingUpdate={installingUpdate}
+              savingPreferences={updatePreferencesSaving}
+              experimentCount={state?.experiments.length ?? 0}
+              proposalCount={state?.proposals.length ?? 0}
+              logCount={state?.logs.length ?? 0}
+              onOpenSetup={() => setSetupOpen(true)}
+              onInstallGit={() => void installGit()}
+              onInstallOllama={() => void installOllama()}
+              onStartOllama={() => void startOllama()}
+              onPreviewBranchCleanup={(thresholdMonths) =>
+                previewExperimentBranchCleanup(thresholdMonths)
+              }
+              onCleanupBranches={(thresholdMonths) =>
+                cleanupExperimentBranches(thresholdMonths)
+              }
+              onCheckForUpdates={() => void checkForUpdates()}
+              onInstallUpdate={() => void installAvailableUpdate()}
+              onSelectChannel={(channel) =>
+                void handleSelectUpdateChannel(channel)
+              }
+              onRemindLater={() => void handleRemindLater()}
+              onClearReminder={() => void handleClearUpdateReminder()}
+              onOpenPanel={openPersistedPanel}
+              onToggleCollapsed={() => toggleCollapsedPanel("maintenance")}
+            />
           </section>
 
           <BlueprintWizardModal
