@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.3.0] - 2026-03-29
+
+### Added
+
+- None.
+
+### Changed
+
 - Blueprint documentation and desktop wizard copy now explain workflow types, output types, and target path rules more explicitly, including when to use exact markdown output paths versus broad globs.
 - The desktop blueprint wizard now starts with a guided goal, output, workspace, runtime, and review flow that derives safer defaults from the outcome you want, while keeping the full raw template, metric, agent, and model controls available under an advanced section.
 - The desktop Blueprint Wizard now uses a denser breadcrumb-style guided layout with a persistent live summary sidebar, mirrored navigation actions, more tactile goal and deliverable cards, and a full-width advanced mode that temporarily takes over the canvas.
