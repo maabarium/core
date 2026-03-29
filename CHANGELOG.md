@@ -16,7 +16,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Retained winner archive export now downloads the generated `.tar.gz` directly from the desktop backend instead of relying on the macOS save-dialog path that was still failing to produce an archive.
+- Retained patchset and persisted-preview downloads now show immediate in-card feedback, so evidence exports no longer feel like silent background downloads.
+- Research evidence-gap proposals with no file patches now degrade into scored rejections instead of hard parse errors when discovery still cannot resolve a source, so later iterations can continue without being derailed by citation-free fallback summaries.
 
 ### Breaking Changes
 

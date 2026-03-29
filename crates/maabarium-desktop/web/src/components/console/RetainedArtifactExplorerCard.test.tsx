@@ -170,7 +170,7 @@ describe("RetainedArtifactExplorerCard", () => {
     const user = userEvent.setup();
     let resolveExport:
       | ((value: { fileName: string; bytes: number[] }) => void)
-      | null = null;
+      | undefined;
     const onExportFiles = vi.fn(
       () =>
         new Promise<{ fileName: string; bytes: number[] }>((resolve) => {
@@ -207,7 +207,13 @@ describe("RetainedArtifactExplorerCard", () => {
       /Packaging the retained winner files into a tar.gz archive/i,
     );
 
-    resolveExport?.({
+    if (typeof resolveExport !== "function") {
+      throw new Error("expected export promise resolver to be assigned");
+    }
+
+    const finishExport = resolveExport;
+
+    finishExport({
       fileName: "maabarium-retained-winner-7.tar.gz",
       bytes: [31, 139, 8, 0],
     });

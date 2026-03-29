@@ -69,7 +69,11 @@ export function ConsoleEvidencePanel({
   onSelectExperimentId: (experimentId: number) => void;
   onExportFiles: (
     entry: RetainedWinnerEntry,
-  ) => Promise<string | null | void> | string | null | void;
+  ) =>
+    | Promise<{ fileName: string; bytes: number[] } | null | void>
+    | { fileName: string; bytes: number[] }
+    | null
+    | void;
   latestResearchExperiment: PersistedExperiment | null;
   latestLoraExperiment: PersistedExperiment | null;
   className?: string;
