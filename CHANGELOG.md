@@ -16,6 +16,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.3.6] - 2026-03-30
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
 - Issues with release scripts.
 
 ### Breaking Changes
