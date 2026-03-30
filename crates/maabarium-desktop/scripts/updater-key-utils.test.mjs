@@ -7,6 +7,10 @@ import {
   normalizeMinisignText,
   signatureKeyLineFromMinisignSignature,
 } from "./updater-key-utils.mjs";
+import {
+  buildSignerProcessEnv,
+  shouldPassPasswordArg,
+} from "./validate-updater-keypair.mjs";
 
 test("normalizes a wrapped minisign pubkey", () => {
   const wrapped =
@@ -58,4 +62,25 @@ test("detects a wrapped encrypted minisign secret key", () => {
     "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5Zm1GY1MzN21DZC90UDJ0Tno3NXhxT0FHd05RVlBXUm5vMUo4d0djblRuSUFBQkFBQUFBQUFBQUFBQUlBQUFBQUhBaTJCUk9nakRwS01sUWVEYjVEMDA5SnlwNWlYV0V1Q01PbXJxdmJvaW81aGFSRkh0b1ZNWm03U1kwS0dKWCs4a3hENHZUT2NadFdIVXZkbFRFOVdlY2k1WlpsSVd0T25EVmlaWFZNaUhxRFY1SFVPZ2N5QjVuNExRcz0=";
 
   assert.equal(isEncryptedMinisignSecretKey(wrapped), true);
+});
+
+test("removes conflicting signer env vars before probe signing", () => {
+  const signerEnv = buildSignerProcessEnv({
+    PATH: process.env.PATH,
+    TAURI_SIGNING_PRIVATE_KEY: "inline-private-key",
+    TAURI_SIGNING_PRIVATE_KEY_FILE: "/tmp/updater.key",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "secret",
+  });
+
+  assert.equal(signerEnv.TAURI_SIGNING_PRIVATE_KEY, undefined);
+  assert.equal(signerEnv.TAURI_SIGNING_PRIVATE_KEY_FILE, undefined);
+  assert.equal(signerEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "secret");
+});
+
+test("passes an explicit empty password for encrypted minisign secret keys", () => {
+  const encryptedWrapped =
+    "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5Zm1GY1MzN21DZC90UDJ0Tno3NXhxT0FHd05RVlBXUm5vMUo4d0djblRuSUFBQkFBQUFBQUFBQUFBQUlBQUFBQUhBaTJCUk9nakRwS01sUWVEYjVEMDA5SnlwNWlYV0V1Q01PbXJxdmJvaW81aGFSRkh0b1ZNWm03U1kwS0dKWCs4a3hENHZUT2NadFdIVXZkbFRFOVdlY2k1WlpsSVd0T25EVmlaWFZNaUhxRFY1SFVPZ2N5QjVuNExRcz0=";
+
+  assert.equal(shouldPassPasswordArg(encryptedWrapped, ""), true);
+  assert.equal(shouldPassPasswordArg("plain-key", ""), false);
 });

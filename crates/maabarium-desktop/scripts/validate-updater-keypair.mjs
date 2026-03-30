@@ -5,6 +5,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
 import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
 import {
   isEncryptedMinisignSecretKey,
@@ -156,6 +157,20 @@ function normalizeMinisignKey(rawValue, label) {
   return normalizeMinisignText(rawValue, label).keyLine;
 }
 
+export function buildSignerProcessEnv(baseEnv = process.env) {
+  const signerEnv = { ...baseEnv };
+  delete signerEnv.TAURI_SIGNING_PRIVATE_KEY;
+  delete signerEnv.TAURI_SIGNING_PRIVATE_KEY_FILE;
+  return signerEnv;
+}
+
+export function shouldPassPasswordArg(rawValue, password) {
+  return (
+    password !== undefined &&
+    (password !== "" || isEncryptedMinisignSecretKey(rawValue))
+  );
+}
+
 async function promptHidden(question) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     return "";
@@ -219,14 +234,14 @@ function signerKeyIdFromPrivateKey(rawValue, password) {
       "--private-key-path",
       privateKeyPath,
     ];
-    if (password) {
+    if (shouldPassPasswordArg(rawValue, password)) {
       args.push("--password", password);
     }
     args.push(payloadPath);
 
     const result = spawnSync("pnpm", args, {
       encoding: "utf8",
-      env: process.env,
+      env: buildSignerProcessEnv(process.env),
     });
 
     if (result.status !== 0) {
@@ -257,7 +272,7 @@ function signerKeyIdFromPrivateKey(rawValue, password) {
   }
 }
 
-async function main() {
+export async function main() {
   const args = parseArgs(process.argv.slice(2));
   const pubkeyInput = loadInput({
     file: args.pubkeyFile,
@@ -298,4 +313,9 @@ async function main() {
   console.log(`Private key source: ${privateKeyInput.sourceLabel}`);
 }
 
-await main();
+const entryFilePath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+const moduleFilePath = fileURLToPath(import.meta.url);
+
+if (entryFilePath === moduleFilePath) {
+  await main();
+}
