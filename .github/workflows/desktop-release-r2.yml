@@ -121,10 +121,15 @@ jobs:
           : "${AWS_ACCESS_KEY_ID:?CLOUDFLARE_R2_ACCESS_KEY_ID must be configured}"
           : "${AWS_SECRET_ACCESS_KEY:?CLOUDFLARE_R2_SECRET_ACCESS_KEY must be configured}"
           node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-pubkey.mjs" --github-env
-          node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-keypair.mjs"
 
       - name: Install desktop dependencies
         run: cd crates/maabarium-desktop && pnpm install --frozen-lockfile
+
+      - name: Validate updater signing keypair
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-keypair.mjs"
 
       - name: Import Apple signing certificate into keychain
         shell: bash

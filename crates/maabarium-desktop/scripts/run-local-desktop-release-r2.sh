@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$DESKTOP_DIR/../.." && pwd)"
 
+source "$SCRIPT_DIR/release-prereqs.sh"
+
 usage() {
   cat <<'EOF'
 Run the desktop-release-r2 flow locally on macOS.
@@ -303,14 +305,7 @@ if [[ -z "${MAABARIUM_UPDATE_PUBKEY:-}" && -z "${MAABARIUM_UPDATE_PUBKEY_FILE:-}
 fi
 
 cd "$DESKTOP_DIR"
-pnpm install --frozen-lockfile
-
-if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
-  node ./scripts/validate-updater-pubkey.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE"
-else
-  node ./scripts/validate-updater-pubkey.mjs --value "$MAABARIUM_UPDATE_PUBKEY"
-fi
-node ./scripts/validate-updater-keypair.mjs
+run_updater_signing_prereqs
 
 RAW_PUBKEY="$(normalize_pubkey_line)"
 TAURI_UPDATER_PUBKEY="$(normalize_pubkey_for_tauri)"

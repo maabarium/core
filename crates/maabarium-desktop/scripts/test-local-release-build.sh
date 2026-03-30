@@ -9,6 +9,8 @@ RELEASE_DIR="$DESKTOP_DIR/release"
 STAGING_DIR="$RELEASE_DIR/staging"
 BASE_URL="${MAABARIUM_UPDATE_BASE_URL:-https://downloads.maabarium.com}"
 
+source "$SCRIPT_DIR/release-prereqs.sh"
+
 case "$(uname -m)" in
   arm64|aarch64)
     PLATFORM_KEY="darwin-aarch64"
@@ -65,14 +67,7 @@ if [[ -z "${MAABARIUM_UPDATE_PUBKEY:-}" && -z "${MAABARIUM_UPDATE_PUBKEY_FILE:-}
 fi
 
 cd "$DESKTOP_DIR"
-pnpm install --frozen-lockfile
-
-if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
-  node ./scripts/validate-updater-pubkey.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE"
-else
-  node ./scripts/validate-updater-pubkey.mjs --value "$MAABARIUM_UPDATE_PUBKEY"
-fi
-node ./scripts/validate-updater-keypair.mjs
+run_updater_signing_prereqs
 
 TAURI_UPDATER_PUBKEY="$({
   if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then

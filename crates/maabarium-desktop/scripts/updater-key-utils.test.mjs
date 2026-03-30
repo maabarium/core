@@ -9,6 +9,7 @@ import {
 } from "./updater-key-utils.mjs";
 import {
   buildSignerProcessEnv,
+  hasLocalTauriCli,
   shouldPassPasswordArg,
 } from "./validate-updater-keypair.mjs";
 import { formatNormalizedUpdaterKey } from "./normalize-updater-key.mjs";
@@ -84,6 +85,13 @@ test("passes an explicit empty password for encrypted minisign secret keys", () 
 
   assert.equal(shouldPassPasswordArg(encryptedWrapped, ""), true);
   assert.equal(shouldPassPasswordArg("plain-key", ""), false);
+});
+
+test("detects when the local Tauri CLI is not installed", () => {
+  assert.equal(
+    hasLocalTauriCli("/definitely/missing/maabarium-desktop"),
+    false,
+  );
 });
 
 test("formats normalized updater pubkeys for Tauri bundle config as two-line minisign text", () => {

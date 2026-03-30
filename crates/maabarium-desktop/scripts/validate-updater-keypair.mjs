@@ -171,6 +171,15 @@ export function shouldPassPasswordArg(rawValue, password) {
   );
 }
 
+export function hasLocalTauriCli(packageDir) {
+  const binDir = path.join(packageDir, "node_modules", ".bin");
+  const binaryNames =
+    process.platform === "win32" ? ["tauri.cmd", "tauri.exe"] : ["tauri"];
+  return binaryNames.some((binaryName) =>
+    fs.existsSync(path.join(binDir, binaryName)),
+  );
+}
+
 async function promptHidden(question) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     return "";
@@ -219,6 +228,12 @@ function signerKeyIdFromPrivateKey(rawValue, password) {
   const privateKeyPath = path.join(tempDir, "updater.key");
 
   try {
+    if (!hasLocalTauriCli(packageDir)) {
+      throw new Error(
+        `Tauri CLI is not available in ${packageDir}. Install desktop dependencies first with \"pnpm install --frozen-lockfile\" from crates/maabarium-desktop before validating updater keypairs.`,
+      );
+    }
+
     fs.writeFileSync(payloadPath, "maabarium-keypair-check\n", "utf8");
     fs.writeFileSync(privateKeyPath, rawValue, {
       encoding: "utf8",
