@@ -58,6 +58,10 @@ normalize_pubkey_line() {
   fi
 }
 
+updater_private_key_requires_password() {
+  TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" node --input-type=module -e 'import { isEncryptedMinisignSecretKey } from "./scripts/updater-key-utils.mjs"; process.exit(isEncryptedMinisignSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY ?? "") ? 0 : 1);'
+}
+
 import_apple_certificate() {
   if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
     return
@@ -245,6 +249,12 @@ fi
 : "${APPLE_ID:?APPLE_ID must be configured}"
 : "${APPLE_PASSWORD:?APPLE_PASSWORD must be configured}"
 : "${APPLE_TEAM_ID:?APPLE_TEAM_ID must be configured}"
+
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]] && [[ -t 0 ]] && updater_private_key_requires_password; then
+  read -r -s -p "Updater private key password: " TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+  echo
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+fi
 
 if [[ -z "${APPLE_CERTIFICATE:-}" && -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   echo "Set APPLE_SIGNING_IDENTITY for a locally installed Developer ID certificate, or provide APPLE_CERTIFICATE plus APPLE_CERTIFICATE_PASSWORD for temporary import." >&2

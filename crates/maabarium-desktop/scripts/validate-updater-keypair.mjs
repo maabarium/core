@@ -1,8 +1,16 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { spawnSync } from "node:child_process";
+import readline from "node:readline";
 
-import { normalizeMinisignText } from "./updater-key-utils.mjs";
+import {
+  isEncryptedMinisignSecretKey,
+  keyIdFromMinisignLine,
+  normalizeMinisignText,
+  signatureKeyLineFromMinisignSignature,
+} from "./updater-key-utils.mjs";
 
 function printHelp() {
   console.log(`Validate that a Tauri updater public key matches the updater private key.
@@ -147,16 +155,119 @@ function normalizeMinisignKey(rawValue, label) {
   return normalizeMinisignText(rawValue, label).keyLine;
 }
 
-function keyIdFromKeyLine(keyLine, label) {
-  const decoded = Buffer.from(keyLine, "base64");
-  if (decoded.length < 10) {
-    throw new Error(`${label} is too short to contain a minisign key ID.`);
+async function promptHidden(question) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return "";
   }
 
-  return decoded.subarray(2, 10).toString("hex");
+  const mutableOutput = {
+    muted: true,
+    write(chunk) {
+      if (!this.muted) {
+        process.stdout.write(chunk);
+        return;
+      }
+
+      const text = String(chunk);
+      if (/\r|\n/.test(text)) {
+        process.stdout.write(text);
+      }
+    },
+  };
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: mutableOutput,
+    terminal: true,
+  });
+
+  try {
+    const password = await new Promise((resolve) => {
+      rl.question(question, resolve);
+    });
+    mutableOutput.muted = false;
+    process.stdout.write("\n");
+    return password;
+  } finally {
+    rl.close();
+  }
 }
 
-function main() {
+async function resolvePrivateKeyPassword(rawValue) {
+  const configuredPassword = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD;
+  if (configuredPassword !== undefined) {
+    return configuredPassword;
+  }
+
+  if (!isEncryptedMinisignSecretKey(rawValue)) {
+    return "";
+  }
+
+  return promptHidden("Updater private key password: ");
+}
+
+function signerKeyIdFromPrivateKey(rawValue, password) {
+  const scriptsDir = path.dirname(new URL(import.meta.url).pathname);
+  const packageDir = path.dirname(scriptsDir);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "maabarium-keypair-"));
+  const payloadPath = path.join(tempDir, "payload.txt");
+  const privateKeyPath = path.join(tempDir, "updater.key");
+
+  try {
+    fs.writeFileSync(payloadPath, "maabarium-keypair-check\n", "utf8");
+    fs.writeFileSync(privateKeyPath, rawValue, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+
+    const args = [
+      "--dir",
+      packageDir,
+      "tauri",
+      "signer",
+      "sign",
+      "-f",
+      privateKeyPath,
+    ];
+    if (password) {
+      args.push("-p", password);
+    }
+    args.push(payloadPath);
+
+    const result = spawnSync("pnpm", args, {
+      encoding: "utf8",
+      env: process.env,
+    });
+
+    if (result.status !== 0) {
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      if (
+        /wrong password|incorrect updater private key password/i.test(output)
+      ) {
+        throw new Error(
+          "Updater private key could not be unlocked. Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD to the correct password before running release validation.",
+        );
+      }
+
+      throw new Error(
+        `Failed to validate updater private key by signing a probe payload: ${output.trim() || "unknown signer failure"}`,
+      );
+    }
+
+    const signaturePath = `${payloadPath}.sig`;
+    const signature = fs.readFileSync(signaturePath, "utf8");
+    const signatureKeyLine = signatureKeyLineFromMinisignSignature(
+      signature,
+      "Updater signature",
+    );
+
+    return keyIdFromMinisignLine(signatureKeyLine, "Updater signature");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const pubkeyInput = loadInput({
     file: args.pubkeyFile,
@@ -177,13 +288,14 @@ function main() {
     pubkeyInput.rawValue,
     "Updater public key",
   );
-  const privateKeyLine = normalizeMinisignKey(
-    privateKeyInput.rawValue,
-    "Updater private key",
-  );
+  normalizeMinisignKey(privateKeyInput.rawValue, "Updater private key");
 
-  const publicKeyId = keyIdFromKeyLine(pubkeyLine, "Updater public key");
-  const privateKeyId = keyIdFromKeyLine(privateKeyLine, "Updater private key");
+  const publicKeyId = keyIdFromMinisignLine(pubkeyLine, "Updater public key");
+  const password = await resolvePrivateKeyPassword(privateKeyInput.rawValue);
+  const privateKeyId = signerKeyIdFromPrivateKey(
+    privateKeyInput.rawValue,
+    password,
+  );
 
   if (publicKeyId !== privateKeyId) {
     throw new Error(
@@ -196,4 +308,4 @@ function main() {
   console.log(`Private key source: ${privateKeyInput.sourceLabel}`);
 }
 
-main();
+await main();

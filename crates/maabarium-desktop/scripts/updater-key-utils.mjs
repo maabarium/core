@@ -24,6 +24,50 @@ export function unwrapBase64WrappedMinisign(rawValue) {
   return normalized;
 }
 
+export function keyIdFromMinisignLine(keyLine, label) {
+  const decoded = Buffer.from(keyLine, "base64");
+  if (decoded.length < 10) {
+    throw new Error(`${label} is too short to contain a minisign key ID.`);
+  }
+
+  return decoded.subarray(2, 10).toString("hex");
+}
+
+export function signatureKeyLineFromMinisignSignature(rawValue, label) {
+  const normalized = unwrapBase64WrappedMinisign(rawValue);
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2 || !/^untrusted comment:/i.test(lines[0])) {
+    throw new Error(`${label} is not valid minisign signature text.`);
+  }
+
+  const keyLine = lines[1];
+  if (!/^[A-Za-z0-9+/=]+$/.test(keyLine)) {
+    throw new Error(
+      `${label} does not contain a valid minisign signature line.`,
+    );
+  }
+
+  return keyLine;
+}
+
+export function isEncryptedMinisignSecretKey(rawValue) {
+  const normalized = unwrapBase64WrappedMinisign(rawValue);
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length !== 2) {
+    return false;
+  }
+
+  return /encrypted secret key/i.test(lines[0]);
+}
+
 export function normalizeMinisignText(rawValue, label) {
   const normalized = unwrapBase64WrappedMinisign(rawValue);
   const lines = normalized

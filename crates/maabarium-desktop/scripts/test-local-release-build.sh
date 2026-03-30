@@ -22,6 +22,10 @@ case "$(uname -m)" in
     ;;
 esac
 
+updater_private_key_requires_password() {
+  TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" node --input-type=module -e 'import { isEncryptedMinisignSecretKey } from "./scripts/updater-key-utils.mjs"; process.exit(isEncryptedMinisignSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY ?? "") ? 0 : 1);'
+}
+
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -n "${TAURI_SIGNING_PRIVATE_KEY_FILE:-}" ]]; then
   export TAURI_SIGNING_PRIVATE_KEY="$(cat "$TAURI_SIGNING_PRIVATE_KEY_FILE")"
 fi
@@ -41,6 +45,12 @@ fi
 
 if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   export MAABARIUM_REQUIRE_APPLE_CLI_SIGNING="1"
+fi
+
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]] && [[ -t 0 ]] && updater_private_key_requires_password; then
+  read -r -s -p "Updater private key password: " TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+  echo
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 fi
 
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
