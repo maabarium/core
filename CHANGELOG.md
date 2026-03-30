@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Issues with release scripts.
 
 ### Breaking Changes
 
