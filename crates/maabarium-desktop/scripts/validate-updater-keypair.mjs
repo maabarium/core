@@ -216,11 +216,11 @@ function signerKeyIdFromPrivateKey(rawValue, password) {
       "tauri",
       "signer",
       "sign",
-      "-f",
+      "--private-key-path",
       privateKeyPath,
     ];
     if (password) {
-      args.push("-p", password);
+      args.push("--password", password);
     }
     args.push(payloadPath);
 
