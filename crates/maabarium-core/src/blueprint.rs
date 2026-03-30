@@ -117,10 +117,21 @@ pub enum EvaluatorKind {
     Process,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinEvaluatorName {
+    Code,
+    Prompt,
+    Research,
+    Lora,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct EvaluatorConfig {
     #[serde(default)]
     pub kind: EvaluatorKind,
+    #[serde(default)]
+    pub builtin: Option<BuiltinEvaluatorName>,
     #[serde(default)]
     pub manifest_path: Option<String>,
     #[serde(default)]
@@ -192,6 +203,20 @@ impl BlueprintFile {
         if self
             .evaluator
             .as_ref()
+            .is_some_and(|config| config.kind == EvaluatorKind::Builtin)
+            && self
+                .evaluator
+                .as_ref()
+                .and_then(|config| config.builtin)
+                .is_none()
+        {
+            return Err(BlueprintError::Validation(
+                "Builtin evaluator blueprints must define evaluator.builtin".into(),
+            ));
+        }
+        if self
+            .evaluator
+            .as_ref()
             .is_some_and(|config| config.kind == EvaluatorKind::Process)
             && self
                 .evaluator
@@ -202,6 +227,14 @@ impl BlueprintFile {
         {
             return Err(BlueprintError::Validation(
                 "Process evaluator blueprints must define evaluator.manifest_path".into(),
+            ));
+        }
+        if self.evaluator.as_ref().is_some_and(|config| {
+            config.kind != EvaluatorKind::Builtin && config.builtin.is_some()
+        }) {
+            return Err(BlueprintError::Validation(
+                "evaluator.builtin can only be used when evaluator.kind = \"builtin\""
+                    .into(),
             ));
         }
         Ok(())
@@ -219,5 +252,95 @@ impl BlueprintFile {
             .as_ref()
             .map(|library| library.setup_required || library.kind == BlueprintLibraryKind::Template)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_blueprint() -> BlueprintFile {
+        BlueprintFile {
+            blueprint: BlueprintMeta {
+                name: "test-blueprint".to_owned(),
+                version: "1.0.0".to_owned(),
+                description: "test".to_owned(),
+            },
+            domain: DomainConfig {
+                repo_path: ".".to_owned(),
+                target_files: vec!["src/**/*.rs".to_owned()],
+                language: "rust".to_owned(),
+            },
+            constraints: ConstraintsConfig {
+                max_iterations: 1,
+                timeout_seconds: 60,
+                require_tests_pass: true,
+                min_improvement: 0.01,
+            },
+            metrics: MetricsConfig {
+                metrics: vec![MetricDef {
+                    name: "quality".to_owned(),
+                    weight: 1.0,
+                    direction: "maximize".to_owned(),
+                    description: "quality".to_owned(),
+                }],
+            },
+            agents: AgentsConfig {
+                council_size: 1,
+                debate_rounds: 0,
+                agents: vec![AgentDef {
+                    name: "agent".to_owned(),
+                    role: "tester".to_owned(),
+                    system_prompt: "test".to_owned(),
+                    model: "mock".to_owned(),
+                }],
+            },
+            models: ModelsConfig {
+                assignment: ModelAssignment::Explicit,
+                models: vec![ModelDef {
+                    name: "mock".to_owned(),
+                    provider: "mock".to_owned(),
+                    endpoint: "http://localhost".to_owned(),
+                    api_key_env: None,
+                    temperature: 0.0,
+                    max_tokens: 128,
+                    requests_per_minute: None,
+                }],
+            },
+            evaluator: None,
+            library: None,
+        }
+    }
+
+    #[test]
+    fn rejects_builtin_kind_without_builtin_subtype() {
+        let mut blueprint = sample_blueprint();
+        blueprint.evaluator = Some(EvaluatorConfig {
+            kind: EvaluatorKind::Builtin,
+            builtin: None,
+            manifest_path: None,
+            plugin_id: None,
+        });
+
+        let error = blueprint.validate().expect_err("validation should fail");
+        assert!(error
+            .to_string()
+            .contains("Builtin evaluator blueprints must define evaluator.builtin"));
+    }
+
+    #[test]
+    fn rejects_builtin_subtype_for_non_builtin_kind() {
+        let mut blueprint = sample_blueprint();
+        blueprint.evaluator = Some(EvaluatorConfig {
+            kind: EvaluatorKind::Process,
+            builtin: Some(BuiltinEvaluatorName::Prompt),
+            manifest_path: Some("evaluators/custom.toml".to_owned()),
+            plugin_id: None,
+        });
+
+        let error = blueprint.validate().expect_err("validation should fail");
+        assert!(error
+            .to_string()
+            .contains("evaluator.builtin can only be used when evaluator.kind = \"builtin\""));
     }
 }

@@ -1,4 +1,6 @@
-use crate::blueprint::BlueprintFile;
+use crate::blueprint::{
+    BlueprintFile, BlueprintTemplateKind, BuiltinEvaluatorName, EvaluatorKind,
+};
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
 use crate::llm::provider_from_models;
@@ -86,6 +88,12 @@ pub struct LoraArtifacts {
 
 pub struct EvaluatorRegistry;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvaluatorSelection {
+    Builtin(BuiltinEvaluatorKind),
+    Process,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EvaluationContext {
     pub workspace_path: Option<PathBuf>,
@@ -99,6 +107,12 @@ impl EvaluationContext {
 
 impl EvaluatorRegistry {
     pub fn resolve_builtin(blueprint: &BlueprintFile) -> BuiltinEvaluatorKind {
+        if let Some(template) = blueprint.library.as_ref().and_then(|library| library.template) {
+            if let Some(kind) = Self::resolve_builtin_from_template(template) {
+                return kind;
+            }
+        }
+
         if Self::is_lora_blueprint(blueprint) {
             BuiltinEvaluatorKind::Lora
         } else if Self::is_research_blueprint(blueprint) {
@@ -136,57 +150,92 @@ impl EvaluatorRegistry {
     }
 
     pub fn build(blueprint: &BlueprintFile) -> Result<Arc<dyn Evaluator>, EvalError> {
-        if blueprint
-            .evaluator
-            .as_ref()
-            .is_some_and(|config| config.kind == crate::blueprint::EvaluatorKind::Process)
-        {
-            return Ok(Arc::new(ProcessPluginEvaluator::from_blueprint(blueprint)?));
+        match Self::resolve_selection(blueprint) {
+            EvaluatorSelection::Process => {
+                Ok(Arc::new(ProcessPluginEvaluator::from_blueprint(blueprint)?))
+            }
+            EvaluatorSelection::Builtin(_) => Self::build_builtin(blueprint),
         }
-
-        Self::build_builtin(blueprint)
     }
 
     pub fn describe(blueprint: &BlueprintFile) -> String {
-        if blueprint
-            .evaluator
-            .as_ref()
-            .is_some_and(|config| config.kind == crate::blueprint::EvaluatorKind::Process)
-        {
-            return blueprint
-                .evaluator
-                .as_ref()
-                .and_then(|config| config.plugin_id.clone())
-                .or_else(|| {
-                    blueprint
-                        .evaluator
-                        .as_ref()
-                        .and_then(|config| config.manifest_path.clone())
-                })
-                .map(|value| format!("process:{value}"))
-                .unwrap_or_else(|| "process".to_owned());
+        match Self::resolve_selection(blueprint) {
+            EvaluatorSelection::Process => {
+                blueprint
+                    .evaluator
+                    .as_ref()
+                    .and_then(|config| config.plugin_id.clone())
+                    .or_else(|| {
+                        blueprint
+                            .evaluator
+                            .as_ref()
+                            .and_then(|config| config.manifest_path.clone())
+                    })
+                    .map(|value| format!("process:{value}"))
+                    .unwrap_or_else(|| "process".to_owned())
+            }
+            EvaluatorSelection::Builtin(kind) => kind.as_str().to_owned(),
         }
-
-        Self::resolve_builtin(blueprint).as_str().to_owned()
     }
 
     pub fn external_plugins_supported() -> bool {
         true
     }
 
+    fn resolve_selection(blueprint: &BlueprintFile) -> EvaluatorSelection {
+        match blueprint.evaluator.as_ref().map(|config| config.kind) {
+            Some(EvaluatorKind::Process) => EvaluatorSelection::Process,
+            Some(EvaluatorKind::Builtin) => EvaluatorSelection::Builtin(
+                Self::resolve_explicit_builtin(
+                    blueprint
+                        .evaluator
+                        .as_ref()
+                        .and_then(|config| config.builtin)
+                        .expect("builtin evaluator kind should be validated"),
+                ),
+            ),
+            _ => EvaluatorSelection::Builtin(Self::resolve_builtin(blueprint)),
+        }
+    }
+
+    fn resolve_explicit_builtin(kind: BuiltinEvaluatorName) -> BuiltinEvaluatorKind {
+        match kind {
+            BuiltinEvaluatorName::Code => BuiltinEvaluatorKind::Code,
+            BuiltinEvaluatorName::Prompt => BuiltinEvaluatorKind::Prompt,
+            BuiltinEvaluatorName::Research => BuiltinEvaluatorKind::Research,
+            BuiltinEvaluatorName::Lora => BuiltinEvaluatorKind::Lora,
+        }
+    }
+
+    fn resolve_builtin_from_template(
+        template: BlueprintTemplateKind,
+    ) -> Option<BuiltinEvaluatorKind> {
+        match template {
+            BlueprintTemplateKind::PromptOptimization => Some(BuiltinEvaluatorKind::Prompt),
+            BlueprintTemplateKind::GeneralResearch => Some(BuiltinEvaluatorKind::Research),
+            BlueprintTemplateKind::LoraValidation => Some(BuiltinEvaluatorKind::Lora),
+            BlueprintTemplateKind::CodeQuality | BlueprintTemplateKind::ProductBuilder => {
+                Some(BuiltinEvaluatorKind::Code)
+            }
+            BlueprintTemplateKind::Custom => None,
+        }
+    }
+
     fn is_prompt_blueprint(blueprint: &BlueprintFile) -> bool {
-        blueprint.domain.language.eq_ignore_ascii_case("markdown")
-            || blueprint.domain.language.eq_ignore_ascii_case("prompt")
+        blueprint.domain.language.eq_ignore_ascii_case("prompt")
             || blueprint
                 .blueprint
                 .name
                 .to_ascii_lowercase()
                 .contains("prompt")
-            || blueprint
-                .domain
-                .target_files
-                .iter()
-                .any(|pattern| pattern.ends_with(".md") || pattern.contains(".md"))
+            || blueprint.domain.target_files.iter().any(|pattern| {
+                let normalized = pattern.to_ascii_lowercase();
+                normalized.contains("prompt")
+                    || normalized.ends_with(".prompt")
+                    || normalized.ends_with(".prompt.md")
+                    || normalized.contains("/prompts/")
+                    || normalized.starts_with("prompts/")
+            })
     }
 
     fn is_research_blueprint(blueprint: &BlueprintFile) -> bool {
@@ -291,7 +340,8 @@ pub trait Evaluator: Send + Sync {
 mod tests {
     use super::*;
     use crate::blueprint::{
-        AgentDef, AgentsConfig, BlueprintMeta, ConstraintsConfig, DomainConfig, MetricDef,
+        AgentDef, AgentsConfig, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintMeta,
+        BuiltinEvaluatorName, ConstraintsConfig, DomainConfig, EvaluatorConfig, MetricDef,
         MetricsConfig, ModelAssignment, ModelDef, ModelsConfig,
     };
 
@@ -355,6 +405,76 @@ mod tests {
             EvaluatorRegistry::resolve_builtin(&blueprint),
             BuiltinEvaluatorKind::Prompt
         );
+    }
+
+    #[test]
+    fn registry_resolves_prompt_template_markdown_as_prompt() {
+        let mut blueprint = sample_blueprint(
+            "single-doc-prompt-workflow",
+            "markdown",
+            vec!["docs/assistant-guidelines.md"],
+        );
+        blueprint.library = Some(BlueprintLibraryMeta {
+            kind: BlueprintLibraryKind::Template,
+            setup_required: true,
+            template: Some(BlueprintTemplateKind::PromptOptimization),
+        });
+
+        assert_eq!(
+            EvaluatorRegistry::resolve_builtin(&blueprint),
+            BuiltinEvaluatorKind::Prompt
+        );
+    }
+
+    #[test]
+    fn registry_resolves_markdown_documents_as_code_blueprints() {
+        let blueprint = sample_blueprint(
+            "project-echo-implementation-refine",
+            "markdown",
+            vec!["docs/project-echo-implementation.md"],
+        );
+        assert_eq!(
+            EvaluatorRegistry::resolve_builtin(&blueprint),
+            BuiltinEvaluatorKind::Code
+        );
+    }
+
+    #[test]
+    fn registry_prefers_explicit_process_evaluator_kind() {
+        let mut blueprint = sample_blueprint("custom-plugin", "markdown", vec!["docs/report.md"]);
+        blueprint.evaluator = Some(EvaluatorConfig {
+            kind: EvaluatorKind::Process,
+            builtin: None,
+            manifest_path: Some("evaluators/custom.toml".to_owned()),
+            plugin_id: Some("custom-evaluator".to_owned()),
+        });
+
+        assert_eq!(
+            EvaluatorRegistry::describe(&blueprint),
+            "process:custom-evaluator"
+        );
+    }
+
+    #[test]
+    fn registry_prefers_explicit_builtin_subtype_over_template_and_heuristics() {
+        let mut blueprint = sample_blueprint(
+            "prompt-like-name",
+            "research",
+            vec!["prompts/system.md"],
+        );
+        blueprint.library = Some(BlueprintLibraryMeta {
+            kind: BlueprintLibraryKind::Template,
+            setup_required: true,
+            template: Some(BlueprintTemplateKind::GeneralResearch),
+        });
+        blueprint.evaluator = Some(EvaluatorConfig {
+            kind: EvaluatorKind::Builtin,
+            builtin: Some(BuiltinEvaluatorName::Code),
+            manifest_path: None,
+            plugin_id: None,
+        });
+
+        assert_eq!(EvaluatorRegistry::describe(&blueprint), "code");
     }
 
     #[test]

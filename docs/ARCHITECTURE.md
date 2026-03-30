@@ -205,9 +205,10 @@ The following are not active implementation commitments in the current roadmap:
 
 Evaluator choice is now resolved through `EvaluatorRegistry` in `maabarium-core`.
 
-- `prompt` workflows map to `PromptEvaluator`
-- `lora` workflows map to `LoraEvaluator`
-- everything else maps to `CodeEvaluator`
+- `evaluator.kind = "process"` selects `ProcessPluginEvaluator`
+- `evaluator.kind = "builtin"` with `evaluator.builtin = "code" | "prompt" | "research" | "lora"` selects the matching built-in evaluator directly
+- built-in template metadata is the next routing signal when there is no explicit evaluator override
+- language, metric names, blueprint name, and target-path patterns remain as backward-compatible fallback heuristics
 
 This keeps evaluator selection deterministic and typed without exposing a dynamic shared-library plugin surface.
 

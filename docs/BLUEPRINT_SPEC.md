@@ -116,9 +116,8 @@ models = [
 # ─── Evaluator Override ─────────────────────────────────────────────────────
 
 [evaluator]
-kind = "process"                 # optional: "auto" | "builtin" | "process"
-manifest_path = "evaluators/custom-evaluator.toml"
-plugin_id = "custom-evaluator"   # optional display/runtime identifier
+kind = "builtin"                 # optional: "auto" | "builtin" | "process"
+builtin = "prompt"              # required when kind = "builtin": "code" | "prompt" | "research" | "lora"
 ```
 
 ## Field Reference
@@ -214,13 +213,16 @@ Use exact paths when the workflow should create or refine one named output file.
 
 ### `[evaluator]`
 
-This section is optional. If omitted, Maabarium continues to auto-select one of the built-in evaluators from the blueprint language, metrics, and target patterns.
+This section is optional. If omitted, Maabarium auto-selects one of the built-in evaluators from blueprint template metadata when present, then falls back to language, metrics, and target-pattern heuristics.
 
-| Field           | Type   | Required | Description                                                       |
-| --------------- | ------ | -------- | ----------------------------------------------------------------- |
-| `kind`          | string | —        | `"auto"`, `"builtin"`, or `"process"`                             |
-| `manifest_path` | string | process  | Path to a TOML process-plugin manifest, resolved from `repo_path` |
-| `plugin_id`     | string | —        | Optional identifier shown in runtime state and diagnostics        |
+| Field           | Type   | Required | Description                                                                       |
+| --------------- | ------ | -------- | --------------------------------------------------------------------------------- |
+| `kind`          | string | —        | `"auto"`, `"builtin"`, or `"process"`                                             |
+| `builtin`       | string | builtin  | Required when `kind = "builtin"`: `"code"`, `"prompt"`, `"research"`, or `"lora"` |
+| `manifest_path` | string | process  | Path to a TOML process-plugin manifest, resolved from `repo_path`                 |
+| `plugin_id`     | string | —        | Optional identifier shown in runtime state and diagnostics                        |
+
+When `kind = "builtin"`, `builtin` is mandatory. When `kind = "process"`, `manifest_path` is mandatory. `evaluator.builtin` is rejected for `kind = "auto"` or `kind = "process"`.
 
 #### Process Evaluator Plugin Manifest
 
@@ -258,13 +260,19 @@ The engine validates a blueprint at load time and refuses to start if:
 Maabarium selects one built-in evaluator per blueprint:
 
 - `code`: the default path for code and application work
-- `prompt`: used for prompt or markdown optimisation blueprints
+- `prompt`: used for prompt optimisation blueprints and other prompt-oriented markdown assets
 - `lora`: used for LoRA artefact validation blueprints
 - `research`: used for research-oriented blueprints
 
-If a workflow is intended to write a document instead of mutating source code, do not leave it on the default code path. Set the language to `markdown` or `prompt`, and ensure the configured target paths include `.md` targets so the prompt evaluator and markdown-safe file creation guidance are selected.
+Selection precedence is:
 
-Treat `language` as behavior-selecting metadata, not cosmetic labeling. In practice it helps Maabarium choose the evaluator path, safe creation guidance, and some library affordances.
+1. explicit evaluator override: `evaluator.kind = "process"` always selects the process plugin path, and `evaluator.kind = "builtin"` with `evaluator.builtin` selects that built-in evaluator directly,
+2. template-aware routing: built-in library templates such as `prompt_optimization`, `general_research`, and `lora_validation` select their matching built-in evaluator directly,
+3. backward-compatible heuristics: when no explicit override or decisive template metadata exists, Maabarium falls back to language, metric names, blueprint name, and target-path patterns.
+
+Treat `language` as behavior-selecting metadata, not cosmetic labeling. In practice it still influences evaluator fallback, safe creation guidance, and some library affordances, but language alone is not the sole routing signal.
+
+If a workflow is intended to refine one named implementation or planning document instead of prompt assets, it can safely use `language = "markdown"` without being forced onto the prompt evaluator. For prompt-optimisation behavior, prefer a prompt-oriented template or prompt-specific target paths.
 
 The research evaluator activates when a blueprint clearly targets research work, for example:
 

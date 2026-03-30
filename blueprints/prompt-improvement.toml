@@ -40,6 +40,10 @@ models = [
     { name = "qwen", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.5, max_tokens = 1536 },
 ]
 
+[evaluator]
+kind = "builtin"
+builtin = "prompt"
+
 [library]
 kind = "template"
 setup_required = true

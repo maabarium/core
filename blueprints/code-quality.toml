@@ -36,6 +36,10 @@ models = [
     { name = "llama3", provider = "ollama", endpoint = "http://localhost:11434", temperature = 0.4, max_tokens = 2048 },
 ]
 
+[evaluator]
+kind = "builtin"
+builtin = "code"
+
 [library]
 kind = "template"
 setup_required = true

@@ -36,7 +36,10 @@ What ships today:
 - SQLite persistence for experiments, metrics, proposals, and desktop history views
 - keychain-backed provider secret storage
 - research and LoRA-oriented evaluator flows alongside general code and prompt workflows
+- explicit blueprint evaluator overrides via `evaluator.kind = "builtin" | "process"`, with built-in subtype selection for `code`, `prompt`, `research`, and `lora`
 - a Tauri desktop console with setup persistence, blueprint library management, live run state, history, diff, and logs
+
+See [docs/BLUEPRINT_SPEC.md](docs/BLUEPRINT_SPEC.md) for the full blueprint contract, including explicit built-in evaluator selection and template-aware evaluator routing.
 
 ## Workspace
 
