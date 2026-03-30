@@ -427,5 +427,8 @@ describe("BlueprintWizardModal", () => {
       screen.getByText(/create a compact outline or heading scaffold first/i),
     ).toBeTruthy();
     expect(screen.getByText(/deepen one section per iteration/i)).toBeTruthy();
+    expect(
+      screen.getByText(/spell out the minimum depth you expect/i),
+    ).toBeTruthy();
   });
 });

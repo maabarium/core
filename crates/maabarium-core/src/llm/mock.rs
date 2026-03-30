@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde_json::json;
 
 use crate::error::LLMError;
 
@@ -14,6 +15,70 @@ impl MockProvider {
             model: model.into(),
         }
     }
+
+    fn extract_safe_markdown_create_path(prompt: &str) -> Option<String> {
+        let mut in_safe_path_block = false;
+
+        for line in prompt.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("Safe relative paths:") {
+                in_safe_path_block = true;
+                continue;
+            }
+
+            if !in_safe_path_block {
+                continue;
+            }
+
+            if let Some(path) = trimmed.strip_prefix("- ") {
+                if path.ends_with(".md") {
+                    return Some(path.to_owned());
+                }
+                continue;
+            }
+
+            if !trimmed.is_empty() {
+                break;
+            }
+        }
+
+        None
+    }
+
+    fn extract_first_file_block(prompt: &str) -> Option<(String, String)> {
+        let marker = "<file path=\"";
+        let start = prompt.find(marker)?;
+        let remainder = &prompt[start + marker.len()..];
+        let (path, after_path) = remainder.split_once("\">")?;
+        let (content, _) = after_path.split_once("</file>")?;
+        Some((path.to_owned(), content.trim_matches('\n').to_owned()))
+    }
+
+    fn escaped_markdown_replacement(existing_content: &str) -> String {
+        let mut new_content = existing_content.trim_end().to_owned();
+        if !new_content.is_empty() {
+            new_content.push_str("\n\n");
+        }
+        new_content.push_str("## Implementation Notes\n- Expand subsystem boundaries, milestones, and execution detail.\n");
+        serde_json::to_string(&new_content).unwrap_or_else(|_| "\"# Draft\\n\"".to_owned())
+    }
+
+    fn rust_modify_diff(existing_content: &str) -> String {
+        let first_line = existing_content
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("pub fn baseline() {}")
+            .trim_end();
+        let replacement = if first_line.contains("maabarium_improvement") {
+            "pub fn maabarium_follow_up() {}".to_owned()
+        } else {
+            "pub fn maabarium_improvement() {}".to_owned()
+        };
+        format!(
+            "@@ -1,1 +1,1 @@\n-{}\n+{}\n",
+            first_line, replacement
+        )
+    }
 }
 
 #[async_trait]
@@ -24,24 +89,79 @@ impl LLMProvider for MockProvider {
         } else if request.prompt.contains("\"file_patches\"") {
             if request.prompt.contains("MAABARIUM_MOCK_EMPTY_PATCHSET") {
                 return Ok(CompletionResponse {
-                    content: "{\n  \"summary\": \"Mock provider generated no file changes\",\n  \"file_patches\": []\n}".to_owned(),
+                    content: json!({
+                        "summary": "Mock provider generated no file changes",
+                        "file_patches": []
+                    })
+                    .to_string(),
                     tokens_used: 16,
                     latency: std::time::Duration::from_millis(5),
                 });
             }
-            let path = request
-                .prompt
-                .lines()
-                .find_map(|line| {
-                    line.trim()
-                        .strip_prefix("<file path=\"")
-                        .and_then(|rest| rest.split_once("\">").map(|(path, _)| path.to_owned()))
+            if request.prompt.contains("No existing target files were found. Create a new markdown file") {
+                let path = Self::extract_safe_markdown_create_path(&request.prompt)
+                    .unwrap_or_else(|| "docs/draft.md".to_owned());
+                let content = format!(
+                    "# Detailed Implementation Draft\n\n## Architecture\n- Define concrete subsystems and data flow.\n\n## Delivery Plan\n- List milestones, dependencies, and exit criteria.\n"
+                );
+                return Ok(CompletionResponse {
+                    content: json!({
+                        "summary": "Mock provider created a substantial first draft",
+                        "file_patches": [
+                            {
+                                "path": path,
+                                "operation": "create",
+                                "unified_diff": content,
+                            }
+                        ]
+                    })
+                    .to_string(),
+                    tokens_used: 32,
+                    latency: std::time::Duration::from_millis(5),
+                });
+            }
+            if let Some((path, existing_content)) = Self::extract_first_file_block(&request.prompt) {
+                if path.ends_with(".md") {
+                    json!({
+                        "summary": "Mock provider deepened the existing document",
+                        "file_patches": [
+                            {
+                                "path": path,
+                                "operation": "modify",
+                                "unified_diff": serde_json::from_str::<serde_json::Value>(&Self::escaped_markdown_replacement(&existing_content)).unwrap_or_else(|_| json!("# Draft\n")),
+                            }
+                        ]
+                    })
+                    .to_string()
+                } else {
+                    json!({
+                        "summary": "Mock provider generated a safe maabarium improvement",
+                        "file_patches": [
+                            {
+                                "path": path,
+                                "operation": "modify",
+                                "unified_diff": Self::rust_modify_diff(&existing_content),
+                            }
+                        ]
+                    })
+                    .to_string()
+                }
+            } else {
+                json!({
+                    "summary": "Mock provider generated a safe maabarium improvement",
+                    "file_patches": [
+                        {
+                            "path": "src/lib.rs",
+                            "operation": "modify",
+                            "unified_diff": "@@ -1,1 +1,1 @@
+-pub fn baseline() {}
++pub fn maabarium_improvement() {}
+",
+                        }
+                    ]
                 })
-                .unwrap_or_else(|| "src/lib.rs".to_owned());
-            format!(
-                "{{\n  \"summary\": \"Mock provider generated a safe maabarium improvement\",\n  \"file_patches\": [\n    {{\n      \"path\": \"{}\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -1,1 +1,1 @@\\n-pub fn baseline() {{}}\\n+pub fn maabarium_improvement() {{}}\\n\"\n    }}\n  ]\n}}",
-                path,
-            )
+                .to_string()
+            }
         } else {
             let summary = request
                 .prompt

@@ -3,7 +3,7 @@ use maabarium_core::{
     engine::{Engine, EngineConfig},
     error::EvalError,
     evaluator::{EvaluationContext, Evaluator, ExperimentResult, MetricScore},
-    git_manager::Proposal,
+    git_manager::{FilePatchOperation, Proposal},
     persistence::{Persistence, PromotionOutcome},
 };
 use std::fs;
@@ -259,4 +259,92 @@ async fn engine_rejects_empty_patchset_even_when_score_improves() {
     assert_eq!(experiments[0].promotion_outcome, PromotionOutcome::Rejected);
 
     let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn engine_uses_reusable_workspace_for_document_follow_up_iterations() {
+    let repo_root = std::env::temp_dir().join(format!("maabarium-engine-doc-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(repo_root.join("docs")).expect("temp repo docs should be created");
+    fs::write(
+        repo_root.join("docs/project-echo-implementation.md"),
+        "# Project Echo\n\n## Architecture\n- Seed detail.\n",
+    )
+    .expect("seed document should be created");
+    init_git_repo_with_document(&repo_root, "docs/project-echo-implementation.md");
+
+    let blueprint_path = repo_root.join("mock_document_blueprint.toml");
+    fs::write(
+        &blueprint_path,
+        format!(
+            "[blueprint]\nname = \"mock-doc-test\"\nversion = \"0.1.0\"\ndescription = \"Mock blueprint for testing detailed document follow-up\"\n\n[domain]\nrepo_path = \"{}\"\ntarget_files = [\"docs/project-echo-implementation.md\"]\nlanguage = \"markdown\"\n\n[constraints]\nmax_iterations = 2\ntimeout_seconds = 30\nrequire_tests_pass = false\nmin_improvement = 0.01\n\n[metrics]\nmetrics = [\n    {{ name = \"quality\", weight = 1.0, direction = \"maximize\", description = \"Quality score\" }},\n]\n\n[agents]\ncouncil_size = 1\ndebate_rounds = 0\nagents = [\n    {{ name = \"test-agent\", role = \"tester\", system_prompt = \"You are a test agent.\", model = \"mock\" }},\n]\n\n[models]\nmodels = [\n    {{ name = \"mock\", provider = \"mock\", endpoint = \"http://localhost:11434\", temperature = 0.5, max_tokens = 512 }},\n]\n",
+            repo_root.display()
+        ),
+    )
+    .expect("blueprint should be written");
+
+    let blueprint = BlueprintFile::load(&blueprint_path).expect("Failed to load mock blueprint");
+    let evaluator = Arc::new(SequenceEvaluator {
+        scores: Mutex::new(vec![0.8, 0.79]),
+    });
+    let cancel = CancellationToken::new();
+    let db_path = repo_root.join("maabarium_test.db");
+
+    let config = EngineConfig {
+        blueprint,
+        db_path: db_path.display().to_string(),
+        progress_reporter: None,
+    };
+
+    let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
+    engine.run().await.expect("engine should complete");
+
+    let persistence =
+        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+            .expect("db should open");
+    let proposals = persistence
+        .recent_proposals_for_blueprint("mock-doc-test", 10)
+        .expect("workflow proposals should load");
+
+    assert_eq!(proposals.len(), 2);
+    assert_eq!(proposals[0].file_patches.len(), 1);
+    assert_eq!(proposals[1].file_patches.len(), 1);
+    assert_eq!(proposals[0].file_patches[0].operation, FilePatchOperation::Modify);
+    assert_eq!(proposals[1].file_patches[0].operation, FilePatchOperation::Modify);
+    assert_eq!(proposals[0].file_patches[0].path, "docs/project-echo-implementation.md");
+    assert_eq!(proposals[1].file_patches[0].path, "docs/project-echo-implementation.md");
+    assert_eq!(
+        proposals[1].file_patches[0]
+            .content
+            .as_deref()
+            .expect("first document content should exist")
+            .matches("## Implementation Notes")
+            .count(),
+        1
+    );
+    assert_eq!(
+        proposals[0].file_patches[0]
+            .content
+            .as_deref()
+            .expect("follow-up document content should exist")
+            .matches("## Implementation Notes")
+            .count(),
+        2
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+fn init_git_repo_with_document(repo_root: &Path, relative_path: &str) {
+    let repo = git2::Repository::init(repo_root).expect("git repo should initialize");
+    let mut index = repo.index().expect("git index should open");
+    index
+        .add_path(Path::new(relative_path))
+        .expect("document should be added");
+    index.write().expect("git index should write");
+    let tree_id = index.write_tree().expect("tree id should be written");
+    let tree = repo.find_tree(tree_id).expect("tree should load");
+    let signature = git2::Signature::now("Maabarium Test", "test@maabarium.local")
+        .expect("signature should be created");
+    repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+        .expect("initial commit should succeed");
 }

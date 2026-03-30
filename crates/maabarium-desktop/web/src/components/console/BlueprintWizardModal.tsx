@@ -205,6 +205,10 @@ const BASE_WIZARD_TIP_SECTIONS: WizardTipSection[] = [
         title: "Prefer constraints over personality",
         body: "Prompt rules such as 'keep proposals narrow' or 'return a compact scaffold first' are more useful than tone or persona instructions.",
       },
+      {
+        title: "Define what detailed output means",
+        body: "If you want an implementation document instead of a pitch summary, name the required sections, the expected depth in each section, and the concrete planning details the first accepted draft must already include.",
+      },
     ],
   },
 ];
@@ -231,6 +235,10 @@ const GUIDED_STEP_TIP_SECTIONS: Record<WizardStep, WizardTipSection> = {
       {
         title: "Exact paths are safer for named documents",
         body: "If the workflow should create or refine one specific markdown file, point it at that exact path instead of a broad docs glob.",
+      },
+      {
+        title: "Match the path to the deliverable contract",
+        body: "When the target is one implementation plan, say whether the first accepted draft should be a substantial v1 or only a starter outline. Do not leave that tradeoff implicit.",
       },
       {
         title: "Globs fit existing trees",
@@ -318,6 +326,10 @@ const ADVANCED_TAB_TIP_SECTIONS: Record<WizardTab, WizardTipSection> = {
       {
         title: "Tell agents to work incrementally when size matters",
         body: "For one named markdown file, prompts like 'create a compact scaffold first' and 'deepen one section at a time' are much safer than asking for a complete long-form rewrite.",
+      },
+      {
+        title: "Say when the first draft must already be substantial",
+        body: "If you need more than an outline, tell the council that the first accepted draft must include concrete architecture, milestones, dependencies, risks, and open questions rather than headings with placeholder bullets.",
       },
       {
         title: "Differentiate strategist, builder, and critic roles",
@@ -574,6 +586,10 @@ function buildWizardTipSections({
         {
           title: "Deepen one section per iteration",
           body: "Prompts such as 'revise one section or one tightly related cluster of lines at a time' keep proposals smaller, clearer, and less likely to truncate.",
+        },
+        {
+          title: "Spell out the minimum depth you expect",
+          body: "If the first retained result should already be useful, say so explicitly with requirements like named subsystems, milestone exit criteria, risk mitigations, open questions, and concrete implementation notes in every major section.",
         },
       ],
     });

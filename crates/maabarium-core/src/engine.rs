@@ -79,7 +79,12 @@ fn generate_run_id() -> String {
     Uuid::new_v4().simple().to_string()[..8].to_owned()
 }
 
-fn build_proposal_context(bp: &BlueprintFile, iteration: u64, baseline: f64) -> String {
+fn build_proposal_context(
+    bp: &BlueprintFile,
+    proposal_repo_path: &str,
+    iteration: u64,
+    baseline: f64,
+) -> String {
     let target_files = if bp.domain.target_files.is_empty() {
         "- no explicit targets".to_owned()
     } else {
@@ -95,7 +100,7 @@ fn build_proposal_context(bp: &BlueprintFile, iteration: u64, baseline: f64) -> 
         "Blueprint: {}\nDescription: {}\nRepository: {}\nLanguage: {}\nIteration: {}\nCurrent baseline: {:.4}\nTarget file patterns:\n{}",
         bp.blueprint.name,
         bp.blueprint.description,
-        bp.domain.repo_path,
+        proposal_repo_path,
         bp.domain.language,
         iteration,
         baseline,
@@ -302,14 +307,18 @@ impl Engine {
                 Some("Council is preparing the next proposal".to_owned()),
             );
 
-            let proposal_context = build_proposal_context(bp, iteration, baseline);
+            let proposal_repo_path = reusable_workspace
+                .as_ref()
+                .map(|workspace| workspace.path.display().to_string())
+                .unwrap_or_else(|| bp.domain.repo_path.clone());
+            let proposal_context = build_proposal_context(bp, &proposal_repo_path, iteration, baseline);
             let planning_started = std::time::Instant::now();
 
             let proposal = match tokio::select! {
                 _ = self.cancel.cancelled() => Err(EngineError::Cancelled),
                 result = self.council.run(
                     &proposal_context,
-                    &bp.domain.repo_path,
+                    &proposal_repo_path,
                     &bp.domain.target_files,
                     &bp.domain.language,
                     &bp.metrics.metrics,

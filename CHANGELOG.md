@@ -12,11 +12,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- The Blueprint Wizard tips panel now includes clearer guidance for authoring exact-document workflows that need a genuinely detailed first draft rather than a shallow outline.
 
 ### Fixed
 
-- None.
+- Later proposal iterations now build file context from the reusable experiment workspace instead of the original repo path, so exact-document workflows can deepen promoted drafts with `modify` patches instead of repeatedly proposing fresh `create` patches.
 
 ### Breaking Changes
 
