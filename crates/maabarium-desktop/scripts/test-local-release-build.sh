@@ -47,13 +47,13 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   export MAABARIUM_REQUIRE_APPLE_CLI_SIGNING="1"
 fi
 
-if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]] && [[ -t 0 ]] && updater_private_key_requires_password; then
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+x}" ]] && [[ -t 0 ]] && updater_private_key_requires_password; then
   read -r -s -p "Updater private key password: " TAURI_SIGNING_PRIVATE_KEY_PASSWORD
   echo
   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 fi
 
-if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+x}" ]]; then
   echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not set; continuing with an unencrypted updater signing key."
 fi
 
@@ -74,15 +74,15 @@ else
 fi
 node ./scripts/validate-updater-keypair.mjs
 
-RAW_PUBKEY="$({
+TAURI_UPDATER_PUBKEY="$({
   if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
-    node ./scripts/normalize-updater-key.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE"
+    node ./scripts/normalize-updater-key.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE" --format wrapped
   else
-    node ./scripts/normalize-updater-key.mjs --value "$MAABARIUM_UPDATE_PUBKEY"
+    node ./scripts/normalize-updater-key.mjs --value "$MAABARIUM_UPDATE_PUBKEY" --format wrapped
   fi
 })"
 
-TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
+TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$TAURI_UPDATER_PUBKEY")"
 export TAURI_CONFIG
 
 pnpm tauri build --config "$TAURI_CONFIG"

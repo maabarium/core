@@ -11,6 +11,7 @@ import {
   buildSignerProcessEnv,
   shouldPassPasswordArg,
 } from "./validate-updater-keypair.mjs";
+import { formatNormalizedUpdaterKey } from "./normalize-updater-key.mjs";
 
 test("normalizes a wrapped minisign pubkey", () => {
   const wrapped =
@@ -83,4 +84,19 @@ test("passes an explicit empty password for encrypted minisign secret keys", () 
 
   assert.equal(shouldPassPasswordArg(encryptedWrapped, ""), true);
   assert.equal(shouldPassPasswordArg("plain-key", ""), false);
+});
+
+test("formats normalized updater pubkeys for Tauri bundle config as two-line minisign text", () => {
+  const wrapped =
+    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIzNzM1MzExODM4QzlDMzcKUldRM25JeURFVk56STN4Y1VscHBFVlBPVUp4aXFTTHhIOCtiWXBSOXA1YmdxQ09pekpkaDk4ZTMK";
+
+  assert.equal(
+    formatNormalizedUpdaterKey(wrapped, "two-line"),
+    "untrusted comment: minisign public key: 23735311838C9C37\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
+  );
+  assert.equal(formatNormalizedUpdaterKey(wrapped, "wrapped"), wrapped);
+  assert.equal(
+    formatNormalizedUpdaterKey(wrapped, "key-line"),
+    "RWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3",
+  );
 });

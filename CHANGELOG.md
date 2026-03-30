@@ -34,7 +34,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- Local desktop release validation now strips inherited updater private-key env vars before probe-signing and preserves explicit empty updater-key passphrases, so Tauri signer accepts `--private-key-path` validation runs for both inline-exported keys and encrypted minisign keys created with a blank password.
+- Local desktop release validation now strips inherited updater private-key env vars, preserves explicit empty updater-key passphrases, passes a normalized base64-wrapped two-line minisign pubkey into Tauri bundle config, and reports a clear dirty-worktree error unless local publishing is run with `--allow-dirty`.
 
 ### Breaking Changes
 

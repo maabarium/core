@@ -97,7 +97,7 @@ pnpm validate:updater-pubkey -- --file ~/.tauri/maabarium.key.pub
 
 The validator prints a `Recommended GitHub variable value` line. Use that raw key line for `MAABARIUM_UPDATE_PUBKEY` if you want to avoid multiline variable handling surprises in GitHub Actions.
 
-The release workflow also passes that validated key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI.
+The release workflow also passes a normalized base64-wrapped two-line minisign public key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI. The compiled desktop runtime still embeds the normalized raw key line via `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE`.
 
 For release packaging, the workflow also applies a release-only `productName` override of `Maabarium-Console`, so the generated macOS `.app` and updater `.app.tar.gz` artifacts use dashed filenames while the desktop window title remains `Maabarium Console`.
 
@@ -212,6 +212,7 @@ Run this when you need the same release flow without consuming GitHub Actions mi
 3. Ensure the Apple signing identity is available in Keychain, or set `APPLE_CERTIFICATE` plus `APPLE_CERTIFICATE_PASSWORD` so the script can import a temporary keychain.
 4. Export the updater signing key, updater public key, update base URL, Apple notarization values, and Cloudflare R2 credentials.
 5. Run `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel stable`.
+  Add `--allow-dirty` only when you intentionally need a local publish from an uncommitted workstation state.
 6. Confirm the script uploads the updater bundle, signature, CLI archive, channel manifest, and `install.sh` to the GitHub Release and Cloudflare R2.
 
 ### Required GitHub Secrets

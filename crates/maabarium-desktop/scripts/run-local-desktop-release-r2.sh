@@ -16,6 +16,7 @@ Usage:
 Options:
   --release-tag <tag>         Existing GitHub Release tag to upload assets to.
   --release-channel <name>    stable or beta. Defaults to stable unless derived from the GitHub Release.
+  --allow-dirty               Skip the clean-worktree guard for local publishing.
   --skip-gh-upload            Build and publish to R2 without uploading assets to a GitHub Release.
   --skip-r2-publish           Build and upload to the GitHub Release without syncing Cloudflare R2.
   --publish-root-manifest     Force publishing root latest.json.
@@ -50,11 +51,30 @@ derive_repo_slug() {
   gh repo view --json nameWithOwner --jq .nameWithOwner
 }
 
+ensure_clean_worktree() {
+  if [[ "${ALLOW_DIRTY_WORKTREE:-false}" == "true" ]]; then
+    return
+  fi
+
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "Refusing local desktop publish from a dirty worktree. Commit or stash changes first, or rerun with --allow-dirty." >&2
+    exit 1
+  fi
+}
+
 normalize_pubkey_line() {
   if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
     node ./scripts/normalize-updater-key.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE"
   else
     node ./scripts/normalize-updater-key.mjs --value "${MAABARIUM_UPDATE_PUBKEY:-}"
+  fi
+}
+
+normalize_pubkey_for_tauri() {
+  if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
+    node ./scripts/normalize-updater-key.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE" --format wrapped
+  else
+    node ./scripts/normalize-updater-key.mjs --value "${MAABARIUM_UPDATE_PUBKEY:-}" --format wrapped
   fi
 }
 
@@ -120,6 +140,7 @@ RELEASE_CHANNEL=""
 UPLOAD_RELEASE=true
 PUBLISH_R2=true
 PUBLISH_ROOT_MANIFEST=""
+ALLOW_DIRTY_WORKTREE=false
 CREATED_TEMP_KEYCHAIN=0
 RUNNER_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/maabarium-desktop-release.XXXXXX")"
 trap cleanup EXIT
@@ -136,6 +157,10 @@ while [[ $# -gt 0 ]]; do
     --release-channel)
       RELEASE_CHANNEL="${2:-}"
       shift 2
+      ;;
+    --allow-dirty)
+      ALLOW_DIRTY_WORKTREE=true
+      shift
       ;;
     --skip-gh-upload)
       UPLOAD_RELEASE=false
@@ -191,8 +216,7 @@ if [[ "$PUBLISH_R2" == true ]]; then
 fi
 
 cd "$REPO_ROOT"
-git diff --quiet
-git diff --cached --quiet
+ensure_clean_worktree
 
 if [[ -n "$RELEASE_TAG" ]]; then
   require_command gh
@@ -250,7 +274,7 @@ fi
 : "${APPLE_PASSWORD:?APPLE_PASSWORD must be configured}"
 : "${APPLE_TEAM_ID:?APPLE_TEAM_ID must be configured}"
 
-if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]] && [[ -t 0 ]] && updater_private_key_requires_password; then
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+x}" ]] && [[ -t 0 ]] && updater_private_key_requires_password; then
   read -r -s -p "Updater private key password: " TAURI_SIGNING_PRIVATE_KEY_PASSWORD
   echo
   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
@@ -289,7 +313,8 @@ fi
 node ./scripts/validate-updater-keypair.mjs
 
 RAW_PUBKEY="$(normalize_pubkey_line)"
-TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
+TAURI_UPDATER_PUBKEY="$(normalize_pubkey_for_tauri)"
+TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$TAURI_UPDATER_PUBKEY")"
 export TAURI_CONFIG
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 export MAABARIUM_REQUIRE_APPLE_CLI_SIGNING="1"
