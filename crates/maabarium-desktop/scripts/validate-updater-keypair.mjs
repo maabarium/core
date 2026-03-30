@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { createReadStream, createWriteStream } from "node:fs";
 import readline from "node:readline";
 
 import {
@@ -160,24 +161,12 @@ async function promptHidden(question) {
     return "";
   }
 
-  const mutableOutput = {
-    muted: true,
-    write(chunk) {
-      if (!this.muted) {
-        process.stdout.write(chunk);
-        return;
-      }
-
-      const text = String(chunk);
-      if (/\r|\n/.test(text)) {
-        process.stdout.write(text);
-      }
-    },
-  };
+  const input = createReadStream("/dev/tty");
+  const output = createWriteStream("/dev/tty");
 
   const rl = readline.createInterface({
-    input: process.stdin,
-    output: mutableOutput,
+    input,
+    output,
     terminal: true,
   });
 
@@ -185,11 +174,12 @@ async function promptHidden(question) {
     const password = await new Promise((resolve) => {
       rl.question(question, resolve);
     });
-    mutableOutput.muted = false;
     process.stdout.write("\n");
     return password;
   } finally {
     rl.close();
+    input.close();
+    output.close();
   }
 }
 

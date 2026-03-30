@@ -59,7 +59,7 @@ normalize_pubkey_line() {
 }
 
 updater_private_key_requires_password() {
-  TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" node --input-type=module -e 'import { isEncryptedMinisignSecretKey } from "./scripts/updater-key-utils.mjs"; process.exit(isEncryptedMinisignSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY ?? "") ? 0 : 1);'
+  TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" node --input-type=module -e 'const { isEncryptedMinisignSecretKey } = await import(process.argv[1]); process.exit(isEncryptedMinisignSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY ?? "") ? 0 : 1);' "$DESKTOP_DIR/scripts/updater-key-utils.mjs"
 }
 
 import_apple_certificate() {

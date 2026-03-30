@@ -23,7 +23,7 @@ case "$(uname -m)" in
 esac
 
 updater_private_key_requires_password() {
-  TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" node --input-type=module -e 'import { isEncryptedMinisignSecretKey } from "./scripts/updater-key-utils.mjs"; process.exit(isEncryptedMinisignSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY ?? "") ? 0 : 1);'
+  TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_PRIVATE_KEY" node --input-type=module -e 'const { isEncryptedMinisignSecretKey } = await import(process.argv[1]); process.exit(isEncryptedMinisignSecretKey(process.env.TAURI_SIGNING_PRIVATE_KEY ?? "") ? 0 : 1);' "$DESKTOP_DIR/scripts/updater-key-utils.mjs"
 }
 
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -n "${TAURI_SIGNING_PRIVATE_KEY_FILE:-}" ]]; then
