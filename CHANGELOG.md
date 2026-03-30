@@ -8,6 +8,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.3.2] - 2026-03-30
+
+### Added
+
 - The Blueprint Wizard now includes a toggleable workflow tips panel with clear guidance on workflow scope, agent behavior, runtime tuning, and incremental document strategies for exact markdown workflows.
 
 ### Changed
