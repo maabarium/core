@@ -169,8 +169,8 @@ jobs:
         run: |
           set -euo pipefail
           export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET:-}"
-          RAW_PUBKEY="$(if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/normalize-updater-key.mjs" --file "$MAABARIUM_UPDATE_PUBKEY_FILE"; else node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/normalize-updater-key.mjs" --value "$MAABARIUM_UPDATE_PUBKEY"; fi)"
-          export TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
+          TAURI_UPDATER_PUBKEY="$(if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/normalize-updater-key.mjs" --file "$MAABARIUM_UPDATE_PUBKEY_FILE" --format wrapped; else node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/normalize-updater-key.mjs" --value "$MAABARIUM_UPDATE_PUBKEY" --format wrapped; fi)"
+          export TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$TAURI_UPDATER_PUBKEY")"
           cd crates/maabarium-desktop
           pnpm tauri build \
             --ci \

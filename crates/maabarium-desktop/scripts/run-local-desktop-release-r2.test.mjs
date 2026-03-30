@@ -10,23 +10,30 @@ const desktopDir = path.resolve(
 );
 
 function runReleaseScript(args) {
-  return spawnSync("bash", ["./scripts/run-local-desktop-release-r2.sh", ...args], {
-    cwd: desktopDir,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      APPLE_ID: "test-apple-id",
-      APPLE_PASSWORD: "test-apple-password",
-      APPLE_TEAM_ID: "TEAMID1234",
-      MAABARIUM_UPDATE_BASE_URL: "https://downloads.example.test",
-      TAURI_SIGNING_PRIVATE_KEY: "placeholder",
-      MAABARIUM_UPDATE_PUBKEY: "placeholder",
+  return spawnSync(
+    "bash",
+    ["./scripts/run-local-desktop-release-r2.sh", ...args],
+    {
+      cwd: desktopDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        APPLE_ID: "test-apple-id",
+        APPLE_PASSWORD: "test-apple-password",
+        APPLE_TEAM_ID: "TEAMID1234",
+        MAABARIUM_UPDATE_BASE_URL: "https://downloads.example.test",
+        TAURI_SIGNING_PRIVATE_KEY: "placeholder",
+        MAABARIUM_UPDATE_PUBKEY: "placeholder",
+      },
     },
-  });
+  );
 }
 
 test("dirty worktree is rejected unless allow-dirty is set", () => {
-  const withoutFlag = runReleaseScript(["--skip-gh-upload", "--skip-r2-publish"]);
+  const withoutFlag = runReleaseScript([
+    "--skip-gh-upload",
+    "--skip-r2-publish",
+  ]);
   assert.notEqual(withoutFlag.status, 0);
   assert.match(
     withoutFlag.stderr,

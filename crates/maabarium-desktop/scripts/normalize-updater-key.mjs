@@ -80,7 +80,10 @@ function loadValue(args) {
 }
 
 export function formatNormalizedUpdaterKey(rawValue, format = "key-line") {
-  const { keyLine, normalizedLines } = normalizeMinisignText(rawValue, "Updater key");
+  const { keyLine, normalizedLines } = normalizeMinisignText(
+    rawValue,
+    "Updater key",
+  );
   const twoLineText =
     normalizedLines.length === 2
       ? `${normalizedLines.join("\n")}\n`

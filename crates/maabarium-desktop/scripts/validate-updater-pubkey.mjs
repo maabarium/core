@@ -127,10 +127,9 @@ function exportGitHubEnv(normalizedLines) {
   const tauriConfigOverride = JSON.stringify({
     plugins: {
       updater: {
-        pubkey: Buffer.from(
-          `${normalizedLines.join("\n")}\n`,
-          "utf8",
-        ).toString("base64"),
+        pubkey: Buffer.from(`${normalizedLines.join("\n")}\n`, "utf8").toString(
+          "base64",
+        ),
       },
     },
   });

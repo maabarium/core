@@ -212,7 +212,7 @@ Run this when you need the same release flow without consuming GitHub Actions mi
 3. Ensure the Apple signing identity is available in Keychain, or set `APPLE_CERTIFICATE` plus `APPLE_CERTIFICATE_PASSWORD` so the script can import a temporary keychain.
 4. Export the updater signing key, updater public key, update base URL, Apple notarization values, and Cloudflare R2 credentials.
 5. Run `cd crates/maabarium-desktop && pnpm publish:release-local -- --release-tag desktop-vX.Y.Z --release-channel stable`.
-  Add `--allow-dirty` only when you intentionally need a local publish from an uncommitted workstation state.
+   Add `--allow-dirty` only when you intentionally need a local publish from an uncommitted workstation state.
 6. Confirm the script uploads the updater bundle, signature, CLI archive, channel manifest, and `install.sh` to the GitHub Release and Cloudflare R2.
 
 ### Required GitHub Secrets
