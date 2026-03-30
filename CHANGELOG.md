@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Local desktop release validation now proves updater keypairs by signing a probe payload with the private key, prompts for encrypted updater-key passwords in local interactive flows, and avoids false mismatch reports on encrypted minisign secret keys.
 
 ### Breaking Changes
 
