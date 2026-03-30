@@ -66,11 +66,11 @@ node ./scripts/validate-updater-keypair.mjs
 
 RAW_PUBKEY="$({
   if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
-    cat "$MAABARIUM_UPDATE_PUBKEY_FILE"
+    node ./scripts/normalize-updater-key.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE"
   else
-    printf '%s' "$MAABARIUM_UPDATE_PUBKEY"
+    node ./scripts/normalize-updater-key.mjs --value "$MAABARIUM_UPDATE_PUBKEY"
   fi
-} | node -e 'const fs = require("fs"); const raw = fs.readFileSync(0, "utf8").replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim(); const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean); process.stdout.write(lines[lines.length - 1]);')"
+})"
 
 TAURI_CONFIG="$(node -e 'process.stdout.write(JSON.stringify({ productName: "Maabarium-Console", bundle: { targets: ["app"], macOS: { entitlements: "Entitlements.plist" } }, plugins: { updater: { pubkey: process.argv[1] } } }));' "$RAW_PUBKEY")"
 export TAURI_CONFIG

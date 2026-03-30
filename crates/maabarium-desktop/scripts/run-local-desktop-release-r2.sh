@@ -52,10 +52,10 @@ derive_repo_slug() {
 
 normalize_pubkey_line() {
   if [[ -n "${MAABARIUM_UPDATE_PUBKEY_FILE:-}" ]]; then
-    cat "$MAABARIUM_UPDATE_PUBKEY_FILE"
+    node ./scripts/normalize-updater-key.mjs --file "$MAABARIUM_UPDATE_PUBKEY_FILE"
   else
-    printf '%s' "${MAABARIUM_UPDATE_PUBKEY:-}"
-  fi | node -e 'const fs = require("fs"); const raw = fs.readFileSync(0, "utf8").replace(/\r\n?/g, "\n").replace(/\\n/g, "\n").trim(); const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean); process.stdout.write(lines[lines.length - 1]);'
+    node ./scripts/normalize-updater-key.mjs --value "${MAABARIUM_UPDATE_PUBKEY:-}"
+  fi
 }
 
 import_apple_certificate() {

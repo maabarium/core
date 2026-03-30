@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Desktop updater pubkey normalization now unwraps base64-wrapped minisign key files in build-time embedding and release tooling, preventing packaged apps from embedding the wrong trust anchor and rejecting valid signed updates with signature verification failures.
 
 ### Breaking Changes
 

@@ -1,3 +1,5 @@
+mod updater_key;
+
 use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate};
 use git2::{IndexAddOption, Repository, Signature};
@@ -2170,25 +2172,7 @@ fn resolved_update_pubkey(
 }
 
 fn normalize_update_pubkey_value(raw_value: &str) -> Option<String> {
-    let normalized = raw_value
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace("\\n", "\n");
-    let lines = normalized
-        .split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
-
-    if lines.is_empty() || lines.len() > 2 {
-        return None;
-    }
-
-    if lines.len() == 2 && !lines[0].to_ascii_lowercase().starts_with("untrusted comment:") {
-        return None;
-    }
-
-    Some(lines[lines.len() - 1].to_owned())
+    updater_key::normalize_updater_pubkey(raw_value)
 }
 
 fn update_pubkey_from_env() -> Option<String> {
@@ -3348,6 +3332,8 @@ mod tests {
             duration_ms: 1_000,
             error: None,
             promotion_outcome,
+            promoted_branch_name: None,
+            promoted_commit_oid: None,
             created_at: "2026-03-28T00:00:00Z".to_owned(),
             metrics: Vec::new(),
             research: None,
@@ -3557,6 +3543,22 @@ mod tests {
         );
 
         assert_eq!(pubkey.as_deref(), Some("normalized-compiled-pubkey"));
+    }
+
+    #[test]
+    fn resolved_update_pubkey_normalizes_base64_wrapped_runtime_value() {
+        let pubkey = resolved_update_pubkey(
+            Some(
+                "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIzNzM1MzExODM4QzlDMzcKUldRM25JeURFVk56STN4Y1VscHBFVlBPVUp4aXFTTHhIOCtiWXBSOXA1YmdxQ09pekpkaDk4ZTMK"
+                    .to_owned(),
+            ),
+            None,
+        );
+
+        assert_eq!(
+            pubkey.as_deref(),
+            Some("RWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3")
+        );
     }
 
     #[test]

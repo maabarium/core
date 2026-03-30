@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import { normalizeMinisignText } from "./updater-key-utils.mjs";
+
 function printHelp() {
   console.log(`Validate that a Tauri updater public key matches the updater private key.
 
@@ -142,33 +144,7 @@ function loadInput({ file, value, envVar, fileEnvVar, label }) {
 }
 
 function normalizeMinisignKey(rawValue, label) {
-  const normalized = rawValue
-    .replace(/\r\n?/g, "\n")
-    .replace(/\\n/g, "\n")
-    .trim();
-  const lines = normalized
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (lines.length === 0 || lines.length > 2) {
-    throw new Error(
-      `${label} must be either the raw minisign key line or the two-line key file contents.`,
-    );
-  }
-
-  if (lines.length === 2 && !/^untrusted comment:/i.test(lines[0])) {
-    throw new Error(
-      `${label} contains two lines, but the first line is not the expected minisign comment header.`,
-    );
-  }
-
-  const keyLine = lines[lines.length - 1];
-  if (!/^[A-Za-z0-9+/=]+$/.test(keyLine)) {
-    throw new Error(`${label} is not valid base64 minisign key material.`);
-  }
-
-  return keyLine;
+  return normalizeMinisignText(rawValue, label).keyLine;
 }
 
 function keyIdFromKeyLine(keyLine, label) {

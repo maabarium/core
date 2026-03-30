@@ -1,3 +1,6 @@
+#[path = "src/updater_key.rs"]
+mod updater_key;
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,31 +53,10 @@ fn configure_embedded_updater_pubkey() -> Result<(), String> {
 }
 
 fn normalize_updater_pubkey(raw_value: &str) -> Result<String, String> {
-    let lines = raw_value
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .replace("\\n", "\n")
-        .split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-
-    if lines.is_empty() || lines.len() > 2 {
-        return Err(
-            "updater public key must be either the raw key line or the two-line minisign .pub file contents"
-                .to_owned(),
-        );
-    }
-
-    if lines.len() == 2 && !lines[0].to_ascii_lowercase().starts_with("untrusted comment:") {
-        return Err(
-            "updater public key contains two lines, but the first line is not the expected minisign comment header"
-                .to_owned(),
-        );
-    }
-
-    Ok(lines[lines.len() - 1].clone())
+    updater_key::normalize_updater_pubkey(raw_value).ok_or_else(|| {
+        "updater public key must be either the raw key line, the two-line minisign .pub file contents, or a base64-wrapped copy of that minisign text"
+            .to_owned()
+    })
 }
 
 fn configure_embedded_updater_endpoint() -> Result<(), String> {

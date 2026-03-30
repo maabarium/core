@@ -2496,6 +2496,7 @@ name = "maabarium-desktop"
 version = "0.3.3"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "git2",
  "maabarium-core",
