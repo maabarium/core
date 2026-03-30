@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.3.3] - 2026-03-30
+
+### Added
+
+- None.
+
+### Changed
+
 - The Blueprint Wizard tips panel now includes clearer guidance for authoring exact-document workflows that need a genuinely detailed first draft rather than a shallow outline.
 
 ### Fixed
