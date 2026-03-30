@@ -131,6 +131,13 @@ impl LLMProvider for ModelPool {
             &self.label
         }
     }
+
+    fn configured_max_tokens(&self) -> Option<u32> {
+        self.providers
+            .iter()
+            .filter_map(|provider| provider.provider.configured_max_tokens())
+            .min()
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +180,10 @@ mod tests {
 
         fn model_name(&self) -> &str {
             self.name
+        }
+
+        fn configured_max_tokens(&self) -> Option<u32> {
+            Some(512)
         }
     }
 

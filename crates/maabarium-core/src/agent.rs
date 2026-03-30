@@ -19,6 +19,7 @@ const MAX_FILE_CHARS: usize = 4_000;
 const MAX_INVALID_RESPONSE_SNIPPET_CHARS: usize = 1_200;
 const DEFAULT_PROPOSAL_MAX_TOKENS: u32 = 768;
 const COMPLEX_PROPOSAL_MAX_TOKENS: u32 = 1_536;
+const EXACT_DOCUMENT_PROPOSAL_MAX_TOKENS: u32 = 3_072;
 
 #[derive(Debug, Clone)]
 struct FileContext {
@@ -65,12 +66,47 @@ fn research_patch_guidance(language: &str) -> &'static str {
     }
 }
 
-fn proposal_max_tokens(language: &str) -> u32 {
-    if language.eq_ignore_ascii_case("research") || language.eq_ignore_ascii_case("lora") {
+fn is_exact_target_path(path: &str) -> bool {
+    !path.contains('*') && !path.contains('?') && !path.contains('[') && !path.contains('{')
+}
+
+fn prefers_incremental_document_proposals(language: &str, target_files: &[String]) -> bool {
+    (language.eq_ignore_ascii_case("markdown") || language.eq_ignore_ascii_case("prompt"))
+        && target_files.len() == 1
+        && target_files.iter().all(|path| is_exact_target_path(path))
+}
+
+fn incremental_document_guidance(
+    language: &str,
+    target_files: &[String],
+    file_contexts: &[FileContext],
+) -> &'static str {
+    if !prefers_incremental_document_proposals(language, target_files) {
+        return "";
+    }
+
+    if file_contexts.is_empty() {
+        "\nIncremental document workflow rules:\n- The target is one exact document path. If it does not exist yet, create only a compact scaffold first.\n- Keep the initial create patch concise: headings plus short bullets only, not a fully expanded implementation plan.\n- Aim for a small, reviewable first draft that later iterations can deepen section by section.\n- Do not attempt a full-document rewrite in the first proposal."
+    } else {
+        "\nIncremental document workflow rules:\n- The target is one exact document path. Prefer revising one section or one tightly related cluster of lines at a time.\n- Avoid whole-document rewrites when a focused section edit will do.\n- Keep each proposal narrow enough that the JSON and diff remain compact and reviewable."
+    }
+}
+
+fn proposal_max_tokens(language: &str, target_files: &[String], llm: &dyn LLMProvider) -> u32 {
+    let heuristic_budget = if language.eq_ignore_ascii_case("research")
+        || language.eq_ignore_ascii_case("lora")
+    {
         COMPLEX_PROPOSAL_MAX_TOKENS
+    } else if prefers_incremental_document_proposals(language, target_files) {
+        EXACT_DOCUMENT_PROPOSAL_MAX_TOKENS
     } else {
         DEFAULT_PROPOSAL_MAX_TOKENS
-    }
+    };
+
+    llm.configured_max_tokens()
+        .filter(|configured| *configured > 0)
+        .map(|configured| heuristic_budget.min(configured))
+        .unwrap_or(heuristic_budget)
 }
 
 fn proposal_temperature(provider_name: &str) -> f32 {
@@ -297,6 +333,7 @@ impl Agent {
                 .join("\n\n")
         };
         let research_guidance = research_patch_guidance(language);
+        let document_guidance = incremental_document_guidance(language, target_files, &file_contexts);
         let diff_anchor = diff_anchor_example(&file_contexts);
         let prompt = format!(
             "Context:\n{context}\n\nTarget files:\n{targets_desc}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
@@ -326,13 +363,13 @@ impl Agent {
                +\n\
               beta\n\
                If you are not confident that the JSON or unified diff will be exact, return an empty file_patches array and explain the limitation in summary.\n\
-               A correct empty patch is better than malformed JSON or an invalid diff.{research_guidance}"
+               A correct empty patch is better than malformed JSON or an invalid diff.{research_guidance}{document_guidance}"
         );
         let req = CompletionRequest {
             system: self.def.system_prompt.clone(),
             prompt,
             temperature: proposal_temperature(self.llm.provider_name()),
-            max_tokens: proposal_max_tokens(language),
+            max_tokens: proposal_max_tokens(language, target_files, self.llm.as_ref()),
             response_format: Some(proposal_response_format()),
         };
         let resp = self.llm.complete(&req).await?;
@@ -351,7 +388,7 @@ impl Agent {
                     system: self.def.system_prompt.clone(),
                     prompt: proposal_repair_prompt(&req.prompt, &resp.content),
                     temperature: 0.0,
-                    max_tokens: proposal_max_tokens(language),
+                    max_tokens: proposal_max_tokens(language, target_files, self.llm.as_ref()),
                     response_format: Some(proposal_response_format()),
                 };
                 let repaired = self.llm.complete(&repair_request).await?;
@@ -1382,6 +1419,69 @@ mod tests {
         }
     }
 
+    struct RecordingProvider {
+        provider: &'static str,
+        model: &'static str,
+        configured_max_tokens: Option<u32>,
+        seen_max_tokens: StdMutex<Vec<u32>>,
+        response: &'static str,
+    }
+
+    impl RecordingProvider {
+        fn new(
+            provider: &'static str,
+            model: &'static str,
+            configured_max_tokens: Option<u32>,
+            response: &'static str,
+        ) -> Self {
+            Self {
+                provider,
+                model,
+                configured_max_tokens,
+                seen_max_tokens: StdMutex::new(Vec::new()),
+                response,
+            }
+        }
+
+        fn last_seen_max_tokens(&self) -> Option<u32> {
+            self.seen_max_tokens
+                .lock()
+                .expect("seen_max_tokens lock")
+                .last()
+                .copied()
+        }
+    }
+
+    #[async_trait]
+    impl LLMProvider for RecordingProvider {
+        async fn complete(
+            &self,
+            request: &CompletionRequest,
+        ) -> Result<CompletionResponse, LLMError> {
+            self.seen_max_tokens
+                .lock()
+                .expect("seen_max_tokens lock")
+                .push(request.max_tokens);
+            Ok(CompletionResponse {
+                content: self.response.to_owned(),
+                tokens_used: 8,
+                latency: Duration::from_millis(1),
+            })
+        }
+
+        fn provider_name(&self) -> &str {
+            self.provider
+        }
+
+        fn model_name(&self) -> &str {
+            self.model
+        }
+
+        fn configured_max_tokens(&self) -> Option<u32> {
+            self.configured_max_tokens
+        }
+    }
+
     #[tokio::test]
     async fn parses_structured_llm_patch_payload() {
         let repo_root =
@@ -1673,6 +1773,122 @@ mod tests {
             .expect_err("repair failure should be surfaced");
 
         assert!(error.to_string().contains("repair pass failed"));
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[tokio::test]
+    async fn exact_markdown_targets_use_provider_token_budget_for_proposals() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "maabarium-agent-markdown-budget-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(repo_root.join("docs")).expect("temp repo should be created");
+        fs::write(repo_root.join("docs/brief.md"), "# Brief\n\nOld content.\n")
+            .expect("source file should be written");
+
+        let provider = Arc::new(RecordingProvider::new(
+            "ollama",
+            "qwen3.5:9b",
+            Some(3_072),
+            r##"{
+  "summary": "Tighten the brief.",
+  "file_patches": [
+    {
+      "path": "docs/brief.md",
+      "operation": "modify",
+      "unified_diff": "# Brief\n\nUpdated content.\n"
+    }
+  ]
+}"##,
+        ));
+
+        let agent = Agent::new(
+            AgentDef {
+                name: "writer".into(),
+                role: "writer".into(),
+                system_prompt: "Return valid patch payloads".into(),
+                model: "qwen3.5:9b".into(),
+            },
+            provider.clone(),
+        );
+
+        let proposal = agent
+            .propose(
+                "Refine the implementation brief",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["docs/brief.md".into()],
+                "markdown",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            )
+            .await
+            .expect("proposal should succeed");
+
+        assert_eq!(proposal.summary, "Tighten the brief.");
+        assert_eq!(provider.last_seen_max_tokens(), Some(3_072));
+
+        let _ = fs::remove_dir_all(repo_root);
+    }
+
+    #[tokio::test]
+    async fn rust_targets_keep_default_proposal_budget_even_with_larger_model_limit() {
+        let repo_root = std::env::temp_dir().join(format!(
+            "maabarium-agent-rust-budget-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(repo_root.join("src")).expect("temp repo should be created");
+        fs::write(repo_root.join("src/lib.rs"), "pub fn baseline() {}\n")
+            .expect("source file should be written");
+
+        let provider = Arc::new(RecordingProvider::new(
+            "ollama",
+            "qwen3.5:9b",
+            Some(3_072),
+            r##"{
+  "summary": "Rename the function.",
+  "file_patches": [
+    {
+      "path": "src/lib.rs",
+      "operation": "modify",
+      "unified_diff": "@@ -1,1 +1,1 @@\n-pub fn baseline() {}\n+pub fn improved() {}\n"
+    }
+  ]
+}"##,
+        ));
+
+        let agent = Agent::new(
+            AgentDef {
+                name: "engineer".into(),
+                role: "engineer".into(),
+                system_prompt: "Return valid patch payloads".into(),
+                model: "qwen3.5:9b".into(),
+            },
+            provider.clone(),
+        );
+
+        let proposal = agent
+            .propose(
+                "Improve the baseline function",
+                repo_root.to_str().expect("repo path should be utf-8"),
+                &["src/**/*.rs".into()],
+                "rust",
+                &[MetricDef {
+                    name: "quality".into(),
+                    weight: 1.0,
+                    direction: "maximize".into(),
+                    description: "Overall quality".into(),
+                }],
+            )
+            .await
+            .expect("proposal should succeed");
+
+        assert_eq!(proposal.summary, "Rename the function.");
+        assert_eq!(provider.last_seen_max_tokens(), Some(DEFAULT_PROPOSAL_MAX_TOKENS));
 
         let _ = fs::remove_dir_all(repo_root);
     }

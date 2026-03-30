@@ -46,6 +46,10 @@ pub trait LLMProvider: Send + Sync {
     async fn complete(&self, request: &CompletionRequest) -> Result<CompletionResponse, LLMError>;
     fn provider_name(&self) -> &str;
     fn model_name(&self) -> &str;
+
+    fn configured_max_tokens(&self) -> Option<u32> {
+        None
+    }
 }
 
 pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, SecretError> {
@@ -55,6 +59,7 @@ pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, Sec
         "ollama" => Ok(Arc::new(OllamaProvider::new(
             model.endpoint.clone(),
             model.name.clone(),
+            model.max_tokens,
         ))),
         "openai"
         | "openai-compat"
@@ -70,6 +75,7 @@ pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, Sec
                 model.endpoint.clone(),
                 model.name.clone(),
                 api_key,
+                model.max_tokens,
             )))
         }
         _ => Err(SecretError::InvalidInput(format!(

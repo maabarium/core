@@ -8,15 +8,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- The Blueprint Wizard now includes a toggleable workflow tips panel with clear guidance on workflow scope, agent behavior, runtime tuning, and incremental document strategies for exact markdown workflows.
 
 ### Changed
 
-- None.
+- Proposal generation now respects the configured model token budget for exact single-document markdown and prompt workflows, so large document-oriented runs no longer silently inherit the older 768-token proposal cap.
+- Bundled prompt-improvement and general-research blueprints now steer document-oriented runs toward narrower scaffold-first or section-sized markdown edits, so newly seeded templates match the safer guidance added to the Project Echo workflow.
 
 ### Fixed
 
-- None.
+- Exact single-document markdown workflows now bias proposal prompts toward compact scaffold-first or section-sized edits, which keeps document plans reviewable and reduces truncated JSON failures on local Ollama models.
 
 ### Breaking Changes
 

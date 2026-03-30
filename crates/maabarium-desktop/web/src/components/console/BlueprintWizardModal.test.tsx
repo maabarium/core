@@ -366,4 +366,66 @@ describe("BlueprintWizardModal", () => {
       "[overflow-wrap:anywhere]",
     );
   });
+
+  it("toggles the workflow tips panel from the wizard header", async () => {
+    const user = userEvent.setup();
+
+    render(<TestHarness />);
+
+    expect(
+      document
+        .getElementById("blueprint-wizard-tips-panel")
+        ?.getAttribute("aria-hidden"),
+    ).toBe("true");
+
+    await user.click(screen.getByRole("button", { name: /Show Tips/i }));
+
+    expect(screen.getByText("Workflow Tips")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Agent prompts should describe how the council should work/i,
+      ),
+    ).toBeTruthy();
+    expect(
+      document
+        .getElementById("blueprint-wizard-tips-panel")
+        ?.getAttribute("aria-hidden"),
+    ).toBe("false");
+
+    await user.click(screen.getByRole("button", { name: /^Hide$/i }));
+
+    await waitFor(() => {
+      expect(
+        document
+          .getElementById("blueprint-wizard-tips-panel")
+          ?.getAttribute("aria-hidden"),
+      ).toBe("true");
+    });
+  });
+
+  it("surfaces incremental document advice when the workflow targets one named markdown file", async () => {
+    const user = userEvent.setup();
+
+    render(<TestHarness />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Generate or refine a document/i,
+      }),
+    );
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: /One named markdown file/i,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /Show Tips/i }));
+
+    expect(screen.getByText("Incremental Document Tip")).toBeTruthy();
+    expect(
+      screen.getByText(/create a compact outline or heading scaffold first/i),
+    ).toBeTruthy();
+    expect(screen.getByText(/deepen one section per iteration/i)).toBeTruthy();
+  });
 });

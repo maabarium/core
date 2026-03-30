@@ -13,14 +13,16 @@ pub struct OllamaProvider {
     client: Client,
     endpoint: String,
     model: String,
+    max_tokens: u32,
 }
 
 impl OllamaProvider {
-    pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(endpoint: impl Into<String>, model: impl Into<String>, max_tokens: u32) -> Self {
         Self {
             client: Client::new(),
             endpoint: endpoint.into(),
             model: model.into(),
+            max_tokens,
         }
     }
 }
@@ -165,6 +167,10 @@ impl LLMProvider for OllamaProvider {
     fn model_name(&self) -> &str {
         &self.model
     }
+
+    fn configured_max_tokens(&self) -> Option<u32> {
+        Some(self.max_tokens)
+    }
 }
 
 #[cfg(test)]
@@ -205,7 +211,7 @@ mod tests {
             "200 OK",
             r#"{"response":"","thinking":"","eval_count":42}"#.to_owned(),
         );
-        let provider = OllamaProvider::new(endpoint, "qwen3.5:9b");
+        let provider = OllamaProvider::new(endpoint, "qwen3.5:9b", 128);
 
         let error = provider
             .complete(&CompletionRequest {
@@ -230,7 +236,7 @@ mod tests {
             "200 OK",
             r#"{"response":"","thinking":"{\"summary\":\"ok\",\"file_patches\":[]}","eval_count":42}"#.to_owned(),
         );
-        let provider = OllamaProvider::new(endpoint, "qwen3.5:9b");
+        let provider = OllamaProvider::new(endpoint, "qwen3.5:9b", 128);
 
         let response = provider
             .complete(&CompletionRequest {
@@ -253,7 +259,7 @@ mod tests {
             "200 OK",
             r#"{"response":"{\"summary\":\"ok\",\"file_patches\":[]}","eval_count":13}"#.to_owned(),
         );
-        let provider = OllamaProvider::new(endpoint, "qwen3.5:9b");
+        let provider = OllamaProvider::new(endpoint, "qwen3.5:9b", 128);
 
         let response = provider
             .complete(&CompletionRequest {

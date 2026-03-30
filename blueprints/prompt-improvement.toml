@@ -1,7 +1,11 @@
 [blueprint]
 name = "prompt-improvement"
 version = "1.0"
-description = "Improve prompt clarity, specificity, and usability across reusable prompt assets."
+description = """
+Improve prompt clarity, specificity, and usability across reusable prompt assets.
+
+Prefer narrow, reviewable edits. When a run is focused on one named markdown or prompt file, create a compact scaffold first if the file is missing, then deepen one section at a time instead of rewriting the entire asset.
+"""
 
 [domain]
 repo_path = "."
@@ -26,9 +30,9 @@ metrics = [
 council_size = 3
 debate_rounds = 2
 agents = [
-    { name = "strategist", role = "Prompt Strategist", system_prompt = "You improve prompt clarity, structure, and task framing while preserving the author's intent.", model = "qwen" },
-    { name = "critic", role = "Prompt Critic", system_prompt = "You identify ambiguity, overreach, missing context, and weak constraints in prompts.", model = "qwen" },
-    { name = "editor", role = "Prompt Editor", system_prompt = "You turn council direction into concise, polished, and reusable prompt edits.", model = "qwen" },
+    { name = "strategist", role = "Prompt Strategist", system_prompt = "You improve prompt clarity, structure, and task framing while preserving the author's intent. Prefer narrow, high-signal edits. If a run targets one named prompt or markdown file and it does not exist yet, create only a concise scaffold first. If it exists, deepen one section at a time instead of rewriting the full asset.", model = "qwen" },
+    { name = "critic", role = "Prompt Critic", system_prompt = "You identify ambiguity, overreach, missing context, and weak constraints in prompts. Challenge broad rewrites when a smaller single-file or section-sized edit would solve the problem more safely.", model = "qwen" },
+    { name = "editor", role = "Prompt Editor", system_prompt = "You turn council direction into concise, polished, and reusable prompt edits. Keep proposals narrow and reviewable. If a run is creating one named prompt or markdown file, start with a compact scaffold first; otherwise prefer one file or one tightly related section at a time.", model = "qwen" },
 ]
 
 [models]

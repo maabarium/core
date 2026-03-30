@@ -11,6 +11,7 @@ pub struct OpenAICompatProvider {
     endpoint: String,
     model: String,
     api_key: Option<SecretString>,
+    max_tokens: u32,
 }
 
 impl OpenAICompatProvider {
@@ -18,12 +19,14 @@ impl OpenAICompatProvider {
         endpoint: impl Into<String>,
         model: impl Into<String>,
         api_key: Option<SecretString>,
+        max_tokens: u32,
     ) -> Self {
         Self {
             client: Client::new(),
             endpoint: endpoint.into(),
             model: model.into(),
             api_key,
+            max_tokens,
         }
     }
 }
@@ -114,5 +117,9 @@ impl LLMProvider for OpenAICompatProvider {
 
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    fn configured_max_tokens(&self) -> Option<u32> {
+        Some(self.max_tokens)
     }
 }
