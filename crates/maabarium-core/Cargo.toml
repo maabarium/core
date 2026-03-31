@@ -1,6 +1,6 @@
 [package]
 name = "maabarium-core"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2024"
 description = "Core engine for Maabarium's autonomous research loop"
 license = "Apache-2.0"
