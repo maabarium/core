@@ -86,7 +86,7 @@ That produces:
 - a private key, used only in CI as `TAURI_SIGNING_PRIVATE_KEY`
 - a public key file, whose contents become `MAABARIUM_UPDATE_PUBKEY`
 
-`MAABARIUM_UPDATE_PUBKEY` must be the Tauri-generated updater public key content. You can provide either the raw key line or the two-line `.pub` file contents, but Maabarium now normalizes both forms back into the two-line minisign text that Tauri expects at runtime. Do not use a PEM block, a Cloudflare credential, or a base64url-encoded variant.
+`MAABARIUM_UPDATE_PUBKEY` must be the Tauri-generated updater public key content. You can provide either the raw key line or the two-line `.pub` file contents, but Maabarium now normalizes both forms into the base64-wrapped minisign payload that Tauri expects at runtime. Do not use a PEM block, a Cloudflare credential, or a base64url-encoded variant.
 
 Before copying the value into GitHub, validate it locally:
 
@@ -97,7 +97,7 @@ pnpm validate:updater-pubkey -- --file ~/.tauri/maabarium.key.pub
 
 The validator prints a `Recommended GitHub variable value` line. Use that raw key line for `MAABARIUM_UPDATE_PUBKEY` if you want to avoid multiline variable handling surprises in GitHub Actions.
 
-The release workflow also passes a normalized base64-wrapped two-line minisign public key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI. The compiled desktop runtime now embeds the normalized two-line minisign public key via `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE`, matching what the updater plugin expects during install.
+The release workflow also passes a normalized base64-wrapped minisign public key to `tauri build --config ...` so Tauri's updater `pubkey` is overridden explicitly at bundle time and the placeholder value in `tauri.conf.json` is never used in CI. The compiled desktop runtime now embeds the normalized base64-wrapped updater pubkey via `MAABARIUM_UPDATE_PUBKEY` or `MAABARIUM_UPDATE_PUBKEY_FILE`, matching what the updater plugin expects during install.
 
 For release packaging, the workflow also applies a release-only `productName` override of `Maabarium-Console`, so the generated macOS `.app` and updater `.app.tar.gz` artifacts use dashed filenames while the desktop window title remains `Maabarium Console`.
 

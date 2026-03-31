@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Desktop in-app updates now normalize embedded and runtime updater public keys into the base64-wrapped minisign payload Tauri expects, fixing install-time failures where the updater tried to decode a decoded minisign comment block or bare `RWQ3...` key line.
 
 ### Breaking Changes
 
@@ -52,7 +52,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- Desktop in-app updates now normalize embedded and runtime updater public keys back into two-line minisign text before handing them to Tauri, fixing install-time failures where the updater tried to verify releases with a bare `RWQ3...` key line instead of the expected `.pub` content..
+- Desktop in-app updates now normalize embedded and runtime updater public keys into the base64-wrapped minisign payload Tauri expects, fixing install-time failures where the updater tried to decode a decoded minisign comment block or bare `RWQ3...` key line.
 
 ### Breaking Changes
 

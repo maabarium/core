@@ -24,7 +24,7 @@ pub(crate) fn normalize_updater_pubkey(raw_value: &str) -> Option<String> {
         "untrusted comment: minisign public key"
     };
 
-    Some(format!("{comment_line}\n{key_line}\n"))
+    Some(STANDARD.encode(format!("{comment_line}\n{key_line}\n")))
 }
 
 fn unwrap_base64_wrapped_minisign(raw_value: &str) -> String {
@@ -71,6 +71,8 @@ fn unwrap_base64_wrapped_minisign(raw_value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::normalize_updater_pubkey;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
 
     #[test]
     fn normalizes_plain_two_line_pubkey() {
@@ -78,11 +80,13 @@ mod tests {
             "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
         );
 
+        let expected = STANDARD.encode(
+            "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
+        );
+
         assert_eq!(
             pubkey.as_deref(),
-            Some(
-                "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n"
-            )
+            Some(expected.as_str())
         );
     }
 
@@ -95,9 +99,7 @@ mod tests {
 
         assert_eq!(
             pubkey.as_deref(),
-            Some(
-                "untrusted comment: minisign public key: 23735311838C9C37\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n"
-            )
+            Some(wrapped)
         );
     }
 
@@ -106,11 +108,13 @@ mod tests {
         let pubkey =
             normalize_updater_pubkey("RWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3");
 
+        let expected = STANDARD.encode(
+            "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
+        );
+
         assert_eq!(
             pubkey.as_deref(),
-            Some(
-                "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n"
-            )
+            Some(expected.as_str())
         );
     }
 
