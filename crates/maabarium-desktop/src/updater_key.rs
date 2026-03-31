@@ -17,7 +17,14 @@ pub(crate) fn normalize_updater_pubkey(raw_value: &str) -> Option<String> {
         return None;
     }
 
-    Some(lines[lines.len() - 1].to_owned())
+    let key_line = lines[lines.len() - 1];
+    let comment_line = if lines.len() == 2 {
+        lines[0]
+    } else {
+        "untrusted comment: minisign public key"
+    };
+
+    Some(format!("{comment_line}\n{key_line}\n"))
 }
 
 fn unwrap_base64_wrapped_minisign(raw_value: &str) -> String {
@@ -73,7 +80,9 @@ mod tests {
 
         assert_eq!(
             pubkey.as_deref(),
-            Some("RWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3")
+            Some(
+                "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n"
+            )
         );
     }
 
@@ -86,7 +95,22 @@ mod tests {
 
         assert_eq!(
             pubkey.as_deref(),
-            Some("RWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3")
+            Some(
+                "untrusted comment: minisign public key: 23735311838C9C37\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n"
+            )
+        );
+    }
+
+    #[test]
+    fn wraps_raw_key_line_into_two_line_minisign_text() {
+        let pubkey =
+            normalize_updater_pubkey("RWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3");
+
+        assert_eq!(
+            pubkey.as_deref(),
+            Some(
+                "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n"
+            )
         );
     }
 
