@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Engine runs now start from a fresh baseline instead of reusing the best historical score for the blueprint, so separate request IDs no longer bleed scores into one another.
 
 ### Breaking Changes
 

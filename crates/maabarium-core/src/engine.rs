@@ -254,12 +254,7 @@ impl Engine {
         let min_improvement = bp.constraints.min_improvement;
         let bp_name = bp.blueprint.name.clone();
 
-        let mut baseline: f64 = self
-            .persistence
-            .load_baseline(&bp_name)
-            .ok()
-            .flatten()
-            .unwrap_or(0.0);
+        let mut baseline: f64 = 0.0;
 
         info!(
             "Engine starting: blueprint={bp_name}, run_id={}, max_iterations={max_iter}, baseline={baseline:.4}",
