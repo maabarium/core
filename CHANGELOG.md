@@ -16,6 +16,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.3.14] - 2026-04-01
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
 - Exact single-document markdown workflows now require real unified diffs for follow-up edits and no longer accept raw whole-file fallback on existing briefs, preventing Project Echo-style runs from reinitializing a document with a header-only replacement instead of deepening the current draft.
 - Promoting a retained experiment now moves a clean repository checkout off stale `experiment-*` branches and back onto the real retained target branch (`main` or `master`), so the visible worktree reflects the winner immediately after promotion.
 - The desktop retained-winner card now shows the actual retained target branch (`main` or `master`) alongside promoted winners, making the post-promotion checkout target visible even after the toast disappears.
