@@ -511,6 +511,7 @@ mod tests {
             promotion_outcome: PromotionOutcome::Promoted,
             promoted_branch_name: None,
             promoted_commit_oid: None,
+            promoted_target_branch_name: None,
             created_at: "2026-03-25T00:00:00Z".into(),
             metrics: vec![MetricScore {
                 name: "quality".into(),
