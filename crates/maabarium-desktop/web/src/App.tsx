@@ -58,6 +58,7 @@ import {
   selectWinnerExperiment,
   selectWinnerProposal,
 } from "./lib/winners";
+import { formatPromotionToastMessage } from "./lib/promotionToast";
 import type {
   AnalyticsBucket,
   AnalyticsRange,
@@ -136,6 +137,13 @@ function ConfirmationToggle({
 export default function App() {
   const allowWindowCloseRef = useRef(false);
   const cpuInfoPopoverRef = useRef<HTMLDivElement | null>(null);
+  const promotionToastStateRef = useRef<{
+    initialized: boolean;
+    latestPromotedExperimentId: number | null;
+  }>({
+    initialized: false,
+    latestPromotedExperimentId: null,
+  });
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
   const [cpuInfoOpen, setCpuInfoOpen] = useState(false);
   const [analyticsRange, setAnalyticsRange] = useState<AnalyticsRange>("daily");
@@ -698,6 +706,40 @@ export default function App() {
       window.clearTimeout(timeoutId);
     };
   }, [successToast]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    const latestPromotedExperiment = promotedSuccessfulExperiments[0] ?? null;
+    if (!promotionToastStateRef.current.initialized) {
+      promotionToastStateRef.current = {
+        initialized: true,
+        latestPromotedExperimentId: latestPromotedExperiment?.id ?? null,
+      };
+      return;
+    }
+
+    if (!latestPromotedExperiment) {
+      promotionToastStateRef.current.latestPromotedExperimentId = null;
+      return;
+    }
+
+    if (
+      promotionToastStateRef.current.latestPromotedExperimentId ===
+      latestPromotedExperiment.id
+    ) {
+      return;
+    }
+
+    promotionToastStateRef.current.latestPromotedExperimentId =
+      latestPromotedExperiment.id;
+    const toastMessage = formatPromotionToastMessage(latestPromotedExperiment);
+    if (toastMessage) {
+      setSuccessToast(toastMessage);
+    }
+  }, [loading, promotedSuccessfulExperiments]);
 
   useEffect(() => {
     const updateScrollState = () => {

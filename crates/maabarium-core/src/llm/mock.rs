@@ -54,13 +54,32 @@ impl MockProvider {
         Some((path.to_owned(), content.trim_matches('\n').to_owned()))
     }
 
-    fn escaped_markdown_replacement(existing_content: &str) -> String {
+    fn markdown_modify_diff(existing_content: &str) -> String {
+        let old_lines = existing_content
+            .trim_end_matches('\n')
+            .lines()
+            .collect::<Vec<_>>();
         let mut new_content = existing_content.trim_end().to_owned();
         if !new_content.is_empty() {
             new_content.push_str("\n\n");
         }
         new_content.push_str("## Implementation Notes\n- Expand subsystem boundaries, milestones, and execution detail.\n");
-        serde_json::to_string(&new_content).unwrap_or_else(|_| "\"# Draft\\n\"".to_owned())
+        let new_lines = new_content
+            .trim_end_matches('\n')
+            .lines()
+            .collect::<Vec<_>>();
+        let mut diff = format!("@@ -1,{} +1,{} @@\n", old_lines.len(), new_lines.len());
+        for line in old_lines {
+            diff.push('-');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+        for line in new_lines {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+        diff
     }
 
     fn rust_modify_diff(existing_content: &str) -> String {
@@ -128,7 +147,7 @@ impl LLMProvider for MockProvider {
                             {
                                 "path": path,
                                 "operation": "modify",
-                                "unified_diff": serde_json::from_str::<serde_json::Value>(&Self::escaped_markdown_replacement(&existing_content)).unwrap_or_else(|_| json!("# Draft\n")),
+                                "unified_diff": Self::markdown_modify_diff(&existing_content),
                             }
                         ]
                     })

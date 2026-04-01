@@ -27,6 +27,8 @@ function buildExperiment(
       promotionOutcome === "promoted" ? `experiment-run/iter-${id}` : null,
     promoted_commit_oid:
       promotionOutcome === "promoted" ? `commit-${id}` : null,
+    promoted_target_branch_name:
+      promotionOutcome === "promoted" ? "master" : null,
     created_at: "2026-03-28T00:00:00Z",
     metrics: [],
     research: null,

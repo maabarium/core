@@ -3336,6 +3336,7 @@ mod tests {
             promotion_outcome,
             promoted_branch_name: None,
             promoted_commit_oid: None,
+            promoted_target_branch_name: None,
             created_at: "2026-03-28T00:00:00Z".to_owned(),
             metrics: Vec::new(),
             research: None,

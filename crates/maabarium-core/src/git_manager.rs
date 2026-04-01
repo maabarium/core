@@ -126,10 +126,10 @@ impl GitManager {
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
     }
 
-    pub async fn promote_branch(&self, branch: &str) -> Result<(), GitError> {
+    pub async fn promote_branch(&self, branch: &str) -> Result<String, GitError> {
         let path = self.repo_path.clone();
         let branch = branch.to_owned();
-        tokio::task::spawn_blocking(move || -> Result<(), GitError> {
+        tokio::task::spawn_blocking(move || -> Result<String, GitError> {
             let repo = discover_repository(&path)?;
             let target_branch_name = repo
                 .find_branch("main", BranchType::Local)
@@ -153,15 +153,23 @@ impl GitManager {
             main.get_mut()
                 .set_target(branch_commit.id(), &format!("Promote {branch}"))?;
 
-            if checked_out_branch.as_deref() == Some(target_branch_name)
-                && checkout_was_clean == Some(true)
+            if checkout_was_clean == Some(true)
+                && checked_out_branch
+                    .as_deref()
+                    .is_some_and(|checked_out_branch| {
+                        checked_out_branch == target_branch_name
+                            || checked_out_branch.starts_with("experiment-")
+                    })
             {
                 let commit_id = branch_commit.id().to_string();
                 if let Some(workdir) = workdir.as_ref() {
+                    if checked_out_branch.as_deref() != Some(target_branch_name) {
+                        run_git(workdir, ["checkout", "--force", target_branch_name])?;
+                    }
                     run_git(workdir, ["reset", "--hard", commit_id.as_str()])?;
                 }
             }
-            Ok(())
+            Ok(target_branch_name.to_owned())
         })
         .await
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
@@ -763,9 +771,11 @@ mod tests {
             .await
             .expect("branch should be created from detached workspace head");
 
-        git.promote_branch(&first_branch)
+        let promoted_target_branch = git
+            .promote_branch(&first_branch)
             .await
             .expect("first branch should promote");
+        assert_eq!(promoted_target_branch, "master");
 
         let second_branch = GitManager::experiment_branch_name("runpromote1", 2);
         let second_applied = git
@@ -832,9 +842,11 @@ mod tests {
             "target branch content should not exist before promotion"
         );
 
-        git.promote_branch(&branch)
+        let promoted_target_branch = git
+            .promote_branch(&branch)
             .await
             .expect("branch should promote");
+        assert_eq!(promoted_target_branch, "master");
 
         assert!(
             temp_dir
@@ -842,6 +854,80 @@ mod tests {
                 .join("docs/project-echo-implementation.md")
                 .exists(),
             "promotion should refresh the checked out target branch"
+        );
+
+        let status_output = Command::new("git")
+            .arg("-C")
+            .arg(temp_dir.path())
+            .args(["status", "--short"])
+            .output()
+            .expect("git status should succeed");
+        assert!(status_output.status.success());
+        assert!(
+            String::from_utf8_lossy(&status_output.stdout).trim().is_empty(),
+            "promotion should not leave a dirty index or worktree"
+        );
+
+        git.cleanup_experiment_workspace(&applied.workspace.path)
+            .await
+            .expect("workspace should clean up");
+    }
+
+    #[tokio::test]
+    async fn promotion_switches_clean_checked_out_experiment_branch_back_to_target_branch() {
+        let temp_dir = create_test_repo();
+        let git = GitManager::new(temp_dir.path());
+
+        let branch = GitManager::experiment_branch_name("runpromote3", 1);
+        let applied = git
+            .apply_proposal(
+                &branch,
+                &Proposal {
+                    summary: "create doc".into(),
+                    file_patches: vec![FilePatch {
+                        path: "docs/project-echo-implementation.md".into(),
+                        operation: FilePatchOperation::Create,
+                        content: Some("# Project Echo\n\nRetained winner\n".into()),
+                    }],
+                },
+                None,
+            )
+            .await
+            .expect("proposal should apply");
+
+        git.commit_experiment_workspace(&applied.workspace.path, "create doc")
+            .await
+            .expect("workspace should commit successfully");
+        git.create_branch_at_workspace_head(&applied.workspace.path, &branch)
+            .await
+            .expect("branch should be created from detached workspace head");
+
+        run_git(temp_dir.path(), ["checkout", "--force", branch.as_str()])
+            .expect("experiment branch should check out cleanly");
+
+        let promoted_target_branch = git
+            .promote_branch(&branch)
+            .await
+            .expect("branch should promote");
+        assert_eq!(promoted_target_branch, "master");
+
+        let branch_output = Command::new("git")
+            .arg("-C")
+            .arg(temp_dir.path())
+            .args(["branch", "--show-current"])
+            .output()
+            .expect("git branch should succeed");
+        assert!(branch_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&branch_output.stdout).trim(),
+            "master",
+            "promotion should leave the repo on the retained target branch"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join("docs/project-echo-implementation.md"))
+                .expect("promoted document should exist"),
+            "# Project Echo\n\nRetained winner\n"
         );
 
         let status_output = Command::new("git")

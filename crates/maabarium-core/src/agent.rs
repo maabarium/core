@@ -86,9 +86,34 @@ fn incremental_document_guidance(
     }
 
     if file_contexts.is_empty() {
-        "\nIncremental document workflow rules:\n- The target is one exact document path. If it does not exist yet, create only a compact scaffold first.\n- Keep the initial create patch concise: headings plus short bullets only, not a fully expanded implementation plan.\n- Aim for a small, reviewable first draft that later iterations can deepen section by section.\n- Do not attempt a full-document rewrite in the first proposal."
+        "\nIncremental document workflow rules:\n- The target is one exact document path. If it does not exist yet, create a substantial v1 draft that is immediately useful.\n- Include concrete section content, implementation detail, milestones, and risks rather than placeholder-only headings.\n- Do not return only a title line, an empty scaffold, or a boilerplate shell.\n- Make the first draft strong enough that later iterations can deepen specific sections instead of reinitializing the document."
     } else {
-        "\nIncremental document workflow rules:\n- The target is one exact document path. Prefer revising one section or one tightly related cluster of lines at a time.\n- Avoid whole-document rewrites when a focused section edit will do.\n- Keep each proposal narrow enough that the JSON and diff remain compact and reviewable."
+        "\nIncremental document workflow rules:\n- The target is one exact document path. Prefer revising one section or one tightly related cluster of lines at a time.\n- Deepen the existing document in place; do not reset it to a fresh header, version banner, or empty scaffold.\n- Avoid whole-document rewrites when a focused section edit will do.\n- Keep each proposal narrow enough that the JSON and diff remain compact and reviewable."
+    }
+}
+
+fn exact_existing_markdown_target_disallows_raw_fallback(
+    path: &str,
+    operation: FilePatchOperation,
+    target_files: &[String],
+) -> bool {
+    if operation != FilePatchOperation::Modify {
+        return false;
+    }
+
+    if target_files.len() != 1 || !is_exact_target_path(&target_files[0]) || target_files[0] != path {
+        return false;
+    }
+
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with("readme") || lower.ends_with("readme.md")
+}
+
+fn raw_content_fallback_prompt_guidance(language: &str, target_files: &[String]) -> &'static str {
+    if prefers_incremental_document_proposals(language, target_files) {
+        "For one exact existing markdown document target, do not use whole-file replacement. Emit a focused unified diff against the current file contents.\n              For create operations on markdown targets, you may place the full new file content in unified_diff when exact diffing against an empty file is impractical."
+    } else {
+        "For markdown or JSON targets, if exact diffing is difficult, you may place the final file content in unified_diff and it will be treated as a whole-file replacement."
     }
 }
 
@@ -199,11 +224,16 @@ fn diff_anchor_example(file_contexts: &[FileContext]) -> String {
         return String::new();
     };
 
-    let Some(anchor_line) = file
+    if let Some(anchor) = markdown_section_anchor_example(file) {
+        return anchor;
+    }
+
+    let Some((anchor_line_number, anchor_line)) = file
         .content
         .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(str::trim_end)
+        .enumerate()
+        .find(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| (index + 1, line.trim_end()))
     else {
         return String::new();
     };
@@ -213,9 +243,35 @@ fn diff_anchor_example(file_contexts: &[FileContext]) -> String {
     }
 
     format!(
-        "\nExact diff anchor for '{}' when modifying the first non-empty line:\n{{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{\n      \"path\": \"{}\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -1,1 +1,1 @@\\n-{}\\n+<replacement line with the same surrounding format>\\n\"\n    }}\n  ]\n}}\nCopy the '-' line exactly from Existing file contents if you modify that line.\n",
-        file.path, file.path, anchor_line,
+        "\nExact diff anchor for '{}' when modifying the first non-empty line (line {}):\n{{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{\n      \"path\": \"{}\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -{},1 +{},1 @@\\n-{}\\n+<replacement line with the same surrounding format>\\n\"\n    }}\n  ]\n}}\nCopy the '-' line exactly from Existing file contents if you modify that line.\n",
+        file.path, anchor_line_number, file.path, anchor_line_number, anchor_line_number, anchor_line,
     )
+}
+
+fn markdown_section_anchor_example(file: &FileContext) -> Option<String> {
+    if !file.path.to_ascii_lowercase().ends_with(".md") {
+        return None;
+    }
+
+    let lines = file.content.lines().collect::<Vec<_>>();
+    let title_line_index = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())?;
+    let (heading_line_index, heading_line) = lines
+        .iter()
+        .enumerate()
+        .skip(title_line_index + 1)
+        .find(|(_, line)| line.trim_start().starts_with('#'))?;
+    let heading_line = heading_line.trim_end();
+    if heading_line.chars().count() > 120 {
+        return None;
+    }
+
+    let line_number = heading_line_index + 1;
+    Some(format!(
+        "\nExact diff anchor for '{}' when deepening the first empty section (line {}):\n{{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{\n      \"path\": \"{}\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -{},1 +{},3 @@\\n {}\\n+\\n+- Add a concrete implementation detail under this section.\\n\"\n    }}\n  ]\n}}\nDo not spend the proposal on a title-only or version-only edit when the document still has empty sections.\n",
+        file.path, line_number, file.path, line_number, line_number, heading_line,
+    ))
 }
 
 fn normalize_proposal_failure_reason(error: &LLMError) -> &'static str {
@@ -332,10 +388,11 @@ impl Agent {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         };
-        let research_guidance = research_patch_guidance(language);
-        let document_guidance = incremental_document_guidance(language, target_files, &file_contexts);
-        let diff_anchor = diff_anchor_example(&file_contexts);
-        let prompt = format!(
+          let research_guidance = research_patch_guidance(language);
+          let document_guidance = incremental_document_guidance(language, target_files, &file_contexts);
+          let raw_content_fallback_guidance = raw_content_fallback_prompt_guidance(language, target_files);
+          let diff_anchor = diff_anchor_example(&file_contexts);
+          let prompt = format!(
             "Context:\n{context}\n\nTarget files:\n{targets_desc}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
              Existing file contents:\n{files_desc}\n\n\
              {diff_anchor}\
@@ -345,9 +402,9 @@ impl Agent {
               The strings \"old line\" and \"new line\" are placeholders only. Replace them with exact file content from Existing file contents if you emit a diff.\n\
               Use operation=create for new files, modify for existing files, delete for removals.\n\
               For create/delete, still provide a unified diff against the empty or prior file.\n\
-              For markdown or JSON targets, if exact diffing is difficult, you may place the final file content in unified_diff and it will be treated as a whole-file replacement.\n\
+              {raw_content_fallback_guidance}\n\
               Each patch must target exactly one safe relative path.\n\
-              Do not return full-file replacements. Do not invent paths outside the target patterns.\n\
+              Do not invent paths outside the target patterns.\n\
                Keep changes narrow and preserve valid {language} syntax.\n\
                Unified diff rules are strict:\n\
                - Every line after a @@ hunk header must start with exactly one prefix: space for context, + for additions, - for removals, or \\ for the no-newline marker.\n\
@@ -702,10 +759,46 @@ fn parse_proposal_payload(
             ))
         })?;
         let original_content = file_lookup.get(patch.path.as_str()).copied();
+        let raw_fallback_allowed = supports_raw_content_fallback(&patch.path, operation)
+            && !exact_existing_markdown_target_disallows_raw_fallback(
+                &patch.path,
+                operation,
+                target_files,
+            );
+        let exact_markdown_target = exact_existing_markdown_target_disallows_raw_fallback(
+            &patch.path,
+            operation,
+            target_files,
+        );
         let result = if looks_like_unified_diff(diff) {
             match apply_unified_diff(original_content, diff, operation) {
                 Ok(result) => result,
-                Err(error) if supports_raw_content_fallback(&patch.path, operation) => {
+                Err(error) if exact_markdown_target => {
+                    if let Ok(result) = apply_unified_diff_with_trimmed_leading_blank_lines(
+                        original_content,
+                        diff,
+                        operation,
+                    ) {
+                        result
+                    } else if let Some(recovered) = recover_text_from_diffish_payload(diff)
+                        .filter(|content| has_substantive_markdown_content(content))
+                    {
+                        apply_raw_content_fallback(&recovered, operation).map_err(
+                            |fallback_error| {
+                                LLMError::InvalidResponse(format!(
+                                    "Unified diff validation failed for '{}': {error}; substantive markdown recovery failed: {fallback_error}",
+                                    patch.path
+                                ))
+                            },
+                        )?
+                    } else {
+                        return Err(LLMError::InvalidResponse(format!(
+                            "Unified diff validation failed for '{}': {error}",
+                            patch.path
+                        )));
+                    }
+                }
+                Err(error) if raw_fallback_allowed => {
                     let recovered = recover_text_from_diffish_payload(diff).ok_or_else(|| {
                         LLMError::InvalidResponse(format!(
                             "Unified diff validation failed for '{}': {error}",
@@ -726,19 +819,45 @@ fn parse_proposal_payload(
                     )));
                 }
             }
-        } else if supports_raw_content_fallback(&patch.path, operation) {
+        } else if raw_fallback_allowed {
             apply_raw_content_fallback(diff, operation).map_err(|error| {
                 LLMError::InvalidResponse(format!(
                     "Raw content fallback failed for '{}': {error}",
                     patch.path
                 ))
             })?
+        } else if exact_markdown_target {
+            if has_substantive_markdown_content(diff) {
+                apply_raw_content_fallback(diff, operation).map_err(|error| {
+                    LLMError::InvalidResponse(format!(
+                        "Raw substantive markdown fallback failed for '{}': {error}",
+                        patch.path
+                    ))
+                })?
+            } else {
+                return Err(LLMError::InvalidResponse(format!(
+                    "Proposal patch '{}' must provide a valid unified diff or substantive markdown content for existing exact markdown document targets",
+                    patch.path
+                )));
+            }
         } else {
             return Err(LLMError::InvalidResponse(format!(
                 "Proposal patch '{}' must provide a unified diff for this file type",
                 patch.path
             )));
         };
+        if exact_markdown_target
+            && original_content.is_some_and(|existing| !has_substantive_markdown_content(existing))
+            && result
+                .content
+                .as_deref()
+                .is_some_and(|content| !has_substantive_markdown_content(content))
+        {
+            return Err(LLMError::InvalidResponse(format!(
+                "Proposal patch '{}' must add substantive section content when refining an exact markdown scaffold",
+                patch.path
+            )));
+        }
         file_patches.push(FilePatch {
             path: patch.path.clone(),
             operation,
@@ -989,6 +1108,65 @@ fn apply_raw_content_fallback(
     Ok(DiffApplyResult {
         content: Some(content.to_owned()),
         had_trailing_newline: content.ends_with('\n'),
+    })
+}
+
+fn apply_unified_diff_with_trimmed_leading_blank_lines(
+    original: Option<&str>,
+    diff: &str,
+    operation: FilePatchOperation,
+) -> Result<DiffApplyResult, String> {
+    let Some(original) = original else {
+        return Err("leading-blank-line retry requires an existing file".to_owned());
+    };
+
+    let leading_blank_prefix = leading_blank_prefix(original);
+    if leading_blank_prefix.is_empty() {
+        return Err("existing file does not start with leading blank lines".to_owned());
+    }
+
+    let trimmed_original = &original[leading_blank_prefix.len()..];
+    let mut reapplied = apply_unified_diff(Some(trimmed_original), diff, operation)?;
+    if let Some(content) = reapplied.content.as_mut() {
+        let mut combined = leading_blank_prefix.to_owned();
+        combined.push_str(content);
+        *content = combined;
+    }
+    Ok(reapplied)
+}
+
+fn leading_blank_prefix(content: &str) -> &str {
+    let mut prefix_len = 0usize;
+    let mut saw_blank = false;
+
+    for segment in content.split_inclusive('\n') {
+        if segment.trim().is_empty() {
+            prefix_len += segment.len();
+            saw_blank = true;
+        } else {
+            break;
+        }
+    }
+
+    if saw_blank {
+        &content[..prefix_len]
+    } else {
+        ""
+    }
+}
+
+fn has_substantive_markdown_content(content: &str) -> bool {
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return false;
+        }
+
+        let stripped = trimmed
+            .trim_start_matches(['-', '*', '+', ' '])
+            .trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == ')')
+            .trim();
+        stripped.chars().any(|ch| ch.is_alphanumeric()) && stripped.len() >= 8
     })
 }
 
@@ -1797,7 +1975,7 @@ mod tests {
     {
       "path": "docs/brief.md",
       "operation": "modify",
-      "unified_diff": "# Brief\n\nUpdated content.\n"
+            "unified_diff": "@@ -1,3 +1,3 @@\n # Brief\n \n-Old content.\n+Updated content.\n"
     }
   ]
 }"##,
@@ -2040,6 +2218,119 @@ mod tests {
     }
 
     #[test]
+    fn rejects_raw_markdown_content_for_existing_exact_document_targets() {
+        let error = parse_proposal_payload(
+            r##"{
+    "summary": "Rewrite the implementation brief.",
+    "file_patches": [
+        {
+            "path": "docs/project-echo-implementation.md",
+            "operation": "modify",
+            "unified_diff": "# Project Echo Implementation (v1.0)\n"
+        }
+    ]
+}"##,
+            &[FileContext {
+                path: "docs/project-echo-implementation.md".into(),
+                content: "# Project Echo Implementation\n\n## Architecture\n- Existing detail.\n".into(),
+            }],
+            &HashSet::from(["docs/project-echo-implementation.md".to_owned()]),
+            &["docs/project-echo-implementation.md".into()],
+        )
+        .expect_err("raw fallback should be rejected for exact existing markdown documents");
+
+        assert!(error
+            .to_string()
+            .contains("must provide a valid unified diff or substantive markdown content"));
+    }
+
+    #[test]
+    fn accepts_substantive_raw_markdown_content_for_existing_exact_document_targets() {
+        let proposal = parse_proposal_payload(
+            r##"{
+    "summary": "Fill the first section with implementation detail.",
+    "file_patches": [
+        {
+            "path": "docs/project-echo-implementation.md",
+            "operation": "modify",
+            "unified_diff": "# Project Echo Implementation\n\n## Product Scope\n### Goals\n- Preserve project context across local sessions with a persistent knowledge store.\n\n### User Value\n- Reduce context switching for solo builders.\n\n## Architecture\n"
+        }
+    ]
+}"##,
+            &[FileContext {
+                path: "docs/project-echo-implementation.md".into(),
+                content: "# Project Echo Implementation\n\n## Product Scope\n### Goals\n\n### User Value\n\n## Architecture\n".into(),
+            }],
+            &HashSet::from(["docs/project-echo-implementation.md".to_owned()]),
+            &["docs/project-echo-implementation.md".into()],
+        )
+        .expect("substantive exact-document markdown content should be accepted through guarded raw fallback");
+
+        assert!(proposal.file_patches[0]
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains("persistent knowledge store")));
+    }
+
+    #[test]
+    fn recovers_substantive_exact_markdown_from_malformed_diff_counts() {
+        let proposal = parse_proposal_payload(
+            r##"{
+    "summary": "Populate product scope with real detail.",
+    "file_patches": [
+        {
+            "path": "docs/project-echo-implementation.md",
+            "operation": "modify",
+            "unified_diff": "@@ -1,1 +1,10 @@\n # Project Echo Implementation\n+## Product Scope\n+\n+### Goals\n+- Build a local-first, LLM-powered project memory system that persists context across sessions for solo builders.\n+- Enable retrieval-augmented generation over project code, docs, and notes.\n+\n+### User Value\n+- Solo developers regain context after breaks without manual summarization.\n+\n+## Architecture\n"
+        }
+    ]
+}"##,
+            &[FileContext {
+                path: "docs/project-echo-implementation.md".into(),
+                content: "# Project Echo Implementation\n\n## Product Scope\n### Goals\n\n### User Value\n\n## Architecture\n".into(),
+            }],
+            &HashSet::from(["docs/project-echo-implementation.md".to_owned()]),
+            &["docs/project-echo-implementation.md".into()],
+        )
+        .expect("malformed exact markdown diff should recover when content is substantive");
+
+        let content = proposal.file_patches[0]
+            .content
+            .as_deref()
+            .expect("recovered content should exist");
+        assert!(content.contains("persists context across sessions"));
+        assert!(content.contains("Solo developers regain context after breaks"));
+    }
+
+    #[test]
+    fn exact_markdown_diff_can_apply_when_existing_file_has_leading_blank_lines() {
+        let proposal = parse_proposal_payload(
+            r##"{
+    "summary": "Fill the first section.",
+    "file_patches": [
+        {
+            "path": "docs/project-echo-implementation.md",
+            "operation": "modify",
+            "unified_diff": "@@ -3,1 +3,3 @@\n ## Product Scope\n+\n+- Define the persistent local-first project memory model.\n"
+        }
+    ]
+}"##,
+            &[FileContext {
+                path: "docs/project-echo-implementation.md".into(),
+                content: "\n# Project Echo Implementation\n\n## Product Scope\n\n## Architecture\n".into(),
+            }],
+            &HashSet::from(["docs/project-echo-implementation.md".to_owned()]),
+            &["docs/project-echo-implementation.md".into()],
+        )
+        .expect("exact markdown diff should apply after trimming leading blank lines");
+
+        assert_eq!(
+            proposal.file_patches[0].content.as_deref(),
+            Some("\n# Project Echo Implementation\n\n## Product Scope\n\n- Define the persistent local-first project memory model.\n\n## Architecture\n")
+        );
+    }
+
+    #[test]
     fn upgrades_missing_modify_targets_to_create_for_allowed_text_paths() {
         let proposal = parse_proposal_payload(
             r##"{
@@ -2099,6 +2390,69 @@ mod tests {
                 .expect("recovered content should exist")
                 .contains("Clarify the app value and release shape.")
         );
+    }
+
+    #[test]
+    fn exact_document_guidance_requests_substantial_first_draft() {
+        let guidance = incremental_document_guidance(
+            "markdown",
+            &["docs/project-echo-implementation.md".into()],
+            &[],
+        );
+
+        assert!(guidance.contains("substantial v1 draft"));
+        assert!(guidance.contains("Do not return only a title line"));
+    }
+
+    #[test]
+    fn exact_document_guidance_for_existing_file_forbids_header_reset() {
+        let guidance = incremental_document_guidance(
+            "markdown",
+            &["docs/project-echo-implementation.md".into()],
+            &[FileContext {
+                path: "docs/project-echo-implementation.md".into(),
+                content: "# Project Echo Implementation\n".into(),
+            }],
+        );
+
+        assert!(guidance.contains("do not reset it to a fresh header"));
+    }
+
+    #[test]
+    fn diff_anchor_example_uses_actual_first_non_empty_line_number() {
+        let anchor = diff_anchor_example(&[FileContext {
+            path: "docs/project-echo-implementation.md".into(),
+            content: "\n# Project Echo Implementation\n\n## Architecture\n".into(),
+        }]);
+
+        assert!(anchor.contains("deepening the first empty section"));
+        assert!(anchor.contains("line 4"));
+        assert!(anchor.contains("@@ -4,1 +4,3 @@"));
+    }
+
+    #[test]
+    fn rejects_exact_markdown_scaffold_patch_without_substantive_content() {
+        let error = parse_proposal_payload(
+            r##"{
+    "summary": "Add a version header.",
+    "file_patches": [
+        {
+            "path": "docs/project-echo-implementation.md",
+            "operation": "modify",
+            "unified_diff": "@@ -1,1 +1,1 @@\n-# Project Echo Implementation\n+# Project Echo Implementation (v1.0)\n"
+        }
+    ]
+}"##,
+            &[FileContext {
+                path: "docs/project-echo-implementation.md".into(),
+                content: "\n# Project Echo Implementation\n\n## Product Scope\n### Goals\n\n## Architecture\n".into(),
+            }],
+            &HashSet::from(["docs/project-echo-implementation.md".to_owned()]),
+            &["docs/project-echo-implementation.md".into()],
+        )
+        .expect_err("title-only scaffold refinements should be rejected");
+
+        assert!(error.to_string().contains("must add substantive section content"));
     }
 
     #[test]

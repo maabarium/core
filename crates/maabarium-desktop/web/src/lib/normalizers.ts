@@ -641,6 +641,8 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
           promotion_outcome: normalizePromotionOutcome(
             experiment.promotion_outcome,
           ),
+          promoted_target_branch_name:
+            experiment.promoted_target_branch_name ?? null,
           metrics: Array.isArray(experiment.metrics) ? experiment.metrics : [],
           research: normalizeResearchArtifacts(experiment.research),
           lora: normalizeLoraArtifacts(experiment.lora),

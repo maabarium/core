@@ -20,6 +20,7 @@ function buildRetainedExperiment(id = 7): PersistedExperiment {
     promotion_outcome: "promoted",
     promoted_branch_name: `experiment-run/iter-${id}`,
     promoted_commit_oid: `commit-${id}`,
+    promoted_target_branch_name: "master",
     created_at: "2026-03-28T12:34:00Z",
     metrics: [],
     research: null,
@@ -49,6 +50,7 @@ function buildResearchExperiment(): PersistedExperiment {
     promotion_outcome: "rejected",
     promoted_branch_name: null,
     promoted_commit_oid: null,
+    promoted_target_branch_name: null,
     research: {
       sources: [
         {
@@ -85,6 +87,7 @@ function buildLoraExperiment(): PersistedExperiment {
     promotion_outcome: "rejected",
     promoted_branch_name: null,
     promoted_commit_oid: null,
+    promoted_target_branch_name: null,
     lora: {
       trainer: "mlx_lm",
       baseModel: "mistral",

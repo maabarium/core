@@ -20,6 +20,7 @@ function buildExperiment(id = 7, score = 0.895): PersistedExperiment {
     promotion_outcome: "promoted",
     promoted_branch_name: `experiment-run/iter-${id}`,
     promoted_commit_oid: `commit-${id}`,
+    promoted_target_branch_name: "master",
     created_at: "2026-03-28T12:34:00Z",
     metrics: [],
     research: null,
@@ -72,6 +73,7 @@ describe("RetainedArtifactExplorerCard", () => {
 
     screen.getByText(/Retained winner experiment #7/i);
     screen.getByText(/Write the retained markdown deliverable 7/i);
+    screen.getByText(/To master/i);
     expect(
       screen.getAllByText(/docs\/project-echo-implementation.md/i).length,
     ).toBeGreaterThan(0);

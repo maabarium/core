@@ -34,6 +34,7 @@ pub struct PersistedExperiment {
     pub promotion_outcome: PromotionOutcome,
     pub promoted_branch_name: Option<String>,
     pub promoted_commit_oid: Option<String>,
+    pub promoted_target_branch_name: Option<String>,
     pub created_at: String,
     pub metrics: Vec<MetricScore>,
     pub research: Option<ResearchArtifacts>,
@@ -105,6 +106,7 @@ impl Persistence {
                 promotion_outcome TEXT NOT NULL DEFAULT 'unknown',
                 promoted_branch_name TEXT,
                 promoted_commit_oid TEXT,
+                promoted_target_branch_name TEXT,
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS metrics (
@@ -196,6 +198,10 @@ impl Persistence {
             "ALTER TABLE experiments ADD COLUMN promoted_commit_oid TEXT",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE experiments ADD COLUMN promoted_target_branch_name TEXT",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -205,12 +211,13 @@ impl Persistence {
         result: &ExperimentResult,
         promotion_outcome: PromotionOutcome,
         promoted_branch_name: Option<&str>,
+        promoted_target_branch_name: Option<&str>,
         promoted_commit_oid: Option<&str>,
     ) -> Result<i64, PersistError> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9)",
+            "INSERT INTO experiments (iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, promoted_target_branch_name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)",
             params![
                 result.iteration as i64,
                 blueprint_name,
@@ -220,6 +227,7 @@ impl Persistence {
                 promotion_outcome.as_db_value(),
                 promoted_branch_name,
                 promoted_commit_oid,
+                promoted_target_branch_name,
                 now,
             ],
         )?;
@@ -249,7 +257,7 @@ impl Persistence {
         experiment_id: i64,
     ) -> Result<Option<PersistedExperiment>, PersistError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at, promoted_target_branch_name
              FROM experiments
              WHERE id = ?1
              LIMIT 1",
@@ -274,6 +282,7 @@ impl Persistence {
             promoted_branch_name: row.get::<_, Option<String>>(8)?,
             promoted_commit_oid: row.get::<_, Option<String>>(9)?,
             created_at: row.get::<_, String>(10)?,
+            promoted_target_branch_name: row.get::<_, Option<String>>(11)?,
             metrics,
             research: self.load_research_artifacts(id)?,
             lora: self.load_lora_artifacts(id)?,
@@ -314,7 +323,7 @@ impl Persistence {
         limit: usize,
     ) -> Result<Vec<PersistedExperiment>, PersistError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at, promoted_target_branch_name
              FROM experiments
              ORDER BY id DESC
              LIMIT ?1",
@@ -333,6 +342,7 @@ impl Persistence {
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -350,6 +360,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
             ) = row?;
             let metrics = self.load_metrics(id)?;
             experiments.push(PersistedExperiment {
@@ -364,6 +375,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
                 metrics,
                 research: self.load_research_artifacts(id)?,
                 lora: self.load_lora_artifacts(id)?,
@@ -379,7 +391,7 @@ impl Persistence {
         limit: usize,
     ) -> Result<Vec<PersistedExperiment>, PersistError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at, promoted_target_branch_name
              FROM experiments
              WHERE blueprint_name = ?1
              ORDER BY id DESC
@@ -399,6 +411,7 @@ impl Persistence {
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -416,6 +429,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
             ) = row?;
             let metrics = self.load_metrics(id)?;
             experiments.push(PersistedExperiment {
@@ -430,6 +444,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
                 metrics,
                 research: self.load_research_artifacts(id)?,
                 lora: self.load_lora_artifacts(id)?,
@@ -445,7 +460,7 @@ impl Persistence {
         limit: usize,
     ) -> Result<Vec<PersistedExperiment>, PersistError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at, promoted_target_branch_name
              FROM experiments
              WHERE blueprint_name = ?1 AND promotion_outcome = 'promoted' AND error IS NULL
              ORDER BY id DESC
@@ -465,6 +480,7 @@ impl Persistence {
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -482,6 +498,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
             ) = row?;
             let metrics = self.load_metrics(id)?;
             experiments.push(PersistedExperiment {
@@ -496,6 +513,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
                 metrics,
                 research: self.load_research_artifacts(id)?,
                 lora: self.load_lora_artifacts(id)?,
@@ -643,7 +661,7 @@ impl Persistence {
         writer.write_all(b"[\n")?;
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at, promoted_target_branch_name
              FROM experiments
              ORDER BY id DESC",
         )?;
@@ -660,6 +678,7 @@ impl Persistence {
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -677,6 +696,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
             ) = row?;
             let record = PersistedExperiment {
                 id,
@@ -690,6 +710,7 @@ impl Persistence {
                 promoted_branch_name,
                 promoted_commit_oid,
                 created_at,
+                promoted_target_branch_name,
                 metrics: self.load_metrics(id)?,
                 research: self.load_research_artifacts(id)?,
                 lora: self.load_lora_artifacts(id)?,
@@ -707,7 +728,7 @@ impl Persistence {
     pub fn export_csv(&self, output: impl AsRef<Path>) -> Result<(), PersistError> {
         let mut writer = csv::Writer::from_path(output)?;
         let mut stmt = self.conn.prepare(
-            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at
+            "SELECT id, iteration, blueprint_name, proposal_summary, weighted_total, duration_ms, error, promotion_outcome, promoted_branch_name, promoted_commit_oid, created_at, promoted_target_branch_name
              FROM experiments
              ORDER BY id DESC",
         )?;
@@ -724,6 +745,7 @@ impl Persistence {
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -740,6 +762,7 @@ impl Persistence {
                 _promoted_branch_name,
                 _promoted_commit_oid,
                 created_at,
+                _promoted_target_branch_name,
             ) = row?;
             let metrics_json = serde_json::to_string(&self.load_metrics(id)?)?;
             let research_json = serde_json::to_string(&self.load_research_artifacts(id)?)?;
@@ -1055,6 +1078,7 @@ mod tests {
                 &sample_result(),
                 PromotionOutcome::Promoted,
                 Some("runs/example/1"),
+                Some("master"),
                 Some("abc123def456"),
             )
             .expect("experiment should be logged");
@@ -1095,6 +1119,10 @@ mod tests {
             experiments[0].promoted_commit_oid.as_deref(),
             Some("abc123def456")
         );
+        assert_eq!(
+            experiments[0].promoted_target_branch_name.as_deref(),
+            Some("master")
+        );
         let research = experiments[0]
             .research
             .as_ref()
@@ -1129,6 +1157,7 @@ mod tests {
                 PromotionOutcome::Rejected,
                 None,
                 None,
+                None,
             )
             .expect("workflow experiment should be logged");
         persistence
@@ -1144,6 +1173,7 @@ mod tests {
                 &sample_result(),
                 PromotionOutcome::Promoted,
                 Some("runs/example/1"),
+                Some("master"),
                 Some("abc123def456"),
             )
             .expect("other workflow experiment should be logged");
@@ -1178,6 +1208,10 @@ mod tests {
         assert_eq!(
             retained_other_winners[0].promoted_commit_oid.as_deref(),
             Some("abc123def456")
+        );
+        assert_eq!(
+            retained_other_winners[0].promoted_target_branch_name.as_deref(),
+            Some("master")
         );
 
         let retained_other_proposals = persistence

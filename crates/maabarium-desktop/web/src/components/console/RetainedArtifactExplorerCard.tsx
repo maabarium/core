@@ -37,6 +37,17 @@ function fileNameFromPath(value: string): string {
   return segments[segments.length - 1] ?? value;
 }
 
+function promotedTargetBranchBadgeLabel(
+  targetBranchName: string | null,
+): string | null {
+  const branchName = targetBranchName?.trim();
+  if (!branchName) {
+    return null;
+  }
+
+  return `To ${branchName}`;
+}
+
 function exportPatchset(entry: RetainedWinnerEntry) {
   const fileName = `maabarium-retained-winner-${entry.experiment.id}.json`;
   triggerDownload(
@@ -226,6 +237,9 @@ export function RetainedArtifactExplorerCard({
     latestDownload?.experimentId === selectedEntry.experiment.id
       ? latestDownload
       : null;
+  const promotedTargetBranchBadge = promotedTargetBranchBadgeLabel(
+    selectedEntry?.experiment.promoted_target_branch_name ?? null,
+  );
 
   const content = (
     <>
@@ -338,6 +352,9 @@ export function RetainedArtifactExplorerCard({
 
               <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                 <Badge color="emerald">Promoted</Badge>
+                {promotedTargetBranchBadge ? (
+                  <Badge color="blue">{promotedTargetBranchBadge}</Badge>
+                ) : null}
                 <Badge color="slate">
                   {formatExperimentTimestamp(
                     selectedEntry.experiment.created_at,

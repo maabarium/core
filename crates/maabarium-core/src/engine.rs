@@ -507,6 +507,7 @@ impl Engine {
 
             let decision_started = std::time::Instant::now();
             let mut promoted_branch_name: Option<String> = None;
+            let mut promoted_target_branch_name: Option<String> = None;
             let mut promoted_commit_oid: Option<String> = None;
 
             let promotion_outcome = if self.cancel.is_cancelled() {
@@ -604,27 +605,33 @@ impl Engine {
                                 .cleanup_experiment_workspace(&experiment_workspace.path)
                                 .await;
                             PromotionOutcome::PromotionFailed
-                        } else if let Err(e) = self.git.promote_branch(&branch).await {
-                            warn!("Failed to promote branch: {e}");
-                            let _ = self
-                                .git
-                                .cleanup_experiment_workspace(&experiment_workspace.path)
-                                .await;
-                            PromotionOutcome::PromotionFailed
                         } else {
-                            promoted_branch_name = Some(branch.clone());
-                            match self.git.branch_head_commit_oid(&branch).await {
-                                Ok(commit_oid) => {
-                                    promoted_commit_oid = Some(commit_oid);
+                            match self.git.promote_branch(&branch).await {
+                                Ok(promoted_target_branch) => {
+                                    promoted_branch_name = Some(branch.clone());
+                                    promoted_target_branch_name = Some(promoted_target_branch);
+                                    match self.git.branch_head_commit_oid(&branch).await {
+                                        Ok(commit_oid) => {
+                                            promoted_commit_oid = Some(commit_oid);
+                                        }
+                                        Err(error) => {
+                                            warn!(
+                                                "Failed to resolve promoted commit for branch '{branch}': {error}"
+                                            );
+                                        }
+                                    }
+                                    baseline = result.weighted_total;
+                                    PromotionOutcome::Promoted
                                 }
                                 Err(error) => {
-                                    warn!(
-                                        "Failed to resolve promoted commit for branch '{branch}': {error}"
-                                    );
+                                    warn!("Failed to promote branch: {error}");
+                                    let _ = self
+                                        .git
+                                        .cleanup_experiment_workspace(&experiment_workspace.path)
+                                        .await;
+                                    PromotionOutcome::PromotionFailed
                                 }
                             }
-                            baseline = result.weighted_total;
-                            PromotionOutcome::Promoted
                         }
                     }
                     Err(error) => {
@@ -690,6 +697,7 @@ impl Engine {
                     &result,
                     promotion_outcome,
                     promoted_branch_name.as_deref(),
+                    promoted_target_branch_name.as_deref(),
                     promoted_commit_oid.as_deref(),
                 )
             {

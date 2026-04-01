@@ -145,6 +145,7 @@ export type PersistedExperiment = {
     | "promotion_failed";
   promoted_branch_name: string | null;
   promoted_commit_oid: string | null;
+  promoted_target_branch_name: string | null;
   created_at: string;
   metrics: MetricScore[];
   research: ResearchArtifacts | null;
