@@ -7,10 +7,12 @@ import type {
   GitDependencyState,
   OllamaStatus,
   PluginRuntimeState,
+  ProfileConfig,
   ReadinessItem,
   ResearchSearchMode,
   RemoteProviderSetup,
   RuntimeStrategy,
+  WorkspaceAnalysis,
   WorkspaceGitStatus,
 } from "../../types/console";
 import { listOllamaModelNames } from "../../lib/ollama";
@@ -37,6 +39,8 @@ type DesktopSetupModalProps = {
   onInstallOllama: () => Promise<void>;
   onStartOllama: () => Promise<void>;
   onPullRecommendedOllamaModels: () => Promise<void>;
+  onAnalyzeWorkspace: (path: string) => Promise<import("../../types/console").WorkspaceAnalysis | null>;
+  onApplyProfile: (profileName: string) => Promise<import("../../types/console").ProfileConfig | null>;
 };
 
 export function DesktopSetupModal({
@@ -57,6 +61,8 @@ export function DesktopSetupModal({
   onInstallOllama,
   onStartOllama,
   onPullRecommendedOllamaModels,
+  onAnalyzeWorkspace,
+  onApplyProfile,
 }: DesktopSetupModalProps) {
   const [form, setForm] = useState<DesktopSetupState>(setupState);
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
@@ -65,6 +71,13 @@ export function DesktopSetupModal({
   const [inspectingWorkspace, setInspectingWorkspace] = useState(false);
   const [pullingRecommendedModels, setPullingRecommendedModels] =
     useState(false);
+  const [workspaceAnalysis, setWorkspaceAnalysis] =
+    useState<WorkspaceAnalysis | null>(null);
+  const [analyzingWorkspace, setAnalyzingWorkspace] = useState(false);
+  const [recommendedProfile, setRecommendedProfile] = useState<string | null>(
+    null,
+  );
+  const [applyingProfile, setApplyingProfile] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -75,6 +88,16 @@ export function DesktopSetupModal({
     setApiKeys({});
     setWorkspaceStatus(null);
     setPullingRecommendedModels(false);
+    setWorkspaceAnalysis(null);
+    setRecommendedProfile(null);
+    setApplyingProfile(false);
+
+    // Load recommended profile
+    void onApplyProfile("local").then((config) => {
+      if (config) {
+        setRecommendedProfile(config.runtimeStrategy);
+      }
+    });
   }, [isOpen]);
 
   const handlePullRecommendedModels = async () => {
@@ -99,11 +122,14 @@ export function DesktopSetupModal({
     if (!normalizedWorkspace) {
       setWorkspaceStatus(null);
       setInspectingWorkspace(false);
+      setWorkspaceAnalysis(null);
+      setAnalyzingWorkspace(false);
       return;
     }
 
     let cancelled = false;
     setInspectingWorkspace(true);
+    setAnalyzingWorkspace(true);
 
     void onInspectWorkspace(normalizedWorkspace)
       .then((status) => {
@@ -117,10 +143,22 @@ export function DesktopSetupModal({
         }
       });
 
+    void onAnalyzeWorkspace(normalizedWorkspace)
+      .then((analysis) => {
+        if (!cancelled) {
+          setWorkspaceAnalysis(analysis);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAnalyzingWorkspace(false);
+        }
+      });
+
     return () => {
       cancelled = true;
     };
-  }, [form.workspacePath, isOpen, onInspectWorkspace]);
+  }, [form.workspacePath, isOpen, onInspectWorkspace, onAnalyzeWorkspace]);
 
   if (!isOpen) {
     return null;
@@ -358,6 +396,63 @@ export function DesktopSetupModal({
                 ))}
               </div>
             </section>
+
+            <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                Environment Profile
+              </div>
+              <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                Quick presets that configure runtime strategy and research mode
+                for common workflows.
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+                {(
+                  [
+                    ["local", "Local Only", "Uses only local Ollama models. No API keys required."],
+                    ["mixed", "Mixed", "Local models with remote fallbacks for stronger models."],
+                    ["research_heavy", "Research Heavy", "Prioritizes remote providers for research quality."],
+                  ] as const
+                ).map(([value, label, description]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      setApplyingProfile(true);
+                      void onApplyProfile(value).then((config) => {
+                        if (config) {
+                          setForm((current) => ({
+                            ...current,
+                            environmentProfile: value,
+                            runtimeStrategy: config.runtimeStrategy as RuntimeStrategy,
+                            researchSearchMode: config.researchSearchMode as ResearchSearchMode,
+                          }));
+                        }
+                        setApplyingProfile(false);
+                      });
+                    }}
+                    disabled={applyingProfile}
+                    className={`rounded-lg border px-3 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      form.environmentProfile === value
+                        ? "border-teal-400/30 bg-teal-500/10 text-white"
+                        : "border-white/10 bg-slate-950/60 text-slate-400 hover:bg-white/5"
+                    }`}
+                  >
+                    <div className="text-xs font-bold uppercase tracking-[0.18em]">
+                      {label}
+                    </div>
+                    <div className="mt-1 text-[11px] leading-relaxed">
+                      {description}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {recommendedProfile ? (
+                <div className="mt-3 rounded-lg border border-teal-400/20 bg-teal-500/10 px-3 py-2 text-[11px] leading-relaxed text-teal-100">
+                  Recommended for your system: <strong>{recommendedProfile}</strong>
+                </div>
+              ) : null}
+            </section>
+
           </div>
 
           {gitReadiness ? (
@@ -534,6 +629,42 @@ export function DesktopSetupModal({
                     : workspaceNotDirectory
                       ? "The selected path is not a directory. Pick a workspace folder instead of a file."
                       : "No git repository was found for this folder. That is allowed, but you will need the run modal's git initialization option enabled before a run can prepare experiment branches safely."}
+              </div>
+            ) : null}
+
+            {workspaceAnalysis && !analyzingWorkspace ? (
+              <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 px-3 py-3">
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                  Auto-Detected Project Info
+                </div>
+                <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-slate-300">
+                  <div>{workspaceAnalysis.projectSummary}</div>
+                  {workspaceAnalysis.language ? (
+                    <div>
+                      Language: <strong>{workspaceAnalysis.language}</strong>
+                    </div>
+                  ) : null}
+                  {workspaceAnalysis.testCommand ? (
+                    <div>
+                      Test command: <code className="text-teal-200">{workspaceAnalysis.testCommand}</code>
+                    </div>
+                  ) : null}
+                  {workspaceAnalysis.suggestedTargetFiles.length > 0 ? (
+                    <div>
+                      Suggested targets:{" "}
+                      {workspaceAnalysis.suggestedTargetFiles.join(", ")}
+                    </div>
+                  ) : null}
+                  {workspaceAnalysis.hasCiConfig ? (
+                    <div className="text-emerald-300">
+                      CI configuration detected
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : analyzingWorkspace ? (
+              <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 px-3 py-3 text-[11px] leading-relaxed text-slate-400">
+                Analyzing project structure...
               </div>
             ) : null}
           </section>

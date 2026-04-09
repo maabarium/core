@@ -4,6 +4,8 @@ use maabarium_core::{
     ExportFormat, GitDependencyEnsureOutcome, Persistence, PromotionOutcome, SecretStore,
     UpdaterConfiguration, check_for_cli_update, default_db_path, default_log_path,
     ensure_git_dependency, install_cli_update,
+    ReadinessLevel, ReadinessScanner,
+    analyze_workspace, apply_all_fixes, detect_recommended_profile,
 };
 use maabarium_core::error::UpdaterError;
 use secrecy::{ExposeSecret, SecretString};
@@ -48,6 +50,21 @@ enum Commands {
     Keys {
         #[command(subcommand)]
         action: KeysAction,
+    },
+    /// Check and fix setup readiness
+    Setup {
+        /// Non-interactive readiness check (exit 0 = ready, 1 = needs attention)
+        #[arg(long)]
+        check: bool,
+        /// Output readiness report as JSON
+        #[arg(long)]
+        json: bool,
+        /// Workspace path to analyze
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Runtime strategy hint: local, mixed, remote
+        #[arg(long)]
+        strategy: Option<String>,
     },
     /// Inspect and update the CLI binary itself
     #[command(name = "self")]
@@ -182,6 +199,60 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", render_delete_key_message(&secret_store, &provider)?);
             }
         },
+        Commands::Setup {
+            check,
+            json,
+            workspace,
+            strategy,
+        } => {
+            let workspace_ref = workspace.as_deref();
+            let strategy_ref = strategy.as_deref();
+            let report = ReadinessScanner::scan(workspace_ref, strategy_ref);
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                render_readiness_report(&report, workspace_ref);
+            }
+
+            if check {
+                if !report.is_ready() {
+                    std::process::exit(1);
+                }
+            } else {
+                // Interactive: attempt fixes for items needing attention
+                let needs_fix = report.needs_attention();
+                if needs_fix.is_empty() {
+                    println!("\nAll checks passed. Maabarium is ready to run.");
+                } else {
+                    println!("\nAttempting one-click fixes...");
+                    let outcomes = apply_all_fixes(workspace_ref);
+                    for outcome in &outcomes {
+                        let icon = if outcome.success { "[OK]" } else { "[!!]" };
+                        println!("  {icon} {}", outcome.message);
+                    }
+                    if outcomes.iter().any(|o| !o.success) {
+                        println!("\nSome fixes require manual intervention. See messages above.");
+                    } else {
+                        println!("\nAll automatic fixes applied successfully.");
+                    }
+                }
+
+                // Show workspace analysis if workspace provided
+                if let Some(ws) = workspace_ref {
+                    let analysis = analyze_workspace(ws);
+                    render_workspace_analysis(&analysis);
+                }
+
+                // Show recommended profile
+                let recommended = detect_recommended_profile();
+                println!(
+                    "\nRecommended environment profile: {} - {}",
+                    recommended.label(),
+                    recommended.description()
+                );
+            }
+        }
         Commands::SelfManage { action } => match action {
             SelfAction::Version => {
                 println!("maabarium {}", env!("CARGO_PKG_VERSION"));
@@ -432,6 +503,59 @@ fn render_delete_key_message(
         Ok(format!("Deleted API key for provider: {provider}"))
     } else {
         Ok(format!("No API key stored for provider: {provider}"))
+    }
+}
+
+fn render_readiness_report(report: &maabarium_core::ReadinessReport, workspace: Option<&str>) {
+    println!("Maabarium Setup Readiness Report");
+    println!("===============================");
+    if let Some(ws) = workspace {
+        println!("Workspace: {ws}");
+    }
+    println!();
+
+    for item in &report.items {
+        let icon = match item.status {
+            ReadinessLevel::Ready => "[OK]",
+            ReadinessLevel::Optional => "[--]",
+            ReadinessLevel::NeedsAction => "[!!]",
+        };
+        println!("{} {}", icon, item.title);
+        println!("   {}", item.summary);
+        if let Some(fix) = &item.fix_label {
+            println!("   Action: {fix}");
+        }
+        if let Some(hint) = &item.fix_hint {
+            println!("   Hint: {hint}");
+        }
+        println!();
+    }
+
+    if report.is_ready() {
+        println!("Status: READY - All checks passed.");
+    } else {
+        let count = report.needs_attention().len();
+        println!("Status: NEEDS ATTENTION - {count} item(s) require fixes.");
+    }
+}
+
+fn render_workspace_analysis(analysis: &maabarium_core::WorkspaceAnalysis) {
+    println!("\nWorkspace Analysis: {}", analysis.path);
+    println!("  {}", analysis.project_summary);
+    if let Some(lang) = &analysis.language {
+        println!("  Language: {lang}");
+    }
+    if let Some(cmd) = &analysis.test_command {
+        println!("  Test command: {cmd}");
+    }
+    if !analysis.suggested_target_files.is_empty() {
+        println!(
+            "  Suggested targets: {}",
+            analysis.suggested_target_files.join(", ")
+        );
+    }
+    if analysis.has_ci_config {
+        println!("  CI configuration detected");
     }
 }
 

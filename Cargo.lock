@@ -2453,6 +2453,7 @@ dependencies = [
  "clap",
  "maabarium-core",
  "secrecy",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

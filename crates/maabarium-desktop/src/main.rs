@@ -541,7 +541,14 @@ fn main() {
             update_blueprint_from_wizard,
             set_blueprint_path,
             check_for_updates,
-            install_available_update
+            install_available_update,
+            run_readiness_scan,
+            analyze_workspace_command,
+            validate_provider_command,
+            validate_ollama_command,
+            get_recommended_profile_command,
+            apply_profile_command,
+            apply_fixes_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -3313,6 +3320,81 @@ fn slugify_blueprint_name(input: &str) -> String {
     } else {
         slug
     }
+}
+
+// ---------------------------------------------------------------------------
+// Setup Wizard Tauri Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn run_readiness_scan(
+    workspace: Option<String>,
+    strategy: Option<String>,
+) -> Result<maabarium_core::ReadinessReport, String> {
+    let workspace_ref = workspace.as_deref();
+    let strategy_ref = strategy.as_deref();
+    Ok(maabarium_core::ReadinessScanner::scan(
+        workspace_ref,
+        strategy_ref,
+    ))
+}
+
+#[tauri::command]
+fn analyze_workspace_command(path: String) -> Result<maabarium_core::WorkspaceAnalysis, String> {
+    Ok(maabarium_core::analyze_workspace(&path))
+}
+
+#[tauri::command]
+async fn validate_provider_command(
+    provider_id: String,
+    endpoint: String,
+    api_key: Option<String>,
+    test_model: Option<String>,
+) -> Result<maabarium_core::ProviderValidationResult, String> {
+    let api_key_ref = api_key.as_deref();
+    let model_ref = test_model.as_deref();
+    Ok(
+        maabarium_core::validate_provider_connection(
+            &provider_id,
+            &endpoint,
+            api_key_ref,
+            model_ref,
+        )
+        .await,
+    )
+}
+
+#[tauri::command]
+async fn validate_ollama_command(
+    endpoint: Option<String>,
+) -> Result<maabarium_core::ProviderValidationResult, String> {
+    let ep = endpoint
+        .as_deref()
+        .unwrap_or("http://localhost:11434");
+    Ok(maabarium_core::validate_ollama_connection(ep).await)
+}
+
+#[tauri::command]
+fn get_recommended_profile_command() -> Result<String, String> {
+    let profile = maabarium_core::detect_recommended_profile();
+    Ok(profile.runtime_strategy_label().to_owned())
+}
+
+#[tauri::command]
+fn apply_profile_command(profile_name: String) -> Result<maabarium_core::ProfileConfig, String> {
+    let profile = match profile_name.as_str() {
+        "local" => maabarium_core::EnvironmentProfile::LocalOnly,
+        "mixed" => maabarium_core::EnvironmentProfile::Mixed,
+        "research_heavy" | "remote" => maabarium_core::EnvironmentProfile::ResearchHeavy,
+        _ => return Err(format!("Unknown profile: {profile_name}")),
+    };
+    Ok(maabarium_core::apply_profile(profile))
+}
+
+#[tauri::command]
+fn apply_fixes_command(workspace: Option<String>) -> Result<Vec<maabarium_core::FixOutcome>, String> {
+    let workspace_ref = workspace.as_deref();
+    Ok(maabarium_core::apply_all_fixes(workspace_ref))
 }
 
 #[cfg(test)]

@@ -66,6 +66,8 @@ pub struct DesktopSetupState {
     pub remind_later_version: Option<String>,
     pub last_setup_completed_at: Option<String>,
     pub interrupted_run_notice: Option<InterruptedRunNotice>,
+    #[serde(default)]
+    pub environment_profile: Option<String>,
 }
 
 impl Default for DesktopSetupState {
@@ -85,6 +87,7 @@ impl Default for DesktopSetupState {
             remind_later_version: None,
             last_setup_completed_at: None,
             interrupted_run_notice: None,
+            environment_profile: None,
         }
     }
 }
@@ -676,6 +679,11 @@ fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
             })
         }
     });
+    setup.environment_profile = setup
+        .environment_profile
+        .take()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     setup
 }
 

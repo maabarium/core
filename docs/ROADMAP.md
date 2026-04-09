@@ -32,6 +32,18 @@ Potential improvements:
 - richer workspace onboarding that detects repo health, test commands, and likely target files automatically
 - saved environment profiles for different use cases such as local-only, mixed runtime, and research-heavy workflows
 
+Implementation status (2026-04-09):
+
+- [x] `setup_wizard` core module with `ReadinessScanner`, workspace auto-detection, environment profiles
+- [x] `maabarium setup` CLI subcommand with `--check` and `--json` modes
+- [x] One-click readiness fixes (`apply_git_fix`, `apply_all_fixes`)
+- [x] Provider connection validation (`validate_provider_connection`, `validate_ollama_connection`)
+- [x] Workspace auto-detection (language, test command, target files, CI config)
+- [x] Environment profiles (`LocalOnly`, `Mixed`, `ResearchHeavy`) with auto-detection
+- [x] Desktop Tauri commands for readiness scan, workspace analysis, provider validation, profile management
+- [x] `environment_profile` field added to `DesktopSetupState` persistence
+- [x] Desktop UI integration: ReadinessCenterCard "Fix All" button, DesktopSetupModal environment profile picker, workspace auto-detection display
+
 Why it matters:
 
 Users should spend less time configuring Maabarium and more time running improvement loops that actually produce value.

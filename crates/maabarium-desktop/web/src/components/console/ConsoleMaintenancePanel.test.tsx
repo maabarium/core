@@ -92,6 +92,7 @@ const desktopSetup: DesktopSetupState = {
   remindLaterVersion: null,
   lastSetupCompletedAt: null,
   interruptedRunNotice: null,
+  environmentProfile: null,
 };
 
 describe("ConsoleMaintenancePanel", () => {
@@ -122,6 +123,7 @@ describe("ConsoleMaintenancePanel", () => {
         onInstallGit={vi.fn()}
         onInstallOllama={vi.fn()}
         onStartOllama={vi.fn()}
+        onApplyFixes={vi.fn(async () => null)}
         onPreviewBranchCleanup={vi.fn(async () => null)}
         onCleanupBranches={vi.fn(async () => null)}
         onCheckForUpdates={vi.fn()}
@@ -185,6 +187,7 @@ describe("ConsoleMaintenancePanel", () => {
         onInstallGit={vi.fn()}
         onInstallOllama={vi.fn()}
         onStartOllama={vi.fn()}
+        onApplyFixes={vi.fn(async () => null)}
         onPreviewBranchCleanup={vi.fn(async () => null)}
         onCleanupBranches={vi.fn(async () => null)}
         onCheckForUpdates={vi.fn()}

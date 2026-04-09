@@ -203,6 +203,13 @@ export default function App() {
     exportRetainedWinnerFiles,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
+    runReadinessScan,
+    analyzeWorkspace,
+    validateProvider,
+    validateOllama,
+    getRecommendedProfile,
+    applyProfile,
+    applyFixes,
   } = useDesktopConsole();
   const {
     blueprintQuery,
@@ -1266,6 +1273,8 @@ export default function App() {
           onPullRecommendedOllamaModels={async () => {
             await pullRecommendedOllamaModels();
           }}
+          onAnalyzeWorkspace={analyzeWorkspace}
+          onApplyProfile={applyProfile}
         />
       ) : null}
 
@@ -1990,6 +1999,7 @@ export default function App() {
               onInstallGit={() => void installGit()}
               onInstallOllama={() => void installOllama()}
               onStartOllama={() => void startOllama()}
+              onApplyFixes={() => applyFixes(state?.desktopSetup.workspacePath)}
               onPreviewBranchCleanup={(thresholdMonths) =>
                 previewExperimentBranchCleanup(thresholdMonths)
               }

@@ -341,6 +341,7 @@ function normalizeDesktopSetup(
             reason: setup.interruptedRunNotice.reason ?? null,
           }
         : null,
+    environmentProfile: setup?.environmentProfile ?? null,
   };
 }
 
