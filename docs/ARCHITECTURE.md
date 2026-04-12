@@ -90,7 +90,9 @@ pub trait LLMProvider: Send + Sync {
 Implementations:
 
 - `OllamaProvider` — calls Ollama REST API (`POST /api/generate`) via `reqwest`
-- `OpenAICompatProvider` — generic OpenAI-compatible endpoint (OpenAI, Groq, Anthropic)
+- `OpenAICompatProvider` — generic OpenAI-compatible endpoint (OpenAI, Groq, OpenRouter, DeepSeek, xAI, compatible gateways)
+- `AnthropicProvider` — native Anthropic Messages API client
+- `GeminiProvider` — native Gemini `generateContent` API client
 - `ModelPool` — wraps one or more providers, enforces per-model request pacing, and supports `explicit` or `round_robin` blueprint assignment
 
 No external `ollama-rs` crate is used; the Ollama REST API is called directly.

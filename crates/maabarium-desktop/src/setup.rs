@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use maabarium_core::GitDependencyStatus;
+use maabarium_core::{GitDependencyStatus, ReadinessLevel, ReadinessScanner};
 
 const SUPPORTED_UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 const OLLAMA_MACOS_APP_PATH: &str = "/Applications/Ollama.app";
@@ -35,8 +35,26 @@ pub struct RemoteProviderSetup {
     pub label: String,
     pub endpoint: Option<String>,
     pub model_name: Option<String>,
+    #[serde(default)]
+    pub available_model_names: Vec<String>,
     pub fallback_only: bool,
     pub configured: bool,
+    #[serde(default = "default_provider_supported")]
+    pub supported: bool,
+    #[serde(default)]
+    pub support_summary: Option<String>,
+}
+
+fn default_provider_supported() -> bool {
+    true
+}
+
+fn provider_support(provider_id: &str) -> (bool, Option<&'static str>) {
+    match provider_id {
+        "anthropic" => (true, Some("Uses Anthropic's native Messages API.")),
+        "gemini" => (true, Some("Uses Gemini's native generateContent API.")),
+        _ => (true, None),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,64 +158,91 @@ pub fn default_remote_provider_setups() -> Vec<RemoteProviderSetup> {
             label: "OpenAI".to_owned(),
             endpoint: Some("https://api.openai.com/v1".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: None,
         },
         RemoteProviderSetup {
             provider_id: "anthropic".to_owned(),
             label: "Anthropic".to_owned(),
             endpoint: Some("https://api.anthropic.com".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: Some("Uses Anthropic's native Messages API.".to_owned()),
         },
         RemoteProviderSetup {
             provider_id: "gemini".to_owned(),
             label: "Gemini".to_owned(),
             endpoint: Some("https://generativelanguage.googleapis.com".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: Some("Uses Gemini's native generateContent API.".to_owned()),
         },
         RemoteProviderSetup {
             provider_id: "groq".to_owned(),
             label: "Groq".to_owned(),
             endpoint: Some("https://api.groq.com/openai/v1".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: None,
         },
         RemoteProviderSetup {
             provider_id: "openrouter".to_owned(),
             label: "OpenRouter".to_owned(),
             endpoint: Some("https://openrouter.ai/api/v1".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: None,
         },
         RemoteProviderSetup {
             provider_id: "deepseek".to_owned(),
             label: "DeepSeek".to_owned(),
             endpoint: Some("https://api.deepseek.com".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: None,
         },
         RemoteProviderSetup {
             provider_id: "xai".to_owned(),
             label: "xAI".to_owned(),
             endpoint: Some("https://api.x.ai/v1".to_owned()),
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: None,
         },
         RemoteProviderSetup {
             provider_id: "custom".to_owned(),
             label: "OpenAI-Compatible Custom".to_owned(),
             endpoint: None,
             model_name: None,
+            available_model_names: Vec::new(),
             fallback_only: false,
             configured: false,
+            supported: true,
+            support_summary: Some(
+                "Use this when your provider exposes an OpenAI-compatible /chat/completions API."
+                    .to_owned(),
+            ),
         },
     ]
 }
@@ -402,8 +447,8 @@ pub fn pull_recommended_ollama_models() -> Result<(), String> {
 pub fn build_readiness_items(
     setup: &DesktopSetupState,
     fallback_workspace: Option<&str>,
-    git_status: &GitDependencyStatus,
-    ollama: &OllamaStatus,
+    _git_status: &GitDependencyStatus,
+    _ollama: &OllamaStatus,
     updater_configured: bool,
     brave_search_configured: bool,
     active_research_workflow: bool,
@@ -417,169 +462,105 @@ pub fn build_readiness_items(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .or(fallback_workspace.filter(|value| !value.trim().is_empty()));
-    let remote_configured_count = setup
-        .remote_providers
-        .iter()
-        .filter(|provider| provider.configured)
-        .count();
-    let local_models_ready = !ollama.models.is_empty() || !setup.selected_local_models.is_empty();
+    let strategy_label = runtime_strategy.map(|strategy| match strategy {
+        RuntimeStrategy::Local => "local",
+        RuntimeStrategy::Remote => "remote",
+        RuntimeStrategy::Mixed => "mixed",
+    });
+    let shared_report = ReadinessScanner::scan(workspace_path, strategy_label);
+    let mut items = shared_report
+        .items
+        .into_iter()
+        .map(|item| ReadinessItem {
+            id: item.id,
+            title: item.title,
+            status: match item.status {
+                ReadinessLevel::Ready => ReadinessStatus::Ready,
+                ReadinessLevel::NeedsAction => ReadinessStatus::NeedsAttention,
+                ReadinessLevel::Optional => ReadinessStatus::Optional,
+            },
+            summary: item.summary,
+            action_label: item.fix_label.unwrap_or_else(|| "Inspect".to_owned()),
+            last_checked_at_epoch_ms: now,
+        })
+        .collect::<Vec<_>>();
 
-    vec![
-        ReadinessItem {
-            id: "workspace".to_owned(),
-            title: "Workspace".to_owned(),
-            status: if workspace_path
-                .map(Path::new)
-                .is_some_and(|path| path.exists())
+    let research_search_item = ReadinessItem {
+        id: "research_search".to_owned(),
+        title: "Research Search".to_owned(),
+        status: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
+            ReadinessStatus::Ready
+        } else if brave_search_configured {
+            ReadinessStatus::Ready
+        } else if active_research_workflow {
+            ReadinessStatus::NeedsAttention
+        } else {
+            ReadinessStatus::Optional
+        },
+        summary: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
+            "Free DuckDuckGo scraping is enabled for research discovery. It works out of the box, but it is unofficial and can be slower, less stable, or blocked without warning."
+                .to_owned()
+        } else if brave_search_configured {
+            "Brave Search discovery is configured in the OS keychain for research workflows."
+                .to_owned()
+        } else if active_research_workflow {
+            "No Brave Search API key is configured. General Research workflows can still run, but discovery-backed searches will fail until BRAVE_SEARCH_API_KEY is stored in setup."
+                .to_owned()
+        } else {
+            "Optional for internet-backed research workflows. Add a Brave Search API key if you want automatic discovery queries and source harvesting."
+                .to_owned()
+        },
+        action_label: "Configure Search".to_owned(),
+        last_checked_at_epoch_ms: now,
+    };
+
+    let updates_item = ReadinessItem {
+        id: "updates".to_owned(),
+        title: "Updates".to_owned(),
+        status: if updater_configured {
+            ReadinessStatus::Ready
+        } else {
+            ReadinessStatus::NeedsAttention
+        },
+        summary: if updater_configured {
+            "Desktop updater manifest and public key are configured.".to_owned()
+        } else {
+            "Updater environment is not configured for this session.".to_owned()
+        },
+        action_label: "Review Updates".to_owned(),
+        last_checked_at_epoch_ms: now,
+    };
+
+    if let Some(models_index) = items.iter().position(|item| item.id == "models") {
+        items.insert(models_index, research_search_item);
+    } else {
+        items.push(research_search_item);
+    }
+
+    if let Some(diagnostics_index) = items.iter().position(|item| item.id == "diagnostics") {
+        items.insert(diagnostics_index, updates_item);
+        if let Some(diagnostics) = items.iter_mut().find(|item| item.id == "diagnostics") {
+            diagnostics.summary = format!(
+                "Database: {} | Logs: {}",
+                db_path.display(),
+                log_path.display()
+            );
+            diagnostics.status = if parent_directory_available(db_path)
+                && parent_directory_available(log_path)
             {
                 ReadinessStatus::Ready
             } else {
                 ReadinessStatus::NeedsAttention
-            },
-            summary: workspace_path
-                .map(|path| format!("Workspace set to {path}"))
-                .unwrap_or_else(|| {
-                    "Choose a repository or workspace path for runnable workflows.".to_owned()
-                }),
-            action_label: "Choose Workspace".to_owned(),
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
-            id: "git".to_owned(),
-            title: "Git".to_owned(),
-            status: if git_status.installed {
-                ReadinessStatus::Ready
-            } else {
-                ReadinessStatus::NeedsAttention
-            },
-            summary: git_status.status_detail.clone(),
-            action_label: if git_status.installed {
-                "Git Ready".to_owned()
-            } else if git_status.auto_install_supported {
-                "Install Git".to_owned()
-            } else {
-                "Install Manually".to_owned()
-            },
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
-            id: "local_runtime".to_owned(),
-            title: "Local Runtime".to_owned(),
-            status: match runtime_strategy {
-                Some(RuntimeStrategy::Remote) => ReadinessStatus::Optional,
-                _ if ollama.installed && ollama.running => ReadinessStatus::Ready,
-                _ => ReadinessStatus::NeedsAttention,
-            },
-            summary: ollama.status_detail.clone(),
-            action_label: if !ollama.installed {
-                "Install Ollama".to_owned()
-            } else if !ollama.running {
-                "Start Ollama".to_owned()
-            } else {
-                "Inspect Runtime".to_owned()
-            },
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
-            id: "remote_providers".to_owned(),
-            title: "Remote Providers".to_owned(),
-            status: match runtime_strategy {
-                Some(RuntimeStrategy::Local) => ReadinessStatus::Optional,
-                Some(RuntimeStrategy::Remote) | Some(RuntimeStrategy::Mixed)
-                    if remote_configured_count > 0 =>
-                {
-                    ReadinessStatus::Ready
-                }
-                Some(RuntimeStrategy::Remote) | Some(RuntimeStrategy::Mixed) => {
-                    ReadinessStatus::NeedsAttention
-                }
-                None => ReadinessStatus::NeedsAttention,
-            },
-            summary: if remote_configured_count > 0 {
-                format!("{remote_configured_count} remote provider configuration(s) are ready.")
-            } else {
-                "No remote providers are configured yet.".to_owned()
-            },
-            action_label: "Configure Provider".to_owned(),
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
-            id: "research_search".to_owned(),
-            title: "Research Search".to_owned(),
-            status: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
-                ReadinessStatus::Ready
-            } else if brave_search_configured {
-                ReadinessStatus::Ready
-            } else if active_research_workflow {
-                ReadinessStatus::NeedsAttention
-            } else {
-                ReadinessStatus::Optional
-            },
-            summary: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
-                "Free DuckDuckGo scraping is enabled for research discovery. It works out of the box, but it is unofficial and can be slower, less stable, or blocked without warning."
-                    .to_owned()
-            } else if brave_search_configured {
-                "Brave Search discovery is configured in the OS keychain for research workflows."
-                    .to_owned()
-            } else if active_research_workflow {
-                "No Brave Search API key is configured. General Research workflows can still run, but discovery-backed searches will fail until BRAVE_SEARCH_API_KEY is stored in setup."
-                    .to_owned()
-            } else {
-                "Optional for internet-backed research workflows. Add a Brave Search API key if you want automatic discovery queries and source harvesting."
-                    .to_owned()
-            },
-            action_label: "Configure Search".to_owned(),
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
-            id: "models".to_owned(),
-            title: "Models".to_owned(),
-            status: match runtime_strategy {
-                Some(RuntimeStrategy::Local) | Some(RuntimeStrategy::Mixed)
-                    if local_models_ready =>
-                {
-                    ReadinessStatus::Ready
-                }
-                Some(RuntimeStrategy::Local) | Some(RuntimeStrategy::Mixed) => {
-                    ReadinessStatus::NeedsAttention
-                }
-                Some(RuntimeStrategy::Remote) if remote_configured_count > 0 => {
-                    ReadinessStatus::Ready
-                }
-                Some(RuntimeStrategy::Remote) => ReadinessStatus::NeedsAttention,
-                None => ReadinessStatus::NeedsAttention,
-            },
-            summary: if local_models_ready {
-                format!(
-                    "{} local model selection(s) are available.",
-                    std::cmp::max(ollama.models.len(), setup.selected_local_models.len())
-                )
-            } else {
-                "Select or download at least one model for the chosen runtime strategy.".to_owned()
-            },
-            action_label: "Choose Models".to_owned(),
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
-            id: "updates".to_owned(),
-            title: "Updates".to_owned(),
-            status: if updater_configured {
-                ReadinessStatus::Ready
-            } else {
-                ReadinessStatus::NeedsAttention
-            },
-            summary: if updater_configured {
-                "Desktop updater manifest and public key are configured.".to_owned()
-            } else {
-                "Updater environment is not configured for this session.".to_owned()
-            },
-            action_label: "Review Updates".to_owned(),
-            last_checked_at_epoch_ms: now,
-        },
-        ReadinessItem {
+            };
+            diagnostics.action_label = "Inspect Paths".to_owned();
+        }
+    } else {
+        items.push(updates_item);
+        items.push(ReadinessItem {
             id: "diagnostics".to_owned(),
             title: "Diagnostics".to_owned(),
-            status: if parent_directory_available(db_path) && parent_directory_available(log_path) {
+            status: if parent_directory_available(db_path) && parent_directory_available(log_path)
+            {
                 ReadinessStatus::Ready
             } else {
                 ReadinessStatus::NeedsAttention
@@ -591,8 +572,10 @@ pub fn build_readiness_items(
             ),
             action_label: "Inspect Paths".to_owned(),
             last_checked_at_epoch_ms: now,
-        },
-    ]
+        });
+    }
+
+    items
 }
 
 fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
@@ -623,9 +606,14 @@ fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
         {
             provider.endpoint = existing.endpoint.clone().or(provider.endpoint);
             provider.model_name = existing.model_name.clone();
+            provider.available_model_names = existing.available_model_names.clone();
             provider.fallback_only = existing.fallback_only;
             provider.configured = existing.configured;
         }
+
+        let (supported, support_summary) = provider_support(&provider.provider_id);
+        provider.supported = supported;
+        provider.support_summary = support_summary.map(str::to_owned);
 
         provider.endpoint = provider
             .endpoint
@@ -637,6 +625,17 @@ fn normalize_desktop_setup(mut setup: DesktopSetupState) -> DesktopSetupState {
             .take()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        provider.available_model_names = provider
+            .available_model_names
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .fold(Vec::new(), |mut names, value| {
+                if !names.iter().any(|existing| existing == &value) {
+                    names.push(value);
+                }
+                names
+            });
         merged.push(provider);
     }
     setup.remote_providers = merged;

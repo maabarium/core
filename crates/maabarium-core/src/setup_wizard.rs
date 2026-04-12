@@ -7,13 +7,71 @@
 //! - Saved environment profiles (local-only, mixed, research-heavy)
 
 use serde::{Deserialize, Serialize};
+use secrecy::ExposeSecret;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::error::SecretError;
+use crate::llm::{anthropic, gemini};
 use crate::secrets::{ApiKeyStore, SecretStore};
+
+const OPENAI_COMPATIBLE_PROVIDER_IDS: &[&str] = &[
+    "openai",
+    "custom",
+    "deepseek",
+    "groq",
+    "openrouter",
+    "xai",
+];
+
+const NATIVE_PROVIDER_IDS: &[&str] = &["anthropic", "gemini"];
+const DEFAULT_PROVIDER_VALIDATION_TIMEOUT_SECS: u64 = 10;
+const CUSTOM_PROVIDER_VALIDATION_TIMEOUT_SECS: u64 = 30;
+
+fn is_openai_compatible_provider(provider_id: &str) -> bool {
+    OPENAI_COMPATIBLE_PROVIDER_IDS.contains(&provider_id)
+}
+
+fn is_native_provider(provider_id: &str) -> bool {
+    NATIVE_PROVIDER_IDS.contains(&provider_id)
+}
+
+fn provider_validation_timeout(provider_id: &str) -> Duration {
+    Duration::from_secs(match provider_id {
+        "custom" => CUSTOM_PROVIDER_VALIDATION_TIMEOUT_SECS,
+        _ => DEFAULT_PROVIDER_VALIDATION_TIMEOUT_SECS,
+    })
+}
+
+fn model_list_contains_model(models: &[serde_json::Value], target_model: &str) -> bool {
+    let target_model = target_model.trim();
+    if target_model.is_empty() {
+        return false;
+    }
+
+    models.iter().any(|model| {
+        model
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|model_id| model_id == target_model)
+    })
+}
+
+fn configured_supported_remote_providers(secret_store: &SecretStore) -> Vec<&'static str> {
+    OPENAI_COMPATIBLE_PROVIDER_IDS
+        .iter()
+        .chain(NATIVE_PROVIDER_IDS.iter())
+        .copied()
+        .filter(|provider_id| {
+            secret_store
+                .get_api_key(provider_id)
+                .ok()
+                .is_some_and(|key| key.is_some())
+        })
+        .collect()
+}
 
 // ---------------------------------------------------------------------------
 // Readiness scanning
@@ -188,17 +246,7 @@ impl ReadinessScanner {
 
     fn check_remote_providers(runtime_strategy: Option<&str>) -> ReadinessItem {
         let secret_store = SecretStore::new();
-        let providers = ["openai", "anthropic", "groq", "openrouter", "deepseek", "xai"];
-        let configured: Vec<&str> = providers
-            .iter()
-            .copied()
-            .filter(|p| {
-                secret_store
-                    .get_api_key(p)
-                    .ok()
-                    .is_some_and(|key| key.is_some())
-            })
-            .collect();
+        let configured = configured_supported_remote_providers(&secret_store);
 
         let level = match runtime_strategy {
             Some("local") => ReadinessLevel::Optional,
@@ -216,10 +264,7 @@ impl ReadinessScanner {
         let summary = if configured.is_empty() {
             "No remote provider API keys found in the OS keychain.".to_owned()
         } else {
-            format!(
-                "Configured providers: {}",
-                configured.join(", ")
-            )
+            format!("Configured providers: {}", configured.join(", "))
         };
 
         ReadinessItem {
@@ -241,14 +286,7 @@ impl ReadinessScanner {
         let has_local = !ollama.models.is_empty();
 
         let secret_store = SecretStore::new();
-        let has_remote = ["openai", "anthropic", "groq", "openrouter"]
-            .iter()
-            .any(|p| {
-                secret_store
-                    .get_api_key(p)
-                    .ok()
-                    .is_some_and(|k| k.is_some())
-            });
+        let has_remote = !configured_supported_remote_providers(&secret_store).is_empty();
 
         let level = match runtime_strategy {
             Some("local") if !has_local => ReadinessLevel::NeedsAction,
@@ -393,6 +431,19 @@ pub fn apply_all_fixes(_workspace: Option<&str>) -> Vec<FixOutcome> {
                 message: e,
             }),
         }
+    }
+
+    if let Some(workspace_path) = _workspace.map(str::trim).filter(|path| !path.is_empty()) {
+        let analysis = analyze_workspace(workspace_path);
+        outcomes.push(FixOutcome {
+            target: FixTarget::WorkspaceDetect,
+            success: analysis.exists,
+            message: if analysis.exists {
+                format!("Workspace analysis: {}", analysis.project_summary)
+            } else {
+                format!("Workspace analysis failed: {}", analysis.project_summary)
+            },
+        });
     }
 
     outcomes
@@ -560,6 +611,8 @@ pub struct ProviderValidationResult {
     pub success: bool,
     pub latency_ms: u64,
     pub model_count: Option<usize>,
+    #[serde(default)]
+    pub available_models: Vec<String>,
     pub error: Option<String>,
     pub diagnosis: Option<String>,
 }
@@ -570,12 +623,224 @@ pub async fn validate_provider_connection(
     api_key: Option<&str>,
     test_model: Option<&str>,
 ) -> ProviderValidationResult {
-    let client = reqwest::Client::new();
+    let provider_id = provider_id.trim().to_ascii_lowercase();
+    if provider_id.is_empty() {
+        return ProviderValidationResult {
+            provider_id,
+            success: false,
+            latency_ms: 0,
+            model_count: None,
+            available_models: Vec::new(),
+            error: Some("Provider id is required.".to_owned()),
+            diagnosis: Some("Choose a provider preset before validating.".to_owned()),
+        };
+    }
+
+    if endpoint.trim().is_empty() {
+        return ProviderValidationResult {
+            provider_id,
+            success: false,
+            latency_ms: 0,
+            model_count: None,
+            available_models: Vec::new(),
+            error: Some("Provider endpoint is required.".to_owned()),
+            diagnosis: Some("Enter the provider base URL before validating.".to_owned()),
+        };
+    }
+
+    if !is_openai_compatible_provider(&provider_id) && !is_native_provider(&provider_id) {
+        return ProviderValidationResult {
+            provider_id,
+            success: false,
+            latency_ms: 0,
+            model_count: None,
+            available_models: Vec::new(),
+            error: Some("Unsupported provider preset.".to_owned()),
+            diagnosis: Some(
+                "Use one of the supported OpenAI-compatible providers or Ollama.".to_owned(),
+            ),
+        };
+    }
+
+    let resolved_api_key = match api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => Some(value.to_owned()),
+        None => match SecretStore::new().get_api_key(&provider_id) {
+            Ok(Some(secret)) => Some(secret.expose_secret().to_owned()),
+            Ok(None) => None,
+            Err(error) => return ProviderValidationResult::from(error),
+        },
+    };
+
+    if provider_id != "custom" && resolved_api_key.is_none() {
+        return ProviderValidationResult {
+            provider_id,
+            success: false,
+            latency_ms: 0,
+            model_count: None,
+            available_models: Vec::new(),
+            error: Some("API key is missing.".to_owned()),
+            diagnosis: Some(
+                "Store the provider API key in setup before validating this connection."
+                    .to_owned(),
+            ),
+        };
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(provider_validation_timeout(&provider_id))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    if is_native_provider(&provider_id) {
+        let test_model = test_model.map(str::trim).filter(|value| !value.is_empty());
+        return match provider_id.as_str() {
+            "anthropic" => {
+                validate_anthropic_connection(
+                    &client,
+                    &provider_id,
+                    endpoint,
+                    resolved_api_key.as_deref(),
+                    test_model,
+                )
+                .await
+            }
+            "gemini" => {
+                validate_gemini_connection(
+                    &client,
+                    &provider_id,
+                    endpoint,
+                    resolved_api_key.as_deref(),
+                    test_model,
+                )
+                .await
+            }
+            _ => unreachable!("native provider guard should be exhaustive"),
+        };
+    }
+
     let start = Instant::now();
+    let endpoint = endpoint.trim_end_matches('/');
+
+    #[derive(Deserialize)]
+    struct OpenAIModelsResponse {
+        #[serde(default)]
+        data: Vec<serde_json::Value>,
+    }
+
+    let mut model_count = None;
+    let mut available_models = Vec::new();
+    let mut list_request = client.get(format!("{endpoint}/models"));
+    if let Some(key) = resolved_api_key.as_deref() {
+        list_request = list_request.bearer_auth(key);
+    }
+    match list_request.send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let model_response = resp.json::<OpenAIModelsResponse>().await.ok();
+            let listed_models = model_response.as_ref().map(|response| &response.data);
+            model_count = model_response.as_ref().map(|response| response.data.len());
+            available_models = listed_models
+                .map(|models| {
+                    models
+                        .iter()
+                        .filter_map(|model| {
+                            model
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if let Some(model) = test_model
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .filter(|model| {
+                    listed_models.is_some_and(|models| model_list_contains_model(models, model))
+                })
+            {
+                let latency = start.elapsed().as_millis() as u64;
+                let diagnosis = match model_count {
+                    Some(count) => format!(
+                        "Validated endpoint, found model '{model}', and listed {count} model(s)."
+                    ),
+                    None => format!("Validated endpoint and found model '{model}'."),
+                };
+                return ProviderValidationResult {
+                    provider_id,
+                    success: true,
+                    latency_ms: latency,
+                    model_count,
+                    available_models,
+                    error: None,
+                    diagnosis: Some(diagnosis),
+                };
+            }
+            if test_model.is_none() {
+                let latency = start.elapsed().as_millis() as u64;
+                let diagnosis = match model_count {
+                    Some(count) => format!("Validated endpoint and listed {count} model(s)."),
+                    None => format!("Validated endpoint in {latency}ms."),
+                };
+                return ProviderValidationResult {
+                    provider_id,
+                    success: true,
+                    latency_ms: latency,
+                    model_count,
+                    available_models,
+                    error: None,
+                    diagnosis: Some(diagnosis),
+                };
+            }
+        }
+        Ok(resp) if matches!(resp.status().as_u16(), 404 | 405) => {}
+        Ok(resp) => {
+            let latency = start.elapsed().as_millis() as u64;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return ProviderValidationResult {
+                provider_id,
+                success: false,
+                latency_ms: latency,
+                model_count: None,
+                available_models: Vec::new(),
+                error: Some(format!("HTTP {status}: {text}")),
+                diagnosis: Some(match status.as_u16() {
+                    401 => {
+                        "API key is invalid or missing. Check your key in the provider dashboard."
+                            .to_owned()
+                    }
+                    404 => "Endpoint not found. Verify the provider base URL.".to_owned(),
+                    429 => {
+                        "Rate limited. The key works but has hit a quota or rate limit."
+                            .to_owned()
+                    }
+                    _ => format!("Provider returned HTTP {status} while listing models."),
+                }),
+            };
+        }
+        Err(error) if error.is_timeout() || error.is_connect() => {
+            let latency = start.elapsed().as_millis() as u64;
+            return ProviderValidationResult {
+                provider_id,
+                success: false,
+                latency_ms: latency,
+                model_count: None,
+                available_models,
+                error: Some(format!("{error}")),
+                diagnosis: Some(if error.is_timeout() {
+                    "Connection timed out while checking the provider endpoint."
+                } else {
+                    "Could not connect to the provider endpoint. Verify the URL and network access."
+                }
+                .to_owned()),
+            };
+        }
+        Err(_) => {}
+    }
 
     // Try a minimal completion request
     let model = test_model.unwrap_or("gpt-4o-mini");
-    let url = format!("{}/chat/completions", endpoint.trim_end_matches('/'));
+    let url = format!("{endpoint}/chat/completions");
 
     #[derive(Serialize)]
     struct TestRequest {
@@ -600,7 +865,7 @@ pub async fn validate_provider_connection(
     };
 
     let mut req = client.post(&url).json(&body);
-    if let Some(key) = api_key {
+    if let Some(key) = resolved_api_key.as_deref() {
         req = req.bearer_auth(key);
     }
 
@@ -609,12 +874,18 @@ pub async fn validate_provider_connection(
             let latency = start.elapsed().as_millis() as u64;
             if resp.status().is_success() {
                 ProviderValidationResult {
-                    provider_id: provider_id.to_owned(),
+                    provider_id,
                     success: true,
                     latency_ms: latency,
-                    model_count: None,
+                    model_count,
+                    available_models,
                     error: None,
-                    diagnosis: Some(format!("Connected in {latency}ms")),
+                    diagnosis: Some(match model_count {
+                        Some(count) => format!(
+                            "Connected in {latency}ms and listed {count} model(s)."
+                        ),
+                        None => format!("Connected in {latency}ms"),
+                    }),
                 }
             } else {
                 let status = resp.status();
@@ -632,10 +903,11 @@ pub async fn validate_provider_connection(
                     format!("Provider returned HTTP {status}")
                 };
                 ProviderValidationResult {
-                    provider_id: provider_id.to_owned(),
+                    provider_id,
                     success: false,
                     latency_ms: latency,
-                    model_count: None,
+                    model_count,
+                    available_models,
                     error: Some(format!("HTTP {status}: {text}")),
                     diagnosis: Some(diagnosis),
                 }
@@ -651,14 +923,264 @@ pub async fn validate_provider_connection(
                 format!("Request failed: {e}")
             };
             ProviderValidationResult {
-                provider_id: provider_id.to_owned(),
+                provider_id,
                 success: false,
                 latency_ms: latency,
                 model_count: None,
+                available_models,
                 error: Some(format!("{e}")),
                 diagnosis: Some(diagnosis),
             }
         }
+    }
+}
+
+async fn validate_anthropic_connection(
+    client: &reqwest::Client,
+    provider_id: &str,
+    endpoint: &str,
+    api_key: Option<&str>,
+    test_model: Option<&str>,
+) -> ProviderValidationResult {
+    let Some(api_key) = api_key else {
+        return ProviderValidationResult {
+            provider_id: provider_id.to_owned(),
+            success: false,
+            latency_ms: 0,
+            model_count: None,
+            available_models: Vec::new(),
+            error: Some("API key is missing.".to_owned()),
+            diagnosis: Some(
+                "Store the provider API key in setup before validating this connection."
+                    .to_owned(),
+            ),
+        };
+    };
+    let model = test_model.unwrap_or("claude-sonnet-4-5");
+    let start = Instant::now();
+
+    #[derive(Serialize)]
+    struct TestRequest {
+        model: String,
+        max_tokens: u32,
+        system: String,
+        messages: Vec<TestMessage>,
+    }
+
+    #[derive(Serialize)]
+    struct TestMessage {
+        role: String,
+        content: String,
+    }
+
+    let body = TestRequest {
+        model: model.to_owned(),
+        max_tokens: 8,
+        system: "Reply with OK.".to_owned(),
+        messages: vec![TestMessage {
+            role: "user".to_owned(),
+            content: "Say OK".to_owned(),
+        }],
+    };
+
+    match client
+        .post(anthropic::messages_url(endpoint))
+        .header("anthropic-version", "2023-06-01")
+        .header("x-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let latency = start.elapsed().as_millis() as u64;
+            if resp.status().is_success() {
+                ProviderValidationResult {
+                    provider_id: provider_id.to_owned(),
+                    success: true,
+                    latency_ms: latency,
+                    model_count: None,
+                    available_models: Vec::new(),
+                    error: None,
+                    diagnosis: Some(format!(
+                        "Connected to Anthropic in {latency}ms using model '{model}'."
+                    )),
+                }
+            } else {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                ProviderValidationResult {
+                    provider_id: provider_id.to_owned(),
+                    success: false,
+                    latency_ms: latency,
+                    model_count: None,
+                    available_models: Vec::new(),
+                    error: Some(format!("HTTP {status}: {text}")),
+                    diagnosis: Some(match status.as_u16() {
+                        400 => format!(
+                            "Anthropic rejected the request. Verify the model name '{model}' and endpoint."
+                        ),
+                        401 | 403 => {
+                            "API key is invalid or missing. Check your Anthropic key.".to_owned()
+                        }
+                        404 => "Endpoint not found. Verify the Anthropic base URL.".to_owned(),
+                        429 => {
+                            "Rate limited. The Anthropic key works but has hit a quota or rate limit."
+                                .to_owned()
+                        }
+                        _ => format!("Anthropic returned HTTP {status}."),
+                    }),
+                }
+            }
+        }
+        Err(error) => network_validation_error(provider_id, start, error),
+    }
+}
+
+async fn validate_gemini_connection(
+    client: &reqwest::Client,
+    provider_id: &str,
+    endpoint: &str,
+    api_key: Option<&str>,
+    test_model: Option<&str>,
+) -> ProviderValidationResult {
+    let Some(api_key) = api_key else {
+        return ProviderValidationResult {
+            provider_id: provider_id.to_owned(),
+            success: false,
+            latency_ms: 0,
+            model_count: None,
+            available_models: Vec::new(),
+            error: Some("API key is missing.".to_owned()),
+            diagnosis: Some(
+                "Store the provider API key in setup before validating this connection."
+                    .to_owned(),
+            ),
+        };
+    };
+    let model = test_model.unwrap_or("gemini-2.5-flash");
+    let start = Instant::now();
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestRequest {
+        contents: Vec<TestContent>,
+        system_instruction: TestContent,
+        generation_config: TestGenerationConfig,
+    }
+
+    #[derive(Serialize)]
+    struct TestContent {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        parts: Vec<TestPart>,
+    }
+
+    #[derive(Serialize)]
+    struct TestPart {
+        text: String,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct TestGenerationConfig {
+        temperature: f32,
+        max_output_tokens: u32,
+    }
+
+    let body = TestRequest {
+        contents: vec![TestContent {
+            role: Some("user".to_owned()),
+            parts: vec![TestPart {
+                text: "Say OK".to_owned(),
+            }],
+        }],
+        system_instruction: TestContent {
+            role: None,
+            parts: vec![TestPart {
+                text: "Reply with OK.".to_owned(),
+            }],
+        },
+        generation_config: TestGenerationConfig {
+            temperature: 0.0,
+            max_output_tokens: 8,
+        },
+    };
+
+    match client
+        .post(gemini::generate_content_url(endpoint, model))
+        .header("x-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let latency = start.elapsed().as_millis() as u64;
+            if resp.status().is_success() {
+                ProviderValidationResult {
+                    provider_id: provider_id.to_owned(),
+                    success: true,
+                    latency_ms: latency,
+                    model_count: None,
+                    available_models: Vec::new(),
+                    error: None,
+                    diagnosis: Some(format!(
+                        "Connected to Gemini in {latency}ms using model '{model}'."
+                    )),
+                }
+            } else {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                ProviderValidationResult {
+                    provider_id: provider_id.to_owned(),
+                    success: false,
+                    latency_ms: latency,
+                    model_count: None,
+                    available_models: Vec::new(),
+                    error: Some(format!("HTTP {status}: {text}")),
+                    diagnosis: Some(match status.as_u16() {
+                        400 => format!(
+                            "Gemini rejected the request. Verify the model name '{model}' and endpoint."
+                        ),
+                        401 | 403 => {
+                            "API key is invalid or missing. Check your Gemini key.".to_owned()
+                        }
+                        404 => "Endpoint not found. Verify the Gemini base URL.".to_owned(),
+                        429 => {
+                            "Rate limited. The Gemini key works but has hit a quota or rate limit."
+                                .to_owned()
+                        }
+                        _ => format!("Gemini returned HTTP {status}."),
+                    }),
+                }
+            }
+        }
+        Err(error) => network_validation_error(provider_id, start, error),
+    }
+}
+
+fn network_validation_error(
+    provider_id: &str,
+    start: Instant,
+    error: reqwest::Error,
+) -> ProviderValidationResult {
+    let latency = start.elapsed().as_millis() as u64;
+    let diagnosis = if error.is_timeout() {
+        "Connection timed out. Check the endpoint URL and network.".to_owned()
+    } else if error.is_connect() {
+        "Could not connect to the endpoint. Verify the URL and that the service is available."
+            .to_owned()
+    } else {
+        format!("Request failed: {error}")
+    };
+
+    ProviderValidationResult {
+        provider_id: provider_id.to_owned(),
+        success: false,
+        latency_ms: latency,
+        model_count: None,
+        available_models: Vec::new(),
+        error: Some(format!("{error}")),
+        diagnosis: Some(diagnosis),
     }
 }
 
@@ -689,6 +1211,7 @@ pub async fn validate_ollama_connection(endpoint: &str) -> ProviderValidationRes
                 success: true,
                 latency_ms: latency,
                 model_count,
+                available_models: Vec::new(),
                 error: None,
                 diagnosis: model_count.map(|n| format!("{n} model(s) available")),
             }
@@ -701,6 +1224,7 @@ pub async fn validate_ollama_connection(endpoint: &str) -> ProviderValidationRes
                 success: false,
                 latency_ms: latency,
                 model_count: None,
+                available_models: Vec::new(),
                 error: Some(format!("HTTP {status}")),
                 diagnosis: Some("Ollama responded but with an error. Is it fully started?".to_owned()),
             }
@@ -712,6 +1236,7 @@ pub async fn validate_ollama_connection(endpoint: &str) -> ProviderValidationRes
                 success: false,
                 latency_ms: latency,
                 model_count: None,
+                available_models: Vec::new(),
                 error: Some(format!("{e}")),
                 diagnosis: Some(
                     "Cannot reach Ollama. Ensure it is installed and running on port 11434."
@@ -874,14 +1399,7 @@ pub fn detect_recommended_profile() -> EnvironmentProfile {
     let has_local_models = ollama.installed && ollama.running && !ollama.models.is_empty();
 
     let secret_store = SecretStore::new();
-    let has_remote = ["openai", "anthropic", "groq", "openrouter"]
-        .iter()
-        .any(|p| {
-            secret_store
-                .get_api_key(p)
-                .ok()
-                .is_some_and(|k| k.is_some())
-        });
+    let has_remote = !configured_supported_remote_providers(&secret_store).is_empty();
 
     if has_local_models && has_remote {
         EnvironmentProfile::Mixed
@@ -922,7 +1440,7 @@ pub fn apply_profile(profile: EnvironmentProfile) -> ProfileConfig {
         },
         EnvironmentProfile::ResearchHeavy => ProfileConfig {
             runtime_strategy: "remote".to_owned(),
-            research_search_mode: "brave_api".to_owned(),
+            research_search_mode: "duckduckgo_scrape".to_owned(),
             recommended_models: Vec::new(),
         },
     }
@@ -939,6 +1457,7 @@ impl From<SecretError> for ProviderValidationResult {
             success: false,
             latency_ms: 0,
             model_count: None,
+            available_models: Vec::new(),
             error: Some(format!("{err}")),
             diagnosis: Some("Could not read API key from keychain.".to_owned()),
         }
@@ -952,6 +1471,24 @@ impl From<SecretError> for ProviderValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn spawn_http_server(responses: Vec<&'static str>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0_u8; 2048];
+                let _ = stream.read(&mut buffer);
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        format!("http://{}", address)
+    }
 
     #[test]
     fn readiness_report_is_ready_when_all_ready_or_optional() {
@@ -1085,18 +1622,124 @@ mod tests {
     fn apply_profile_research_heavy_gives_remote_strategy() {
         let config = apply_profile(EnvironmentProfile::ResearchHeavy);
         assert_eq!(config.runtime_strategy, "remote");
-        assert_eq!(config.research_search_mode, "brave_api");
+        assert_eq!(config.research_search_mode, "duckduckgo_scrape");
     }
 
     #[test]
-    fn scan_returns_expected_items() {
-        let report = ReadinessScanner::scan(None, None);
-        let ids: Vec<&str> = report.items.iter().map(|i| i.id.as_str()).collect();
-        assert!(ids.contains(&"git"));
-        assert!(ids.contains(&"workspace"));
-        assert!(ids.contains(&"local_runtime"));
-        assert!(ids.contains(&"remote_providers"));
-        assert!(ids.contains(&"models"));
-        assert!(ids.contains(&"diagnostics"));
+    fn readiness_item_ids_are_stable() {
+        let ids = [
+            ReadinessScanner::check_git().id,
+            ReadinessScanner::check_workspace(None).id,
+            ReadinessScanner::check_local_runtime(false).id,
+            "remote_providers".to_owned(),
+            "models".to_owned(),
+            ReadinessScanner::check_diagnostics().id,
+        ];
+
+        assert!(ids.contains(&"git".to_owned()));
+        assert!(ids.contains(&"workspace".to_owned()));
+        assert!(ids.contains(&"local_runtime".to_owned()));
+        assert!(ids.contains(&"remote_providers".to_owned()));
+        assert!(ids.contains(&"models".to_owned()));
+        assert!(ids.contains(&"diagnostics".to_owned()));
+    }
+
+    #[test]
+    fn custom_provider_validation_timeout_is_longer_than_default() {
+        assert_eq!(
+            provider_validation_timeout("custom"),
+            Duration::from_secs(CUSTOM_PROVIDER_VALIDATION_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            provider_validation_timeout("openai"),
+            Duration::from_secs(DEFAULT_PROVIDER_VALIDATION_TIMEOUT_SECS)
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_validation_supports_anthropic_native_test_requests() {
+        let endpoint = spawn_http_server(vec![
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 84\r\n\r\n{\"content\":[{\"type\":\"text\",\"text\":\"OK\"}],\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}",
+        ]);
+
+        let result =
+            validate_provider_connection("anthropic", &endpoint, Some("test-key"), Some("claude-sonnet-4"))
+                .await;
+
+        assert!(result.success);
+        assert!(result
+            .diagnosis
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Connected to Anthropic"));
+    }
+
+    #[tokio::test]
+    async fn provider_validation_supports_openai_compatible_test_requests() {
+        let endpoint = spawn_http_server(vec![
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 25\r\n\r\n{\"data\":[{\"id\":\"model\"}]}",
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 45\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}",
+        ]);
+
+        let result = validate_provider_connection(
+            "openai",
+            &endpoint,
+            Some("test-key"),
+            Some("gpt-4o-mini"),
+        )
+        .await;
+
+        assert!(result.success);
+        assert_eq!(result.model_count, Some(1));
+        assert_eq!(result.available_models, vec!["model".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn provider_validation_succeeds_from_model_list_when_selected_model_exists() {
+        let endpoint = spawn_http_server(vec![
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 41\r\n\r\n{\"data\":[{\"id\":\"google/gemma-3-27b-it\"}]}",
+        ]);
+
+        let result = validate_provider_connection(
+            "custom",
+            &endpoint,
+            Some("test-key"),
+            Some("google/gemma-3-27b-it"),
+        )
+        .await;
+
+        assert!(result.success);
+        assert_eq!(result.model_count, Some(1));
+        assert_eq!(
+            result.available_models,
+            vec!["google/gemma-3-27b-it".to_owned()]
+        );
+        assert!(result
+            .diagnosis
+            .as_deref()
+            .unwrap_or_default()
+            .contains("found model 'google/gemma-3-27b-it'"));
+    }
+
+    #[tokio::test]
+    async fn provider_validation_supports_gemini_native_test_requests() {
+        let endpoint = spawn_http_server(vec![
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 129\r\n\r\n{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}]}}],\"usageMetadata\":{\"totalTokenCount\":5}}",
+        ]);
+
+        let result = validate_provider_connection(
+            "gemini",
+            &endpoint,
+            Some("test-key"),
+            Some("gemini-2.5-flash"),
+        )
+        .await;
+
+        assert!(result.success);
+        assert!(result
+            .diagnosis
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Connected to Gemini"));
     }
 }

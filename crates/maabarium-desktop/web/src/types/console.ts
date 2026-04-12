@@ -250,8 +250,11 @@ export type RemoteProviderSetup = {
   label: string;
   endpoint: string | null;
   modelName: string | null;
+  availableModelNames?: string[];
   fallbackOnly: boolean;
   configured: boolean;
+  supported: boolean;
+  supportSummary: string | null;
 };
 
 export type InterruptedRunNotice = {
@@ -334,6 +337,7 @@ export type ProviderValidationResult = {
   success: boolean;
   latencyMs: number;
   modelCount: number | null;
+  availableModels?: string[];
   error: string | null;
   diagnosis: string | null;
 };

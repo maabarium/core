@@ -306,6 +306,7 @@ export default function App() {
           label: provider.label,
           endpoint: provider.endpoint ?? "",
           defaultModelName: provider.modelName ?? "",
+          availableModelNames: provider.availableModelNames ?? [],
         })),
     ],
     [state, wizardLocalModelOptions],
@@ -971,11 +972,6 @@ export default function App() {
   ) => {
     setSetupSaving(true);
     try {
-      const saved = await saveDesktopSetup(nextSetup);
-      if (!saved) {
-        return;
-      }
-
       for (const [providerId, apiKey] of Object.entries(apiKeys)) {
         if (!apiKey.trim()) {
           continue;
@@ -985,6 +981,11 @@ export default function App() {
         if (!stored) {
           return;
         }
+      }
+
+      const saved = await saveDesktopSetup(nextSetup);
+      if (!saved) {
+        return;
       }
 
       setSetupOpen(false);
@@ -1274,6 +1275,8 @@ export default function App() {
             await pullRecommendedOllamaModels();
           }}
           onAnalyzeWorkspace={analyzeWorkspace}
+          onValidateProvider={validateProvider}
+          onGetRecommendedProfile={getRecommendedProfile}
           onApplyProfile={applyProfile}
         />
       ) : null}

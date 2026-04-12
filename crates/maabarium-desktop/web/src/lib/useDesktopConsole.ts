@@ -689,8 +689,7 @@ export function useDesktopConsole({
                 ? {
                     ...provider,
                     configured:
-                      apiKey.trim().length > 0 &&
-                      Boolean(provider.modelName?.trim()),
+                      apiKey.trim().length > 0 ? provider.configured : false,
                   }
                 : provider,
           ),
@@ -1098,12 +1097,9 @@ export function useDesktopConsole({
     endpoint?: string | null,
   ): Promise<ProviderValidationResult | null> => {
     try {
-      return await invoke<ProviderValidationResult>(
-        "validate_ollama_command",
-        {
-          endpoint: endpoint ?? null,
-        },
-      );
+      return await invoke<ProviderValidationResult>("validate_ollama_command", {
+        endpoint: endpoint ?? null,
+      });
     } catch (error) {
       presentDesktopError(
         "Ollama Validation Error",

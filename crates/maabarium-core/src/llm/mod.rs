@@ -9,11 +9,15 @@ use crate::error::LLMError;
 use crate::error::SecretError;
 use crate::secrets::SecretStore;
 
+pub mod anthropic;
+pub mod gemini;
 pub mod mock;
 pub mod ollama;
 pub mod openai_compat;
 pub mod pool;
 
+pub use anthropic::AnthropicProvider;
+pub use gemini::GeminiProvider;
 pub use mock::MockProvider;
 pub use ollama::OllamaProvider;
 pub use openai_compat::OpenAICompatProvider;
@@ -78,11 +82,40 @@ pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, Sec
                 model.max_tokens,
             )))
         }
+        "anthropic" => {
+            let api_key = required_provider_secret(&provider_name, model.api_key_env.as_deref())?;
+            Ok(Arc::new(AnthropicProvider::new(
+                model.endpoint.clone(),
+                model.name.clone(),
+                api_key,
+                model.max_tokens,
+            )))
+        }
+        "gemini" => {
+            let api_key = required_provider_secret(&provider_name, model.api_key_env.as_deref())?;
+            Ok(Arc::new(GeminiProvider::new(
+                model.endpoint.clone(),
+                model.name.clone(),
+                api_key,
+                model.max_tokens,
+            )))
+        }
         _ => Err(SecretError::InvalidInput(format!(
             "Unsupported model provider '{}' for model '{}'",
             model.provider, model.name
         ))),
     }
+}
+
+fn required_provider_secret(
+    provider_name: &str,
+    env_var: Option<&str>,
+) -> Result<SecretString, SecretError> {
+    provider_secret(provider_name, env_var)?.ok_or_else(|| {
+        SecretError::InvalidInput(format!(
+            "No API key configured for provider '{provider_name}'"
+        ))
+    })
 }
 
 pub fn provider_from_models(
@@ -132,6 +165,22 @@ mod tests {
     use crate::blueprint::ModelDef;
     use crate::error::SecretError;
 
+    fn with_test_provider_key(action: impl FnOnce()) {
+        let previous = std::env::var_os("TEST_PROVIDER_KEY");
+        unsafe {
+            std::env::set_var("TEST_PROVIDER_KEY", "unit-test-provider-key");
+        }
+        action();
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("TEST_PROVIDER_KEY", value);
+            },
+            None => unsafe {
+                std::env::remove_var("TEST_PROVIDER_KEY");
+            },
+        }
+    }
+
     fn test_model(provider: &str) -> ModelDef {
         ModelDef {
             name: "test-model".to_owned(),
@@ -146,10 +195,34 @@ mod tests {
 
     #[test]
     fn resolves_xai_as_openai_compatible_provider() {
-        let provider = provider_from_model(&test_model("xai")).expect("xai should resolve");
+        with_test_provider_key(|| {
+            let provider = provider_from_model(&test_model("xai")).expect("xai should resolve");
 
-        assert_eq!(provider.provider_name(), "openai-compat");
-        assert_eq!(provider.model_name(), "test-model");
+            assert_eq!(provider.provider_name(), "openai-compat");
+            assert_eq!(provider.model_name(), "test-model");
+        });
+    }
+
+    #[test]
+    fn resolves_anthropic_as_native_provider() {
+        with_test_provider_key(|| {
+            let provider = provider_from_model(&test_model("anthropic"))
+                .expect("anthropic should resolve");
+
+            assert_eq!(provider.provider_name(), "anthropic");
+            assert_eq!(provider.model_name(), "test-model");
+        });
+    }
+
+    #[test]
+    fn resolves_gemini_as_native_provider() {
+        with_test_provider_key(|| {
+            let provider =
+                provider_from_model(&test_model("gemini")).expect("gemini should resolve");
+
+            assert_eq!(provider.provider_name(), "gemini");
+            assert_eq!(provider.model_name(), "test-model");
+        });
     }
 
     #[test]

@@ -957,6 +957,7 @@ function buildRemoteWizardModels(
   return (remoteProviders ?? [])
     .filter(
       (provider) =>
+        provider.supported &&
         provider.configured &&
         Boolean(provider.endpoint?.trim()) &&
         Boolean(provider.modelName?.trim()),

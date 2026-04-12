@@ -16,6 +16,7 @@ use maabarium_core::{
     GitDependencyEnsureOutcome, PersistedProposal, Persistence, ProcessPluginManifest,
     SecretStore, ensure_git_dependency, git_dependency_status,
 };
+use maabarium_core::error::EngineError;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -2326,6 +2327,14 @@ fn engine_phase_label(phase: EnginePhase) -> &'static str {
     }
 }
 
+fn is_expected_engine_cancellation(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<EngineError>()
+            .is_some_and(|engine_error| matches!(engine_error, EngineError::Cancelled))
+    })
+}
+
 fn run_workspace_root(path: &Path) -> Result<PathBuf, String> {
     let repo = Repository::discover(path).map_err(|error| {
         format!(
@@ -2523,7 +2532,9 @@ fn set_provider_api_key(
         .iter_mut()
         .find(|provider| provider.provider_id == provider_id)
     {
-        provider.configured = has_api_key && provider.model_name.is_some();
+        if !has_api_key {
+            provider.configured = false;
+        }
     }
     persist_desktop_setup(&state.settings_path, &setup)?;
 
@@ -3019,7 +3030,11 @@ fn start_engine(
             .await;
 
             if let Err(error) = outcome {
-                error!(?error, "Desktop engine execution failed");
+                if is_expected_engine_cancellation(&error) {
+                    info!(?error, "Desktop engine execution cancelled");
+                } else {
+                    error!(?error, "Desktop engine execution failed");
+                }
             }
             running_flag.store(false, Ordering::SeqCst);
             reset_run_state_handle(&progress_state);
@@ -3434,6 +3449,21 @@ mod tests {
             created_at: "2026-03-28T00:00:00Z".to_owned(),
             file_patches: Vec::new(),
         }
+    }
+
+    #[test]
+    fn expected_engine_cancellation_detects_wrapped_cancelled_errors() {
+        let error = anyhow::Error::new(EngineError::Cancelled).context("Engine run failed");
+
+        assert!(is_expected_engine_cancellation(&error));
+    }
+
+    #[test]
+    fn expected_engine_cancellation_ignores_non_cancelled_engine_errors() {
+        let error = anyhow::Error::new(EngineError::Llm(maabarium_core::error::LLMError::Timeout))
+            .context("Engine run failed");
+
+        assert!(!is_expected_engine_cancellation(&error));
     }
 
     fn unique_test_directory(name: &str) -> PathBuf {

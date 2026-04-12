@@ -16,7 +16,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Desktop setup now lets remote provider validation discover model ids first, then exposes those results through an in-modal searchable picker for custom and known remote providers, and the blueprint wizard now uses retained searchable pickers for primary selection, advanced agent assignment, and remote model-pool editing so validated remote models remain searchable, selectable, and persisted instead of falling back to Ollama-only choices.
+- Custom OpenAI-compatible provider validation now uses a longer default timeout than built-in providers, and OpenAI-compatible validation now accepts a successful `/models` response as a pass when the selected model is present, reducing false timeout failures for slower hosted endpoints during setup validation.
+- Desktop setup no longer resets the modal back to Guided mode on live console-state refresh while it is open, Guided versus Advanced now expose distinct onboarding controls instead of rendering the same UI, and the workspace widget no longer re-runs its inspection/analysis loop on every polled parent rerender.
+- Desktop now logs expected engine cancellations as cancellations instead of execution failures, reducing false-error noise when a run is intentionally stopped or unwinds during shutdown.
+- Guided setup now validates supported OpenAI-compatible remote providers plus native Anthropic and Gemini providers before saving desktop setup, uses the real recommended-profile detection path, maps desktop readiness through the shared core scanner, and exposes the native Anthropic/Gemini presets in suggested workflow models only after runtime support succeeds.
+- Guided setup profiles now keep DuckDuckGo scrape as the default research discovery mode for all presets, including Research Heavy; operators must switch to Advanced mode before opting into Brave API.
+- Desktop setup now suggests known-good default model names for native Anthropic and Gemini providers directly in the provider editor, reducing invalid manual model entry during first-run configuration.
 
 ### Breaking Changes
 
