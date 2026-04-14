@@ -1,4 +1,7 @@
-use super::{CompletionRequest, CompletionResponse, LLMProvider, ResponseFormat};
+use super::{
+    CompletionRequest, CompletionResponse, LLMProvider, ResponseFormat,
+    build_provider_http_client, send_with_provider_retry,
+};
 use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -24,7 +27,7 @@ impl AnthropicProvider {
         max_tokens: u32,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: build_provider_http_client(),
             endpoint: endpoint.into(),
             model: model.into(),
             api_key,
@@ -114,20 +117,15 @@ impl LLMProvider for AnthropicProvider {
         };
 
         let start = Instant::now();
-        let resp = self
-            .client
-            .post(messages_url(&self.endpoint))
-            .header("anthropic-version", ANTHROPIC_API_VERSION)
-            .header("x-api-key", self.api_key.expose_secret())
-            .header(reqwest::header::ACCEPT, response_mime_type(request))
-            .json(&body)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(LLMError::Provider(format!("HTTP {status}: {text}")));
-        }
+        let resp = send_with_provider_retry(self.provider_name(), self.model_name(), || {
+            self.client
+                .post(messages_url(&self.endpoint))
+                .header("anthropic-version", ANTHROPIC_API_VERSION)
+                .header("x-api-key", self.api_key.expose_secret())
+                .header(reqwest::header::ACCEPT, response_mime_type(request))
+                .json(&body)
+        })
+        .await?;
 
         let response: AnthropicResponse = resp.json().await?;
         let content = response

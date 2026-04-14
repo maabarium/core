@@ -1,4 +1,7 @@
-use super::{CompletionRequest, CompletionResponse, LLMProvider, ResponseFormat};
+use super::{
+    CompletionRequest, CompletionResponse, LLMProvider, ResponseFormat,
+    build_provider_http_client, send_with_provider_retry,
+};
 use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -23,7 +26,7 @@ impl GeminiProvider {
         max_tokens: u32,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: build_provider_http_client(),
             endpoint: endpoint.into(),
             model: model.into(),
             api_key,
@@ -155,18 +158,13 @@ impl LLMProvider for GeminiProvider {
         };
 
         let start = Instant::now();
-        let resp = self
-            .client
-            .post(generate_content_url(&self.endpoint, &self.model))
-            .header("x-goog-api-key", self.api_key.expose_secret())
-            .json(&body)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(LLMError::Provider(format!("HTTP {status}: {text}")));
-        }
+        let resp = send_with_provider_retry(self.provider_name(), self.model_name(), || {
+            self.client
+                .post(generate_content_url(&self.endpoint, &self.model))
+                .header("x-goog-api-key", self.api_key.expose_secret())
+                .json(&body)
+        })
+        .await?;
 
         let response: GeminiResponse = resp.json().await?;
         if let Some(block_reason) = response

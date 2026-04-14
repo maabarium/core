@@ -117,6 +117,36 @@ impl LLMProvider for MockProvider {
                     latency: std::time::Duration::from_millis(5),
                 });
             }
+            if request.prompt.contains("MAABARIUM_MOCK_RESEARCH_EVIDENCE_GAP") {
+                return Ok(CompletionResponse {
+                    content: json!({
+                        "summary": "Evidence gap: No external URLs were available to verify the claim set. Search for \"Qwen-2.5-32B comfortable VRAM requirements\" before attempting another patch.",
+                        "file_patches": []
+                    })
+                    .to_string(),
+                    tokens_used: 16,
+                    latency: std::time::Duration::from_millis(5),
+                });
+            }
+            if request
+                .prompt
+                .contains("MAABARIUM_MOCK_RESEARCH_EVIDENCE_GAP_VARIANT")
+            {
+                let summary = if request.prompt.contains("Iteration: 1") {
+                    "Unable to verify the official updater channel details without live access to authoritative Tauri documentation. Search for \"Tauri updater stable beta channels official docs\" before attempting another patch."
+                } else {
+                    "Evidence gap: The DuckDuckGo HTML scrape fallback did not surface verifiable authoritative pages for Tauri updater channel configuration. Search for \"Tauri updater channel configuration official docs\" before attempting another patch."
+                };
+                return Ok(CompletionResponse {
+                    content: json!({
+                        "summary": summary,
+                        "file_patches": []
+                    })
+                    .to_string(),
+                    tokens_used: 16,
+                    latency: std::time::Duration::from_millis(5),
+                });
+            }
             if request.prompt.contains("No existing target files were found. Create a new markdown file") {
                 let path = Self::extract_safe_markdown_create_path(&request.prompt)
                     .unwrap_or_else(|| "docs/draft.md".to_owned());

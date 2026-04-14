@@ -987,7 +987,6 @@ fn prepare_desktop_runtime_paths() -> anyhow::Result<DesktopRuntimePaths> {
 
     if desktop_runtime_allows_legacy_migration() {
         migrate_legacy_runtime_file(&default_db_path(), &db_path)?;
-        migrate_legacy_runtime_file(&default_log_path(), &log_path)?;
     }
 
     Ok(DesktopRuntimePaths {
@@ -3573,6 +3572,58 @@ mod tests {
             telemetry.npu.status,
             HardwareSensorStatus::Unavailable
         ));
+    }
+
+    #[test]
+    fn desktop_runtime_paths_do_not_migrate_legacy_log_file() {
+        let legacy_log_path = default_log_path();
+        let original_legacy_content = std::fs::read(&legacy_log_path).ok();
+        let legacy_parent = legacy_log_path
+            .parent()
+            .expect("legacy log path should have a parent")
+            .to_path_buf();
+        std::fs::create_dir_all(&legacy_parent).expect("legacy log parent should exist");
+        std::fs::write(&legacy_log_path, "legacy repo-local log\n")
+            .expect("legacy log fixture should be written");
+
+        let temp_home = unique_test_directory("desktop-runtime-home");
+        let original_home = std::env::var_os("HOME");
+        std::fs::create_dir_all(&temp_home).expect("temp home should be created");
+        unsafe {
+            std::env::set_var("HOME", &temp_home);
+        }
+
+        let runtime_paths = prepare_desktop_runtime_paths().expect("runtime paths should prepare");
+
+        assert!(!runtime_paths.log_path.exists());
+        assert_eq!(
+            runtime_paths.log_path,
+            temp_home
+                .join("Library")
+                .join("Logs")
+                .join(DEV_DESKTOP_RUNTIME_ID)
+                .join("maabarium.log")
+        );
+
+        if let Some(home) = original_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+
+        match original_legacy_content {
+            Some(content) => std::fs::write(&legacy_log_path, content)
+                .expect("original legacy log content should be restored"),
+            None => {
+                let _ = std::fs::remove_file(&legacy_log_path);
+            }
+        }
+
+        std::fs::remove_dir_all(&temp_home).ok();
     }
 
     #[test]

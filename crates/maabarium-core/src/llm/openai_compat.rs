@@ -1,4 +1,7 @@
-use super::{CompletionRequest, CompletionResponse, LLMProvider};
+use super::{
+    CompletionRequest, CompletionResponse, LLMProvider, build_provider_http_client,
+    send_with_provider_retry,
+};
 use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -22,7 +25,7 @@ impl OpenAICompatProvider {
         max_tokens: u32,
     ) -> Self {
         Self {
-            client: Client::new(),
+            client: build_provider_http_client(),
             endpoint: endpoint.into(),
             model: model.into(),
             api_key,
@@ -85,17 +88,15 @@ impl LLMProvider for OpenAICompatProvider {
             temperature: request.temperature,
             max_tokens: request.max_tokens,
         };
-        let mut req = self.client.post(&url).json(&body);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key.expose_secret());
-        }
         let start = Instant::now();
-        let resp = req.send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(LLMError::Provider(format!("HTTP {status}: {text}")));
-        }
+        let resp = send_with_provider_retry(self.provider_name(), self.model_name(), || {
+            let mut req = self.client.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key.expose_secret());
+            }
+            req
+        })
+        .await?;
         let openai_resp: OpenAIResponse = resp.json().await?;
         let latency = start.elapsed();
         let content = openai_resp

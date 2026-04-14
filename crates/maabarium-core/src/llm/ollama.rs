@@ -1,4 +1,7 @@
-use super::{CompletionRequest, CompletionResponse, LLMProvider};
+use super::{
+    CompletionRequest, CompletionResponse, LLMProvider, build_provider_http_client,
+    send_with_provider_retry,
+};
 use crate::error::LLMError;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -19,7 +22,7 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>, max_tokens: u32) -> Self {
         Self {
-            client: Client::new(),
+            client: build_provider_http_client(),
             endpoint: endpoint.into(),
             model: model.into(),
             max_tokens,
@@ -110,12 +113,10 @@ impl LLMProvider for OllamaProvider {
             },
         };
         let start = Instant::now();
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(LLMError::Provider(format!("HTTP {status}: {text}")));
-        }
+        let resp = send_with_provider_retry(self.provider_name(), self.model_name(), || {
+            self.client.post(&url).json(&body)
+        })
+        .await?;
         let raw_payload = resp.text().await?;
         let ollama_resp: OllamaResponse = serde_json::from_str(&raw_payload).map_err(|error| {
             LLMError::InvalidResponse(format!(

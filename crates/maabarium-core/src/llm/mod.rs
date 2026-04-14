@@ -1,8 +1,12 @@
 use async_trait::async_trait;
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 
 use secrecy::SecretString;
+use tokio::time::sleep;
+use tracing::warn;
 
 use crate::blueprint::{ModelAssignment, ModelDef, ModelsConfig};
 use crate::error::LLMError;
@@ -22,6 +26,10 @@ pub use mock::MockProvider;
 pub use ollama::OllamaProvider;
 pub use openai_compat::OpenAICompatProvider;
 pub use pool::{ModelPool, PoolMember};
+
+const DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS: u64 = 90;
+const DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
@@ -54,6 +62,86 @@ pub trait LLMProvider: Send + Sync {
     fn configured_max_tokens(&self) -> Option<u32> {
         None
     }
+}
+
+pub(crate) fn build_provider_http_client() -> Client {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(
+            DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS,
+        ))
+        .timeout(Duration::from_secs(DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+pub(crate) async fn send_with_provider_retry<F>(
+    provider_name: &str,
+    model_name: &str,
+    mut build_request: F,
+) -> Result<Response, LLMError>
+where
+    F: FnMut() -> RequestBuilder,
+{
+    let mut backoff = Duration::from_millis(750);
+
+    for attempt in 1..=DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS {
+        match build_request().send().await {
+            Ok(response) if response.status().is_success() => return Ok(response),
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if is_transient_status(status) && attempt < DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS {
+                    warn!(
+                        provider = provider_name,
+                        model = model_name,
+                        status = %status,
+                        attempt,
+                        max_attempts = DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "Retrying transient provider HTTP status"
+                    );
+                    sleep(backoff).await;
+                    backoff *= 2;
+                    continue;
+                }
+                return Err(LLMError::Provider(format!("HTTP {status}: {body}")));
+            }
+            Err(error)
+                if is_transient_reqwest_error(&error)
+                    && attempt < DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS =>
+            {
+                warn!(
+                    provider = provider_name,
+                    model = model_name,
+                    attempt,
+                    max_attempts = DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %error,
+                    "Retrying transient provider request failure"
+                );
+                sleep(backoff).await;
+                backoff *= 2;
+            }
+            Err(error) => return Err(LLMError::Http(error)),
+        }
+    }
+
+    Err(LLMError::Timeout)
+}
+
+fn is_transient_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    ) || status.is_server_error()
+}
+
+fn is_transient_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
 }
 
 pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, SecretError> {
@@ -161,9 +249,14 @@ pub fn provider_secret(
 
 #[cfg(test)]
 mod tests {
+    use super::{build_provider_http_client, send_with_provider_retry};
     use super::provider_from_model;
     use crate::blueprint::ModelDef;
+    use crate::error::LLMError;
     use crate::error::SecretError;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     fn with_test_provider_key(action: impl FnOnce()) {
         let previous = std::env::var_os("TEST_PROVIDER_KEY");
@@ -179,6 +272,63 @@ mod tests {
                 std::env::remove_var("TEST_PROVIDER_KEY");
             },
         }
+    }
+
+    fn spawn_retry_server(responses: Vec<(&'static str, &'static str)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener.local_addr().expect("local addr should resolve");
+
+        thread::spawn(move || {
+            for (status_line, body) in responses {
+                let (mut stream, _) = listener.accept().expect("request should arrive");
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer);
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("response should write");
+            }
+        });
+
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn retries_transient_provider_statuses() {
+        let endpoint = spawn_retry_server(vec![
+            ("503 Service Unavailable", r#"{"error":"busy"}"#),
+            ("200 OK", r#"{"ok":true}"#),
+        ]);
+        let client = build_provider_http_client();
+
+        let response = send_with_provider_retry("openai-compat", "retry-model", || {
+            client.get(&endpoint)
+        })
+        .await
+        .expect("second attempt should succeed");
+
+        let body = response.text().await.expect("response body should read");
+        assert_eq!(body, r#"{"ok":true}"#);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_non_transient_provider_statuses() {
+        let endpoint = spawn_retry_server(vec![(
+            "400 Bad Request",
+            r#"{"error":"bad request"}"#,
+        )]);
+        let client = build_provider_http_client();
+
+        let error = send_with_provider_retry("openai-compat", "retry-model", || {
+            client.get(&endpoint)
+        })
+        .await
+        .expect_err("client error should not retry");
+
+        assert!(matches!(error, LLMError::Provider(message) if message.contains("400 Bad Request")));
     }
 
     fn test_model(provider: &str) -> ModelDef {
