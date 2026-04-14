@@ -8,6 +8,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.4.0] - 2026-04-14
+
+### Added
+
 - Guided setup now ships as a full readiness feature set with the shared `setup_wizard` scanner, one-click local dependency fixes, supported-provider validation helpers, workspace auto-detection, saved environment profiles, and the CLI `maabarium setup` flow with `--check` and `--json` modes.
 
 ### Changed
