@@ -344,6 +344,119 @@ async fn engine_rejects_empty_patchset_even_when_score_improves() {
 }
 
 #[tokio::test]
+async fn engine_stops_after_repeated_research_evidence_gap_noops() {
+    let repo_root = std::env::temp_dir().join(format!("maabarium-engine-research-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(repo_root.join("research")).expect("temp repo research dir should be created");
+    fs::write(
+        repo_root.join("research/comfortable.md"),
+        "# Comfortable setup\n\n- Capture verified VRAM requirements here.\n",
+    )
+    .expect("seed research note should be created");
+    init_git_repo_with_document(&repo_root, "research/comfortable.md");
+
+    let blueprint_path = repo_root.join("mock_research_blueprint.toml");
+    fs::write(
+        &blueprint_path,
+        format!(
+            "[blueprint]\nname = \"mock-research-evidence-gap\"\nversion = \"0.1.0\"\ndescription = \"MAABARIUM_MOCK_RESEARCH_EVIDENCE_GAP\"\n\n[domain]\nrepo_path = \"{}\"\ntarget_files = [\"research/**/*.md\"]\nlanguage = \"research\"\n\n[constraints]\nmax_iterations = 3\ntimeout_seconds = 30\nrequire_tests_pass = false\nmin_improvement = 0.01\n\n[metrics]\nmetrics = [\n    {{ name = \"quality\", weight = 1.0, direction = \"maximize\", description = \"Quality score\" }},\n]\n\n[agents]\ncouncil_size = 1\ndebate_rounds = 0\nagents = [\n    {{ name = \"test-agent\", role = \"researcher\", system_prompt = \"You are a research agent.\", model = \"mock\" }},\n]\n\n[models]\nmodels = [\n    {{ name = \"mock\", provider = \"mock\", endpoint = \"http://localhost:11434\", temperature = 0.5, max_tokens = 256 }},\n]\n",
+            repo_root.display()
+        ),
+    )
+    .expect("blueprint should be written");
+
+    let blueprint = BlueprintFile::load(&blueprint_path).expect("Failed to load mock blueprint");
+    let evaluator = Arc::new(SequenceEvaluator {
+        scores: Mutex::new(vec![0.4, 0.4, 0.4]),
+    });
+    let cancel = CancellationToken::new();
+    let db_path = repo_root.join("maabarium_test.db");
+
+    let config = EngineConfig {
+        blueprint,
+        db_path: db_path.display().to_string(),
+        progress_reporter: None,
+    };
+
+    let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
+    engine.run().await.expect("engine should complete");
+
+    let persistence =
+        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+            .expect("db should open");
+    let experiments = persistence
+        .recent_experiments_for_blueprint("mock-research-evidence-gap", 10)
+        .expect("experiments should load");
+
+    assert_eq!(experiments.len(), 2);
+    assert!(
+        experiments
+            .iter()
+            .all(|experiment| experiment.promotion_outcome == PromotionOutcome::Rejected)
+    );
+    assert!(
+        experiments
+            .iter()
+            .all(|experiment| experiment.proposal_summary.contains("Evidence gap:"))
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn engine_stops_after_consecutive_research_evidence_gap_noops_even_when_queries_shift() {
+    let repo_root = std::env::temp_dir().join(format!("maabarium-engine-research-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(repo_root.join("research")).expect("temp repo research dir should be created");
+    fs::write(
+        repo_root.join("research/brief.md"),
+        "# Research brief\n\n- Gather authoritative sources here.\n",
+    )
+    .expect("seed research note should be created");
+    init_git_repo_with_document(&repo_root, "research/brief.md");
+
+    let blueprint_path = repo_root.join("mock_research_blueprint.toml");
+    fs::write(
+        &blueprint_path,
+        format!(
+            "[blueprint]\nname = \"mock-research-evidence-gap-variant\"\nversion = \"0.1.0\"\ndescription = \"MAABARIUM_MOCK_RESEARCH_EVIDENCE_GAP_VARIANT\"\n\n[domain]\nrepo_path = \"{}\"\ntarget_files = [\"research/**/*.md\"]\nlanguage = \"research\"\n\n[constraints]\nmax_iterations = 3\ntimeout_seconds = 30\nrequire_tests_pass = false\nmin_improvement = 0.01\n\n[metrics]\nmetrics = [\n    {{ name = \"quality\", weight = 1.0, direction = \"maximize\", description = \"Quality score\" }},\n]\n\n[agents]\ncouncil_size = 1\ndebate_rounds = 0\nagents = [\n    {{ name = \"test-agent\", role = \"researcher\", system_prompt = \"You are a research agent.\", model = \"mock\" }},\n]\n\n[models]\nmodels = [\n    {{ name = \"mock\", provider = \"mock\", endpoint = \"http://localhost:11434\", temperature = 0.5, max_tokens = 256 }},\n]\n",
+            repo_root.display()
+        ),
+    )
+    .expect("blueprint should be written");
+
+    let blueprint = BlueprintFile::load(&blueprint_path).expect("Failed to load mock blueprint");
+    let evaluator = Arc::new(SequenceEvaluator {
+        scores: Mutex::new(vec![0.4, 0.4, 0.4]),
+    });
+    let cancel = CancellationToken::new();
+    let db_path = repo_root.join("maabarium_test.db");
+
+    let config = EngineConfig {
+        blueprint,
+        db_path: db_path.display().to_string(),
+        progress_reporter: None,
+    };
+
+    let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
+    engine.run().await.expect("engine should complete");
+
+    let persistence =
+        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+            .expect("db should open");
+    let experiments = persistence
+        .recent_experiments_for_blueprint("mock-research-evidence-gap-variant", 10)
+        .expect("experiments should load");
+
+    assert_eq!(experiments.len(), 2);
+    assert!(
+        experiments
+            .iter()
+            .all(|experiment| experiment.promotion_outcome == PromotionOutcome::Rejected)
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn engine_uses_reusable_workspace_for_document_follow_up_iterations() {
     let repo_root = std::env::temp_dir().join(format!("maabarium-engine-doc-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(repo_root.join("docs")).expect("temp repo docs should be created");

@@ -32,6 +32,19 @@ Potential improvements:
 - richer workspace onboarding that detects repo health, test commands, and likely target files automatically
 - saved environment profiles for different use cases such as local-only, mixed runtime, and research-heavy workflows
 
+Implementation status (2026-04-10):
+
+- [x] `setup_wizard` core module with `ReadinessScanner`, workspace auto-detection, environment profiles, and supported-provider aware validation helpers
+- [x] `maabarium setup` CLI subcommand with `--check` and `--json` modes
+- [x] One-click readiness fixes for local runtime dependencies plus workspace analysis feedback (`apply_git_fix`, `apply_all_fixes`)
+- [x] Provider connection validation for supported OpenAI-compatible providers, Ollama, and native Anthropic/Gemini providers
+- [x] Workspace auto-detection (language, test command, target files, CI config)
+- [x] Environment profiles (`LocalOnly`, `Mixed`, `ResearchHeavy`) with auto-detection and desktop application of recommended local model defaults
+- [x] Desktop Tauri commands for readiness scan, workspace analysis, provider validation, profile management, and local-fix orchestration
+- [x] `environment_profile` field added to `DesktopSetupState` persistence
+- [x] Desktop readiness UI now maps shared `ReadinessScanner` items, keeps research/update checks layered on top, and enforces provider validation before saving setup
+- [x] Desktop suggested remote models now filter out unsupported provider presets, and regression coverage exists for setup validation plus unsupported-provider filtering
+
 Why it matters:
 
 Users should spend less time configuring Maabarium and more time running improvement loops that actually produce value.

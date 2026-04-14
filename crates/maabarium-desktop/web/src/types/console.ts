@@ -250,8 +250,11 @@ export type RemoteProviderSetup = {
   label: string;
   endpoint: string | null;
   modelName: string | null;
+  availableModelNames?: string[];
   fallbackOnly: boolean;
   configured: boolean;
+  supported: boolean;
+  supportSummary: string | null;
 };
 
 export type InterruptedRunNotice = {
@@ -275,6 +278,7 @@ export type DesktopSetupState = {
   remindLaterVersion: string | null;
   lastSetupCompletedAt: string | null;
   interruptedRunNotice: InterruptedRunNotice | null;
+  environmentProfile: string | null;
 };
 
 export type RunStatus = "idle" | "running" | "stopping";
@@ -302,6 +306,52 @@ export type ReadinessItem = {
   summary: string;
   actionLabel: string;
   lastCheckedAtEpochMs: number;
+};
+
+export type ReadinessReportItem = {
+  id: string;
+  title: string;
+  status: ReadinessStatus;
+  summary: string;
+  fixLabel: string | null;
+  fixHint: string | null;
+};
+
+export type ReadinessReport = {
+  items: ReadinessReportItem[];
+};
+
+export type WorkspaceAnalysis = {
+  path: string;
+  exists: boolean;
+  isGitRepo: boolean;
+  language: string | null;
+  testCommand: string | null;
+  suggestedTargetFiles: string[];
+  hasCiConfig: boolean;
+  projectSummary: string;
+};
+
+export type ProviderValidationResult = {
+  providerId: string;
+  success: boolean;
+  latencyMs: number;
+  modelCount: number | null;
+  availableModels?: string[];
+  error: string | null;
+  diagnosis: string | null;
+};
+
+export type FixOutcome = {
+  target: string;
+  success: boolean;
+  message: string;
+};
+
+export type ProfileConfig = {
+  runtimeStrategy: string;
+  researchSearchMode: string;
+  recommendedModels: string[];
 };
 
 export type GitDependencyState = {

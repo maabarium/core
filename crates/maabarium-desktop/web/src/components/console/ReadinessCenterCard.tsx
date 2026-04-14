@@ -5,10 +5,12 @@ import {
   LoaderCircle,
   Rocket,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import type {
   ExperimentBranchCleanupResult,
   ExperimentBranchInventory,
+  FixOutcome,
   GitDependencyState,
   OllamaStatus,
   ReadinessItem,
@@ -36,6 +38,7 @@ export function ReadinessCenterCard({
   onInstallGit,
   onInstallOllama,
   onStartOllama,
+  onApplyFixes,
   onPreviewBranchCleanup,
   onCleanupBranches,
   embedded = false,
@@ -48,6 +51,7 @@ export function ReadinessCenterCard({
   onInstallGit: () => void;
   onInstallOllama: () => void;
   onStartOllama: () => void;
+  onApplyFixes: () => Promise<FixOutcome[] | null>;
   onPreviewBranchCleanup: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
@@ -63,8 +67,9 @@ export function ReadinessCenterCard({
     useState<ExperimentBranchCleanupResult | null>(null);
   const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<
-    "preview" | "cleanup" | null
+    "preview" | "cleanup" | "fix_all" | null
   >(null);
+  const [fixResults, setFixResults] = useState<FixOutcome[] | null>(null);
   const requiredItems = readinessItems.filter(
     (item) => item.status !== "optional",
   );
@@ -125,6 +130,18 @@ export function ReadinessCenterCard({
     }
 
     setCleanupConfirmOpen(true);
+  };
+
+  const handleFixAll = async () => {
+    if (pendingAction !== null) {
+      return;
+    }
+
+    setPendingAction("fix_all");
+    setFixResults(null);
+    const results = await onApplyFixes();
+    setFixResults(results);
+    setPendingAction(null);
   };
 
   const content = (
@@ -189,6 +206,50 @@ export function ReadinessCenterCard({
             </div>
           ))}
         </div>
+
+        {blockedItems.length > 0 ? (
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => void handleFixAll()}
+              disabled={pendingAction !== null}
+              className="w-full rounded-lg border border-teal-400/20 bg-gradient-to-r from-teal-500/15 to-amber-400/15 px-3 py-3 text-left transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white">
+                {pendingAction === "fix_all" ? (
+                  <LoaderCircle size={14} className="animate-spin" />
+                ) : (
+                  <Wrench size={14} />
+                )}
+                Fix All ({blockedItems.length} item{blockedItems.length === 1 ? "" : "s"})
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                Attempt automatic fixes for all items that need attention.
+              </div>
+            </button>
+
+            {fixResults && fixResults.length > 0 ? (
+              <div className="rounded-lg border border-white/10 bg-slate-950/50 px-3 py-3">
+                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                  Fix Results
+                </div>
+                <div className="mt-2 space-y-1">
+                  {fixResults.map((result) => (
+                    <div
+                      key={result.target}
+                      className="flex items-start gap-2 text-[11px] leading-relaxed"
+                    >
+                      <Badge color={result.success ? "emerald" : "rose"}>
+                        {result.success ? "OK" : "Failed"}
+                      </Badge>
+                      <span className="text-slate-300">{result.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="rounded-lg border border-white/10 bg-slate-950/50 px-3 py-3">
           <div className="flex flex-col gap-3">

@@ -17,10 +17,18 @@ function TestHarness({
   inspectWorkspace,
   initialForm,
   localModelOptions,
+  providerOptions,
 }: {
   inspectWorkspace?: (path: string) => Promise<WorkspaceGitStatus | null>;
   initialForm?: BlueprintWizardForm;
   localModelOptions?: string[];
+  providerOptions?: Array<{
+    id: string;
+    label: string;
+    endpoint: string;
+    defaultModelName: string;
+    availableModelNames?: string[];
+  }>;
 }) {
   const [form, setForm] = useState<BlueprintWizardForm>(
     () => initialForm ?? buildWizardForm(null),
@@ -39,6 +47,116 @@ function TestHarness({
     (model) => (typeof model?.name === "string" ? model.name : ""),
   );
 
+  const addMetric = () => {
+    setForm((current) => ({
+      ...current,
+      metrics: [
+        ...current.metrics,
+        {
+          name: "new_metric",
+          weight: 0.1,
+          direction: "maximize",
+          description: "Describe how this metric should be judged.",
+        },
+      ],
+    }));
+  };
+
+  const updateMetric = (
+    index: number,
+    field: keyof BlueprintWizardForm["metrics"][number],
+    value: string | number,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      metrics: current.metrics.map((metric, metricIndex) =>
+        metricIndex === index ? { ...metric, [field]: value } : metric,
+      ),
+    }));
+  };
+
+  const removeMetric = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      metrics: current.metrics.filter(
+        (_, metricIndex) => metricIndex !== index,
+      ),
+    }));
+  };
+
+  const addAgent = () => {
+    setForm((current) => ({
+      ...current,
+      agents: [
+        ...current.agents,
+        {
+          name: `agent_${current.agents.length + 1}`,
+          role: "specialist",
+          systemPrompt: "Describe how this agent should contribute.",
+          model: current.models[0]?.name ?? "llama3",
+        },
+      ],
+    }));
+  };
+
+  const updateAgent = (
+    index: number,
+    field: keyof BlueprintWizardForm["agents"][number],
+    value: string,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      agents: current.agents.map((agent, agentIndex) =>
+        agentIndex === index ? { ...agent, [field]: value } : agent,
+      ),
+    }));
+  };
+
+  const removeAgent = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      agents: current.agents.filter((_, agentIndex) => agentIndex !== index),
+    }));
+  };
+
+  const addModel = () => {
+    setForm((current) => ({
+      ...current,
+      models: [
+        ...current.models,
+        {
+          name: "llama3",
+          provider: "ollama",
+          endpoint: "http://localhost:11434",
+          apiKeyEnv: "",
+          temperature: 0.7,
+          maxTokens: 2048,
+          requestsPerMinute: "60",
+        },
+      ],
+    }));
+  };
+
+  const updateModel = (
+    index: number,
+    field: keyof BlueprintWizardForm["models"][number],
+    value: string | number,
+  ) => {
+    setForm((current) => ({
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, [field]: value } : model,
+      ),
+    }));
+  };
+
+  const removeModel = (index: number) => {
+    setForm((current) => ({
+      ...current,
+      models: current.models.filter((_, modelIndex) => modelIndex !== index),
+    }));
+  };
+
   return (
     <>
       <BlueprintWizardModal
@@ -50,14 +168,17 @@ function TestHarness({
         modelNames={safeModelNames}
         mode="create"
         localModelOptions={localModelOptions ?? safeModelNames}
-        providerOptions={[
-          {
-            id: "ollama",
-            label: "Ollama",
-            endpoint: "http://localhost:11434",
-            defaultModelName: safeModelNames[0] || "llama3",
-          },
-        ]}
+        providerOptions={
+          providerOptions ?? [
+            {
+              id: "ollama",
+              label: "Ollama",
+              endpoint: "http://localhost:11434",
+              defaultModelName: safeModelNames[0] || "llama3",
+              availableModelNames: [],
+            },
+          ]
+        }
         savedWorkspacePath={null}
         onInspectWorkspace={
           inspectWorkspace ??
@@ -70,15 +191,15 @@ function TestHarness({
           }))
         }
         setForm={setForm}
-        addMetric={() => undefined}
-        updateMetric={() => undefined}
-        removeMetric={() => undefined}
-        addAgent={() => undefined}
-        updateAgent={() => undefined}
-        removeAgent={() => undefined}
-        addModel={() => undefined}
-        updateModel={() => undefined}
-        removeModel={() => undefined}
+        addMetric={addMetric}
+        updateMetric={updateMetric}
+        removeMetric={removeMetric}
+        addAgent={addAgent}
+        updateAgent={updateAgent}
+        removeAgent={removeAgent}
+        addModel={addModel}
+        updateModel={updateModel}
+        removeModel={removeModel}
         onClose={() => undefined}
         onSubmit={() => undefined}
       />
@@ -280,8 +401,13 @@ describe("BlueprintWizardModal", () => {
     );
     await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
 
-    const runtimeComboboxes = screen.getAllByRole("combobox");
-    await user.selectOptions(runtimeComboboxes[2], "beta-model");
+    const primaryModelInput = screen.getByRole("combobox", {
+      name: /Primary Model/i,
+    });
+    await user.click(primaryModelInput);
+    await user.clear(primaryModelInput);
+    await user.type(primaryModelInput, "beta");
+    await user.click(screen.getByRole("option", { name: /beta-model/i }));
 
     expect(readFormState().models[0]?.name).toBe("beta-model");
     expect(readFormState().models[1]?.name).toBe("alpha-model");
@@ -331,19 +457,441 @@ describe("BlueprintWizardModal", () => {
     );
     await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
 
-    const runtimeComboboxes = screen.getAllByRole("combobox");
+    const primaryModelInput = screen.getByRole("combobox", {
+      name: /Primary Model/i,
+    });
+
+    await user.click(primaryModelInput);
+    await user.clear(primaryModelInput);
+    await user.type(primaryModelInput, "qwen");
 
     expect(
-      screen.getByRole("option", { name: /Ollama Local • qwen3.5:9b/i }),
-    ).toBeTruthy();
-
-    await user.selectOptions(runtimeComboboxes[2], "qwen3.5:9b");
+      screen.getByTestId("primary-model-provider-group").textContent,
+    ).toMatch(/Ollama/i);
+    await user.click(screen.getByRole("option", { name: /qwen3.5:9b/i }));
 
     expect(readFormState().models[0]?.name).toBe("qwen3.5:9b");
     expect(readFormState().models[0]?.provider).toBe("ollama");
     expect(readFormState().agents.map((agent) => agent.model)).toEqual([
       "qwen3.5:9b",
     ]);
+  });
+
+  it("lets guided runtime selection switch from a local-only pool to a validated remote provider model", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <TestHarness
+        initialForm={{
+          ...buildWizardForm(null),
+          models: [
+            {
+              name: "llama3",
+              provider: "ollama",
+              endpoint: "http://localhost:11434",
+              apiKeyEnv: "",
+              temperature: 0.7,
+              maxTokens: 2048,
+              requestsPerMinute: "60",
+            },
+          ],
+          agents: [
+            {
+              name: "reviewer",
+              role: "reviewer",
+              systemPrompt: "Review changes",
+              model: "llama3",
+            },
+          ],
+        }}
+        providerOptions={[
+          {
+            id: "ollama",
+            label: "Ollama Local",
+            endpoint: "http://localhost:11434",
+            defaultModelName: "llama3",
+            availableModelNames: [],
+          },
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            endpoint: "https://openrouter.ai/api/v1",
+            defaultModelName: "openai/gpt-4o-mini",
+            availableModelNames: [
+              "openai/gpt-4o-mini",
+              "meta-llama/llama-3.3-70b-instruct",
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: /Existing source files/i,
+      }),
+    );
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+
+    const primaryModelInput = screen.getByRole("combobox", {
+      name: /Primary Model/i,
+    });
+    await user.click(primaryModelInput);
+    await user.clear(primaryModelInput);
+    await user.type(primaryModelInput, "gpt");
+
+    expect(screen.getByTestId("primary-model-provider-group").textContent).toBe(
+      "OpenRouter",
+    );
+    await user.click(
+      screen.getByRole("option", {
+        name: /openai\/gpt-4o-mini/i,
+      }),
+    );
+
+    expect(readFormState().models[0]?.name).toBe("openai/gpt-4o-mini");
+    expect(readFormState().models[0]?.provider).toBe("openrouter");
+    expect(readFormState().agents[0]?.model).toBe("openai/gpt-4o-mini");
+  });
+
+  it("lets guided runtime selection switch to another validated remote provider model", async () => {
+    const user = userEvent.setup();
+    const initialForm: BlueprintWizardForm = {
+      ...buildWizardForm(null),
+      models: [
+        {
+          name: "openai/gpt-4o-mini",
+          provider: "openrouter",
+          endpoint: "https://openrouter.ai/api/v1",
+          apiKeyEnv: "",
+          temperature: 0.7,
+          maxTokens: 2048,
+          requestsPerMinute: "60",
+        },
+      ],
+      agents: [
+        {
+          name: "reviewer",
+          role: "reviewer",
+          systemPrompt: "Review changes",
+          model: "openai/gpt-4o-mini",
+        },
+      ],
+    };
+
+    render(
+      <TestHarness
+        initialForm={initialForm}
+        providerOptions={[
+          {
+            id: "ollama",
+            label: "Ollama",
+            endpoint: "http://localhost:11434",
+            defaultModelName: "llama3",
+            availableModelNames: [],
+          },
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            endpoint: "https://openrouter.ai/api/v1",
+            defaultModelName: "openai/gpt-4o-mini",
+            availableModelNames: [
+              "openai/gpt-4o-mini",
+              "meta-llama/llama-3.3-70b-instruct",
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: /Existing source files/i,
+      }),
+    );
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+
+    const primaryModelInput = screen.getByRole("combobox", {
+      name: /Primary Model/i,
+    });
+    await user.click(primaryModelInput);
+    await user.clear(primaryModelInput);
+    await user.type(primaryModelInput, "llama");
+
+    await user.click(
+      screen.getByRole("option", {
+        name: /meta-llama\/llama-3.3-70b-instruct/i,
+      }),
+    );
+
+    expect(readFormState().models[0]?.name).toBe(
+      "meta-llama/llama-3.3-70b-instruct",
+    );
+    expect(readFormState().models[0]?.provider).toBe("openrouter");
+    expect(readFormState().agents.map((agent) => agent.model)).toEqual([
+      "meta-llama/llama-3.3-70b-instruct",
+    ]);
+  });
+
+  it("groups primary model search results by provider and alphabetizes matches within each provider", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <TestHarness
+        initialForm={{
+          ...buildWizardForm(null),
+          models: [
+            {
+              name: "xai-alpha",
+              provider: "xai",
+              endpoint: "https://api.x.ai/v1",
+              apiKeyEnv: "",
+              temperature: 0.7,
+              maxTokens: 2048,
+              requestsPerMinute: "60",
+            },
+          ],
+        }}
+        providerOptions={[
+          {
+            id: "ollama",
+            label: "Ollama Local",
+            endpoint: "http://localhost:11434",
+            defaultModelName: "llama3",
+            availableModelNames: [],
+          },
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            endpoint: "https://openrouter.ai/api/v1",
+            defaultModelName: "ai-gpt-mini",
+            availableModelNames: ["ai-gpt-mini", "ai-gpt-pro"],
+          },
+          {
+            id: "xai",
+            label: "xAI",
+            endpoint: "https://api.x.ai/v1",
+            defaultModelName: "xai-beta",
+            availableModelNames: ["xai-beta", "xai-alpha"],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: /Existing source files/i,
+      }),
+    );
+    await user.click(screen.getAllByRole("button", { name: /Next Step/i })[0]);
+
+    const primaryModelInput = screen.getByRole("combobox", {
+      name: /Primary Model/i,
+    });
+    await user.click(primaryModelInput);
+    await user.clear(primaryModelInput);
+    await user.type(primaryModelInput, "ai");
+
+    const groupedLabels = screen
+      .getAllByTestId("primary-model-provider-group")
+      .map((node) => node.textContent?.trim());
+    expect(groupedLabels).toEqual(["OpenRouter", "xAI"]);
+
+    const groupedOptions = Array.from(
+      screen.getByRole("listbox").querySelectorAll('[role="option"]'),
+    ).map((node) => node.textContent?.replace(/selected/i, "").trim());
+    expect(groupedOptions).toEqual([
+      "ai-gpt-mini",
+      "ai-gpt-pro",
+      "xai-alpha",
+      "xai-beta",
+    ]);
+  });
+
+  it("uses the same searchable grouped picker for advanced agent model selection and retains remote picks", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <TestHarness
+        initialForm={{
+          ...buildWizardForm(null),
+          agents: [
+            {
+              name: "reviewer",
+              role: "reviewer",
+              systemPrompt: "Review changes",
+              model: "llama3",
+            },
+          ],
+          models: [
+            {
+              name: "llama3",
+              provider: "ollama",
+              endpoint: "http://localhost:11434",
+              apiKeyEnv: "",
+              temperature: 0.7,
+              maxTokens: 2048,
+              requestsPerMinute: "60",
+            },
+          ],
+        }}
+        providerOptions={[
+          {
+            id: "ollama",
+            label: "Ollama Local",
+            endpoint: "http://localhost:11434",
+            defaultModelName: "llama3",
+            availableModelNames: [],
+          },
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            endpoint: "https://openrouter.ai/api/v1",
+            defaultModelName: "ai-gpt-mini",
+            availableModelNames: ["ai-gpt-mini", "ai-gpt-pro"],
+          },
+          {
+            id: "xai",
+            label: "xAI",
+            endpoint: "https://api.x.ai/v1",
+            defaultModelName: "xai-beta",
+            availableModelNames: ["xai-beta", "xai-alpha"],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Show Advanced/i }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /Agents Council roles and which model each one should use/i,
+      }),
+    );
+
+    const agentModelInput = screen.getByRole("combobox", {
+      name: /Agent 1 Model/i,
+    });
+    await user.click(agentModelInput);
+    await user.clear(agentModelInput);
+    await user.type(agentModelInput, "ai");
+
+    const groupedLabels = screen
+      .getAllByTestId("agent-model-provider-group-0")
+      .map((node) => node.textContent?.trim());
+    expect(groupedLabels).toEqual(["OpenRouter", "xAI"]);
+
+    const groupedOptions = Array.from(
+      screen.getByRole("listbox").querySelectorAll('[role="option"]'),
+    ).map((node) => node.textContent?.replace(/selected/i, "").trim());
+    expect(groupedOptions).toEqual([
+      "ai-gpt-mini",
+      "ai-gpt-pro",
+      "xai-alpha",
+      "xai-beta",
+    ]);
+
+    await user.click(screen.getByRole("option", { name: /xai-alpha/i }));
+
+    expect(
+      (
+        screen.getByRole("combobox", {
+          name: /Agent 1 Model/i,
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("xai-alpha");
+    expect(readFormState().agents[0]?.model).toBe("xai-alpha");
+    expect(
+      readFormState().models.some(
+        (model) =>
+          model.name === "xai-alpha" &&
+          model.provider === "xai" &&
+          model.endpoint === "https://api.x.ai/v1",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses a searchable remote picker in the advanced model pool editor", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <TestHarness
+        initialForm={{
+          ...buildWizardForm(null),
+          models: [
+            {
+              name: "openai/gpt-4o-mini",
+              provider: "openrouter",
+              endpoint: "https://openrouter.ai/api/v1",
+              apiKeyEnv: "",
+              temperature: 0.7,
+              maxTokens: 2048,
+              requestsPerMinute: "60",
+            },
+          ],
+          agents: [
+            {
+              name: "reviewer",
+              role: "reviewer",
+              systemPrompt: "Review changes",
+              model: "openai/gpt-4o-mini",
+            },
+          ],
+        }}
+        providerOptions={[
+          {
+            id: "ollama",
+            label: "Ollama Local",
+            endpoint: "http://localhost:11434",
+            defaultModelName: "llama3",
+            availableModelNames: [],
+          },
+          {
+            id: "openrouter",
+            label: "OpenRouter",
+            endpoint: "https://openrouter.ai/api/v1",
+            defaultModelName: "openai/gpt-4o-mini",
+            availableModelNames: [
+              "openai/gpt-4o-mini",
+              "meta-llama/llama-3.3-70b-instruct",
+            ],
+          },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Show Advanced/i }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /Models Provider-backed model pool and assignment strategy/i,
+      }),
+    );
+
+    const modelNameInput = screen.getByRole("combobox", {
+      name: /Model 1 Name/i,
+    });
+    await user.click(modelNameInput);
+    await user.clear(modelNameInput);
+    await user.type(modelNameInput, "llama");
+
+    expect(screen.getByTestId("model-name-provider-group-0").textContent).toBe(
+      "OpenRouter",
+    );
+    await user.click(
+      screen.getByRole("option", {
+        name: /meta-llama\/llama-3.3-70b-instruct/i,
+      }),
+    );
+
+    expect(readFormState().models[0]?.name).toBe(
+      "meta-llama/llama-3.3-70b-instruct",
+    );
+    expect(readFormState().models[0]?.provider).toBe("openrouter");
+    expect(readFormState().agents[0]?.model).toBe(
+      "meta-llama/llama-3.3-70b-instruct",
+    );
   });
 
   it("wraps long workspace values in the live summary instead of overflowing the sidebar", () => {
@@ -359,9 +907,6 @@ describe("BlueprintWizardModal", () => {
       />,
     );
 
-    expect(screen.getByText(veryLongWorkspacePath).className).toContain(
-      "break-words",
-    );
     expect(screen.getByText(veryLongWorkspacePath).className).toContain(
       "[overflow-wrap:anywhere]",
     );

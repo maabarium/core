@@ -62,6 +62,7 @@ type BlueprintWizardModalProps = {
     label: string;
     endpoint: string;
     defaultModelName: string;
+    availableModelNames?: string[];
   }>;
   savedWorkspacePath: string | null;
   onInspectWorkspace: (path: string) => Promise<WorkspaceGitStatus | null>;
@@ -104,6 +105,20 @@ type WizardTipSection = {
   title: string;
   copy: string;
   items: WizardTipItem[];
+};
+
+type SearchableModelOption = {
+  value: string;
+  label: string;
+  providerLabel: string;
+  modelLabel: string;
+  providerId: string;
+  endpoint: string;
+};
+
+type SearchableModelGroup = {
+  providerLabel: string;
+  options: SearchableModelOption[];
 };
 
 const TAB_ORDER: Array<{ id: WizardTab; label: string; copy: string }> = [
@@ -542,7 +557,7 @@ function SummaryRow({
         >
           {label}
         </div>
-        <div className="mt-1 break-words text-sm text-slate-100 [overflow-wrap:anywhere]">
+        <div className="mt-1 text-sm text-slate-100 [overflow-wrap:anywhere]">
           {value}
         </div>
       </div>
@@ -726,6 +741,21 @@ function BlueprintWizardModalBody({
   const [activeTab, setActiveTab] = useState<WizardTab>("basics");
   const [showAdvancedControls, setShowAdvancedControls] = useState(false);
   const [showTipsPanel, setShowTipsPanel] = useState(false);
+  const [primaryModelSearch, setPrimaryModelSearch] = useState("");
+  const [isPrimaryModelPickerOpen, setIsPrimaryModelPickerOpen] =
+    useState(false);
+  const [agentModelSearches, setAgentModelSearches] = useState<
+    Record<number, string>
+  >({});
+  const [openAgentModelPickerIndex, setOpenAgentModelPickerIndex] = useState<
+    number | null
+  >(null);
+  const [modelNameSearches, setModelNameSearches] = useState<
+    Record<number, string>
+  >({});
+  const [openModelNamePickerIndex, setOpenModelNamePickerIndex] = useState<
+    number | null
+  >(null);
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
   const [workspaceStatus, setWorkspaceStatus] =
     useState<WorkspaceGitStatus | null>(null);
@@ -744,43 +774,118 @@ function BlueprintWizardModalBody({
         ...localModelOptions,
         ...modelNames,
         ...providerOptions.map((provider) => provider.defaultModelName),
+        ...providerOptions.flatMap(
+          (provider) => provider.availableModelNames ?? [],
+        ),
       ]),
     [localModelOptions, modelNames, providerOptions],
   );
-  const primaryModelOptions = useMemo(
+  const buildSearchableModelOption = (
+    modelName: string,
+    preferredProviderId?: string,
+  ): SearchableModelOption => {
+    const trimmedModelName = modelName.trim();
+    const exactExistingModel = form.models.find(
+      (model) =>
+        model.name.trim() === trimmedModelName &&
+        (!preferredProviderId || model.provider.trim() === preferredProviderId),
+    );
+    const existingModel =
+      exactExistingModel ??
+      form.models.find((model) => model.name.trim() === trimmedModelName);
+    const matchingProvider =
+      providerOptions.find(
+        (provider) =>
+          provider.id === preferredProviderId &&
+          (provider.defaultModelName.trim() === trimmedModelName ||
+            (provider.availableModelNames ?? []).some(
+              (candidate) => candidate.trim() === trimmedModelName,
+            )),
+      ) ??
+      providerOptions.find(
+        (provider) =>
+          provider.defaultModelName.trim() === trimmedModelName ||
+          (provider.availableModelNames ?? []).some(
+            (candidate) => candidate.trim() === trimmedModelName,
+          ),
+      );
+    const providerId =
+      existingModel?.provider.trim() ||
+      (localModelOptions.includes(trimmedModelName)
+        ? "ollama"
+        : matchingProvider?.id || preferredProviderId || "");
+    const providerLabel =
+      providerOptionsById.get(providerId)?.label ||
+      (providerId === "ollama" ? "Ollama Local" : matchingProvider?.label) ||
+      providerId ||
+      "Model";
+    const endpoint =
+      existingModel?.endpoint.trim() ||
+      (providerId === "ollama"
+        ? "http://localhost:11434"
+        : matchingProvider?.endpoint || "");
+
+    return {
+      value: trimmedModelName,
+      label: `${providerLabel} • ${trimmedModelName || "Unnamed model"}`,
+      providerId,
+      providerLabel,
+      modelLabel: trimmedModelName || "Unnamed model",
+      endpoint,
+    };
+  };
+
+  const searchableModelCatalog = useMemo(
     () =>
       uniqueStrings([
         ...form.models.map((model) => model.name),
         ...combinedModelOptions,
-      ]).map((modelName) => {
-        const existingModel = form.models.find(
-          (model) => model.name.trim() === modelName,
-        );
-        const providerId = existingModel?.provider.trim();
-        const inferredProviderLabel = localModelOptions.includes(modelName)
-          ? "Ollama Local"
-          : providerOptions.find(
-              (provider) => provider.defaultModelName.trim() === modelName,
-            )?.label;
-        const providerLabel =
-          providerOptionsById.get(providerId ?? "")?.label ||
-          inferredProviderLabel ||
-          providerId ||
-          "Model";
-
-        return {
-          value: modelName,
-          label: `${providerLabel} • ${modelName.trim() || "Unnamed model"}`,
-        };
-      }),
-    [
-      combinedModelOptions,
-      form.models,
-      localModelOptions,
-      providerOptions,
-      providerOptionsById,
-    ],
+      ])
+        .map((modelName) => buildSearchableModelOption(modelName))
+        .sort(
+          (left, right) =>
+            left.providerLabel.localeCompare(right.providerLabel) ||
+            left.modelLabel.localeCompare(right.modelLabel),
+        ),
+    [combinedModelOptions, form.models, localModelOptions, providerOptions],
   );
+  const buildFilteredModelGroups = (
+    options: SearchableModelOption[],
+    queryText: string,
+  ): SearchableModelGroup[] => {
+    const query = queryText.trim().toLowerCase();
+    const filteredOptions = query
+      ? options.filter(
+          (option) =>
+            option.modelLabel.toLowerCase().includes(query) ||
+            option.providerLabel.toLowerCase().includes(query),
+        )
+      : options;
+
+    const grouped = new Map<string, SearchableModelOption[]>();
+    for (const option of filteredOptions) {
+      const existing = grouped.get(option.providerLabel) ?? [];
+      existing.push(option);
+      grouped.set(option.providerLabel, existing);
+    }
+
+    return Array.from(grouped.entries()).map(([providerLabel, options]) => ({
+      providerLabel,
+      options,
+    }));
+  };
+
+  const filteredPrimaryModelGroups = useMemo(
+    () => buildFilteredModelGroups(searchableModelCatalog, primaryModelSearch),
+    [primaryModelSearch, searchableModelCatalog],
+  );
+  const agentModelOptions = useMemo(
+    () => searchableModelCatalog,
+    [searchableModelCatalog],
+  );
+  const buildFilteredAgentModelGroups = (queryText: string) => {
+    return buildFilteredModelGroups(agentModelOptions, queryText);
+  };
 
   const selectedGoal = useMemo<WizardGoal>(
     () => inferWizardGoalFromForm(form),
@@ -860,9 +965,19 @@ function BlueprintWizardModalBody({
       setActiveTab("basics");
       setShowAdvancedControls(false);
       setShowTipsPanel(false);
+      setPrimaryModelSearch(form.models[0]?.name?.trim() ?? "");
+      setIsPrimaryModelPickerOpen(false);
+      setAgentModelSearches({});
+      setOpenAgentModelPickerIndex(null);
+      setModelNameSearches({});
+      setOpenModelNamePickerIndex(null);
       setFurthestStepIndex(isEditMode ? WIZARD_STEPS.length - 1 : 0);
     }
   }, [isEditMode, open]);
+
+  useEffect(() => {
+    setPrimaryModelSearch(primaryModelName);
+  }, [primaryModelName]);
 
   useEffect(() => {
     if (
@@ -1004,38 +1119,32 @@ function BlueprintWizardModalBody({
   const updatePrimaryModel = (selectedModelName: string) => {
     setForm((current) => {
       const normalizedCurrent = normalizeWizardForm(current);
+      const selectedOption = buildSearchableModelOption(selectedModelName);
       const selectedIndex = normalizedCurrent.models.findIndex(
-        (model) => model.name.trim() === selectedModelName,
+        (model) => model.name.trim() === selectedOption.value,
       );
       const existingModel =
         selectedIndex >= 0 ? normalizedCurrent.models[selectedIndex] : null;
-      const matchingProviderOption = providerOptions.find(
-        (provider) => provider.defaultModelName.trim() === selectedModelName,
-      );
-      const nextPrimaryModel = existingModel
-        ? existingModel
-        : {
-            ...(normalizedCurrent.models[0] ?? {
-              name: selectedModelName,
-              provider: "ollama",
-              endpoint: "http://localhost:11434",
-              apiKeyEnv: "",
-              temperature: 0.7,
-              maxTokens: 2048,
-              requestsPerMinute: "60",
-            }),
-            name: selectedModelName,
-            provider: localModelOptions.includes(selectedModelName)
-              ? "ollama"
-              : matchingProviderOption?.id ||
-                normalizedCurrent.models[0]?.provider ||
-                "ollama",
-            endpoint: localModelOptions.includes(selectedModelName)
-              ? "http://localhost:11434"
-              : matchingProviderOption?.endpoint ||
-                normalizedCurrent.models[0]?.endpoint ||
-                "",
-          };
+      const nextPrimaryModel = {
+        ...(existingModel ??
+          normalizedCurrent.models[0] ?? {
+            name: selectedOption.value,
+            provider: selectedOption.providerId || "ollama",
+            endpoint: selectedOption.endpoint || "http://localhost:11434",
+            apiKeyEnv: "",
+            temperature: 0.7,
+            maxTokens: 2048,
+            requestsPerMinute: "60",
+          }),
+        name: selectedOption.value,
+        provider:
+          selectedOption.providerId || existingModel?.provider || "ollama",
+        endpoint:
+          selectedOption.endpoint ||
+          existingModel?.endpoint ||
+          normalizedCurrent.models[0]?.endpoint ||
+          "",
+      };
 
       if (!nextPrimaryModel) {
         return normalizedCurrent;
@@ -1064,10 +1173,310 @@ function BlueprintWizardModalBody({
         })),
       });
     });
+    setPrimaryModelSearch(selectedModelName);
+    setIsPrimaryModelPickerOpen(false);
+  };
+
+  const updateAgentModelSelection = (
+    index: number,
+    selectedModelName: string,
+  ) => {
+    setForm((current) => {
+      const normalizedCurrent = normalizeWizardForm(current);
+      const selectedOption = buildSearchableModelOption(selectedModelName);
+      const hasExistingModel = normalizedCurrent.models.some(
+        (model) => model.name.trim() === selectedOption.value,
+      );
+      const nextModels = hasExistingModel
+        ? normalizedCurrent.models.map((model) =>
+            model.name.trim() === selectedOption.value
+              ? {
+                  ...model,
+                  provider: selectedOption.providerId || model.provider,
+                  endpoint: selectedOption.endpoint || model.endpoint,
+                }
+              : model,
+          )
+        : [
+            ...normalizedCurrent.models,
+            {
+              ...(normalizedCurrent.models[0] ?? {
+                name: selectedOption.value,
+                provider: selectedOption.providerId || "ollama",
+                endpoint: selectedOption.endpoint || "http://localhost:11434",
+                apiKeyEnv: "",
+                temperature: 0.7,
+                maxTokens: 2048,
+                requestsPerMinute: "60",
+              }),
+              name: selectedOption.value,
+              provider: selectedOption.providerId || "ollama",
+              endpoint: selectedOption.endpoint || "",
+            },
+          ];
+
+      return normalizeWizardForm({
+        ...normalizedCurrent,
+        models: nextModels,
+        agents: normalizedCurrent.agents.map((agent, agentIndex) =>
+          agentIndex === index
+            ? { ...agent, model: selectedOption.value }
+            : agent,
+        ),
+      });
+    });
+    setAgentModelSearches((current) => ({
+      ...current,
+      [index]: selectedModelName,
+    }));
+    setOpenAgentModelPickerIndex((current) =>
+      current === index ? null : current,
+    );
+  };
+
+  const updateModelNameSelection = (
+    index: number,
+    selectedModelName: string,
+  ) => {
+    setForm((current) => {
+      const normalizedCurrent = normalizeWizardForm(current);
+      const existingEntry = normalizedCurrent.models[index];
+
+      if (!existingEntry) {
+        return normalizedCurrent;
+      }
+
+      const selectedOption = buildSearchableModelOption(
+        selectedModelName,
+        existingEntry.provider,
+      );
+      const previousName = existingEntry.name.trim();
+      const nextModels = normalizedCurrent.models.map((model, modelIndex) =>
+        modelIndex === index
+          ? {
+              ...model,
+              name: selectedOption.value,
+              provider: selectedOption.providerId || model.provider,
+              endpoint: selectedOption.endpoint || model.endpoint,
+            }
+          : model,
+      );
+
+      return normalizeWizardForm({
+        ...normalizedCurrent,
+        models: nextModels,
+        agents: normalizedCurrent.agents.map((agent) =>
+          agent.model.trim() === previousName
+            ? { ...agent, model: selectedOption.value }
+            : agent,
+        ),
+      });
+    });
+    setModelNameSearches((current) => ({
+      ...current,
+      [index]: selectedModelName,
+    }));
+    setOpenModelNamePickerIndex((current) =>
+      current === index ? null : current,
+    );
+  };
+
+  const renderModelPickerListbox = ({
+    groups,
+    selectedValue,
+    listboxId,
+    groupTestId,
+    onSelect,
+  }: {
+    groups: Array<{ providerLabel: string; options: SearchableModelOption[] }>;
+    selectedValue: string;
+    listboxId: string;
+    groupTestId?: string;
+    onSelect: (value: string) => void;
+  }) => (
+    <div
+      id={listboxId}
+      role="listbox"
+      className="absolute z-20 mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-white/10 bg-slate-950/95 p-1 shadow-2xl"
+    >
+      {groups.length > 0 ? (
+        groups.map((group) => (
+          <div key={group.providerLabel} className="py-1">
+            <div
+              data-testid={groupTestId}
+              className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500"
+            >
+              {group.providerLabel}
+            </div>
+            <div className="space-y-1">
+              {group.options.map((option) => {
+                const selected = option.value === selectedValue;
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      onSelect(option.value);
+                    }}
+                    className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition ${selected ? "bg-teal-500/15 text-teal-100" : "text-slate-200 hover:bg-white/5"}`}
+                  >
+                    <span className="truncate">{option.modelLabel}</span>
+                    {selected ? (
+                      <span className="ml-3 text-[10px] font-bold uppercase tracking-[0.16em] text-teal-300">
+                        selected
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      ) : (
+        <div className="px-3 py-2 text-xs text-slate-500">
+          No models match your search.
+        </div>
+      )}
+    </div>
+  );
+
+  const renderPrimaryModelPicker = () => (
+    <div className="relative">
+      <input
+        role="combobox"
+        aria-label="Primary Model"
+        aria-autocomplete="list"
+        aria-expanded={isPrimaryModelPickerOpen}
+        aria-controls="wizard-primary-model-listbox"
+        value={primaryModelSearch}
+        onChange={(event) => {
+          setPrimaryModelSearch(event.target.value);
+          setIsPrimaryModelPickerOpen(true);
+        }}
+        onFocus={() => setIsPrimaryModelPickerOpen(true)}
+        onBlur={() => {
+          setTimeout(() => {
+            setIsPrimaryModelPickerOpen(false);
+            setPrimaryModelSearch(primaryModelName);
+          }, 120);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setIsPrimaryModelPickerOpen(false);
+            setPrimaryModelSearch(primaryModelName);
+          }
+
+          if (event.key === "Enter") {
+            const firstMatch = filteredPrimaryModelGroups[0]?.options[0]?.value;
+            if (firstMatch) {
+              event.preventDefault();
+              updatePrimaryModel(firstMatch);
+            }
+          }
+        }}
+        className={textFieldClass}
+        placeholder="Search models by provider or id"
+      />
+
+      {isPrimaryModelPickerOpen
+        ? renderModelPickerListbox({
+            groups: filteredPrimaryModelGroups,
+            selectedValue: primaryModelName,
+            listboxId: "wizard-primary-model-listbox",
+            groupTestId: "primary-model-provider-group",
+            onSelect: updatePrimaryModel,
+          })
+        : null}
+    </div>
+  );
+
+  const renderAgentModelPicker = (agent: WizardAgentForm, index: number) => {
+    const isOpen = openAgentModelPickerIndex === index;
+    const searchValue = isOpen
+      ? (agentModelSearches[index] ?? agent.model)
+      : agent.model;
+    const filteredGroups = buildFilteredAgentModelGroups(searchValue);
+
+    return (
+      <div className="relative">
+        <input
+          role="combobox"
+          aria-label={`Agent ${index + 1} Model`}
+          aria-autocomplete="list"
+          aria-expanded={isOpen}
+          aria-controls={`wizard-agent-model-listbox-${index}`}
+          value={searchValue}
+          onChange={(event) => {
+            setAgentModelSearches((current) => ({
+              ...current,
+              [index]: event.target.value,
+            }));
+            setOpenAgentModelPickerIndex(index);
+          }}
+          onFocus={() => {
+            setAgentModelSearches((current) => ({
+              ...current,
+              [index]: current[index] ?? agent.model,
+            }));
+            setOpenAgentModelPickerIndex(index);
+          }}
+          onBlur={() => {
+            setTimeout(() => {
+              setOpenAgentModelPickerIndex((current) =>
+                current === index ? null : current,
+              );
+              setAgentModelSearches((current) => ({
+                ...current,
+                [index]: "",
+              }));
+            }, 120);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setOpenAgentModelPickerIndex((current) =>
+                current === index ? null : current,
+              );
+              setAgentModelSearches((current) => ({
+                ...current,
+                [index]: "",
+              }));
+            }
+
+            if (event.key === "Enter") {
+              const firstMatch = filteredGroups[0]?.options[0]?.value;
+              if (firstMatch) {
+                event.preventDefault();
+                updateAgentModelSelection(index, firstMatch);
+              }
+            }
+          }}
+          className={textFieldClass}
+          placeholder="Search models by provider or id"
+        />
+
+        {isOpen
+          ? renderModelPickerListbox({
+              groups: filteredGroups,
+              selectedValue: agent.model,
+              listboxId: `wizard-agent-model-listbox-${index}`,
+              groupTestId: `agent-model-provider-group-${index}`,
+              onSelect: (value) => updateAgentModelSelection(index, value),
+            })
+          : null}
+      </div>
+    );
   };
 
   const updateModelProvider = (index: number, nextProviderId: string) => {
     const providerOption = providerOptionsById.get(nextProviderId);
+    const providerModelOptions = uniqueStrings([
+      ...(providerOption?.availableModelNames ?? []),
+      providerOption?.defaultModelName ?? "",
+    ]);
     const nextLocalModel =
       localModelOptions[0] ?? combinedModelOptions[0] ?? "";
 
@@ -1091,7 +1500,7 @@ function BlueprintWizardModalBody({
             name:
               nextProviderId === "ollama"
                 ? nextLocalModel || entry.name
-                : providerOption?.defaultModelName || entry.name,
+                : providerModelOptions[0] || entry.name,
           };
         }),
       };
@@ -1102,6 +1511,12 @@ function BlueprintWizardModalBody({
     const isLocalProvider = model.provider === "ollama";
     const localOptions =
       localModelOptions.length > 0 ? localModelOptions : combinedModelOptions;
+    const providerOption = providerOptionsById.get(model.provider);
+    const remoteOptions = uniqueStrings([
+      ...(providerOption?.availableModelNames ?? []),
+      providerOption?.defaultModelName ?? "",
+      model.name,
+    ]);
 
     if (isLocalProvider && localOptions.length > 0) {
       return (
@@ -1116,6 +1531,94 @@ function BlueprintWizardModalBody({
             </option>
           ))}
         </select>
+      );
+    }
+
+    if (remoteOptions.length > 0) {
+      const isOpen = openModelNamePickerIndex === index;
+      const searchValue = isOpen
+        ? (modelNameSearches[index] ?? model.name)
+        : model.name;
+      const remotePickerOptions = remoteOptions
+        .map((option) => buildSearchableModelOption(option, model.provider))
+        .sort(
+          (left, right) =>
+            left.providerLabel.localeCompare(right.providerLabel) ||
+            left.modelLabel.localeCompare(right.modelLabel),
+        );
+      const filteredGroups = buildFilteredModelGroups(
+        remotePickerOptions,
+        searchValue,
+      );
+
+      return (
+        <div className="relative">
+          <input
+            role="combobox"
+            aria-label={`Model ${index + 1} Name`}
+            aria-autocomplete="list"
+            aria-expanded={isOpen}
+            aria-controls={`wizard-model-name-listbox-${index}`}
+            value={searchValue}
+            onChange={(event) => {
+              setModelNameSearches((current) => ({
+                ...current,
+                [index]: event.target.value,
+              }));
+              setOpenModelNamePickerIndex(index);
+            }}
+            onFocus={() => {
+              setModelNameSearches((current) => ({
+                ...current,
+                [index]: current[index] ?? model.name,
+              }));
+              setOpenModelNamePickerIndex(index);
+            }}
+            onBlur={() => {
+              setTimeout(() => {
+                setOpenModelNamePickerIndex((current) =>
+                  current === index ? null : current,
+                );
+                setModelNameSearches((current) => ({
+                  ...current,
+                  [index]: "",
+                }));
+              }, 120);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setOpenModelNamePickerIndex((current) =>
+                  current === index ? null : current,
+                );
+                setModelNameSearches((current) => ({
+                  ...current,
+                  [index]: "",
+                }));
+              }
+
+              if (event.key === "Enter") {
+                const firstMatch = filteredGroups[0]?.options[0]?.value;
+                if (firstMatch) {
+                  event.preventDefault();
+                  updateModelNameSelection(index, firstMatch);
+                }
+              }
+            }}
+            className={textFieldClass}
+            type="text"
+            placeholder="Search discovered remote model ids"
+          />
+
+          {isOpen
+            ? renderModelPickerListbox({
+                groups: filteredGroups,
+                selectedValue: model.name,
+                listboxId: `wizard-model-name-listbox-${index}`,
+                groupTestId: `model-name-provider-group-${index}`,
+                onSelect: (value) => updateModelNameSelection(index, value),
+              })
+            : null}
+        </div>
       );
     }
 
@@ -2056,24 +2559,13 @@ function BlueprintWizardModalBody({
                           </div>
                           <div>
                             <FieldLabel label="Primary Model" />
-                            <select
-                              value={primaryModelName}
-                              onChange={(event) =>
-                                updatePrimaryModel(event.target.value)
-                              }
-                              className={textFieldClass}
-                            >
-                              {primaryModelOptions.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
+                            {renderPrimaryModelPicker()}
                             <FieldHint>
-                              Changing the primary model reorders the current
-                              model pool and updates the guided council
-                              baseline. Use Advanced when you need per-agent
-                              overrides or deeper model-pool edits.
+                              Search by provider or model id. Results stay
+                              grouped by provider and sorted alphabetically
+                              within each group. Choosing one reorders the
+                              current model pool and updates the guided council
+                              baseline.
                             </FieldHint>
                           </div>
                         </div>
@@ -2760,25 +3252,9 @@ function BlueprintWizardModalBody({
                               <div>
                                 <FieldLabel
                                   label="Model"
-                                  help="This list is derived from the model pool tab and setup-backed local or remote defaults."
+                                  help="Search by provider or model id. Results stay grouped by provider and sorted alphabetically within each provider."
                                 />
-                                <select
-                                  value={agent.model}
-                                  onChange={(event) =>
-                                    updateAgent(
-                                      index,
-                                      "model",
-                                      event.target.value,
-                                    )
-                                  }
-                                  className={textFieldClass}
-                                >
-                                  {combinedModelOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
+                                {renderAgentModelPicker(agent, index)}
                               </div>
                               <div className="flex items-end">
                                 <button
@@ -2954,7 +3430,7 @@ function BlueprintWizardModalBody({
                                 <div>
                                   <FieldLabel
                                     label="Model Name"
-                                    help="For local Ollama providers this is a validated dropdown. For remote providers it stays editable because the provider may support more model ids than the saved defaults expose."
+                                    help="Local Ollama entries stay dropdown-backed. Remote providers with a validated model catalog expose a searchable picker here; otherwise the field remains editable."
                                   />
                                   {renderModelNameField(model, index)}
                                 </div>

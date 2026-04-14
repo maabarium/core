@@ -13,8 +13,13 @@ import type {
   DesktopSetupState,
   ExperimentBranchCleanupResult,
   ExperimentBranchInventory,
+  FixOutcome,
+  ProfileConfig,
+  ProviderValidationResult,
+  ReadinessReport,
   StartEngineRequest,
   UpdateCheckResult,
+  WorkspaceAnalysis,
   WorkspaceGitStatus,
 } from "../types/console";
 
@@ -684,8 +689,7 @@ export function useDesktopConsole({
                 ? {
                     ...provider,
                     configured:
-                      apiKey.trim().length > 0 &&
-                      Boolean(provider.modelName?.trim()),
+                      apiKey.trim().length > 0 ? provider.configured : false,
                   }
                 : provider,
           ),
@@ -1022,6 +1026,135 @@ export function useDesktopConsole({
   const cleanupExperimentBranches = async (thresholdMonths: number) =>
     runExperimentBranchCleanup(thresholdMonths, false);
 
+  // --- Setup Wizard Methods ---
+
+  const runReadinessScan = async (
+    workspace?: string | null,
+    strategy?: string | null,
+  ): Promise<ReadinessReport | null> => {
+    try {
+      return await invoke<ReadinessReport>("run_readiness_scan", {
+        workspace: workspace ?? null,
+        strategy: strategy ?? null,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Readiness Scan Error",
+        "The readiness scan could not complete",
+        "Review the details below, then retry.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const analyzeWorkspace = async (
+    path: string,
+  ): Promise<WorkspaceAnalysis | null> => {
+    try {
+      return await invoke<WorkspaceAnalysis>("analyze_workspace_command", {
+        path,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Workspace Analysis Error",
+        "The workspace could not be analyzed",
+        "Review the details below, then retry with a valid path.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const validateProvider = async (
+    providerId: string,
+    endpoint: string,
+    apiKey?: string | null,
+    testModel?: string | null,
+  ): Promise<ProviderValidationResult | null> => {
+    try {
+      return await invoke<ProviderValidationResult>(
+        "validate_provider_command",
+        {
+          providerId,
+          endpoint,
+          apiKey: apiKey ?? null,
+          testModel: testModel ?? null,
+        },
+      );
+    } catch (error) {
+      presentDesktopError(
+        "Provider Validation Error",
+        "The provider connection could not be validated",
+        "Review the details below, then retry.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const validateOllama = async (
+    endpoint?: string | null,
+  ): Promise<ProviderValidationResult | null> => {
+    try {
+      return await invoke<ProviderValidationResult>("validate_ollama_command", {
+        endpoint: endpoint ?? null,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Ollama Validation Error",
+        "The Ollama connection could not be validated",
+        "Review the details below, then retry.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const getRecommendedProfile = async (): Promise<string | null> => {
+    try {
+      return await invoke<string>("get_recommended_profile_command");
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const applyProfile = async (
+    profileName: string,
+  ): Promise<ProfileConfig | null> => {
+    try {
+      return await invoke<ProfileConfig>("apply_profile_command", {
+        profileName,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Profile Error",
+        "The environment profile could not be applied",
+        "Review the details below, then retry.",
+        error,
+      );
+      return null;
+    }
+  };
+
+  const applyFixes = async (
+    workspace?: string | null,
+  ): Promise<FixOutcome[] | null> => {
+    try {
+      return await invoke<FixOutcome[]>("apply_fixes_command", {
+        workspace: workspace ?? null,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Fix Error",
+        "The automatic fixes could not be applied",
+        "Review the details below, then retry.",
+        error,
+      );
+      return null;
+    }
+  };
+
   return {
     state,
     loading,
@@ -1060,5 +1193,12 @@ export function useDesktopConsole({
     exportRetainedWinnerFiles,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
+    runReadinessScan,
+    analyzeWorkspace,
+    validateProvider,
+    validateOllama,
+    getRecommendedProfile,
+    applyProfile,
+    applyFixes,
   };
 }

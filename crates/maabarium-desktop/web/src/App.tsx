@@ -203,6 +203,13 @@ export default function App() {
     exportRetainedWinnerFiles,
     previewExperimentBranchCleanup,
     cleanupExperimentBranches,
+    runReadinessScan,
+    analyzeWorkspace,
+    validateProvider,
+    validateOllama,
+    getRecommendedProfile,
+    applyProfile,
+    applyFixes,
   } = useDesktopConsole();
   const {
     blueprintQuery,
@@ -299,6 +306,7 @@ export default function App() {
           label: provider.label,
           endpoint: provider.endpoint ?? "",
           defaultModelName: provider.modelName ?? "",
+          availableModelNames: provider.availableModelNames ?? [],
         })),
     ],
     [state, wizardLocalModelOptions],
@@ -964,11 +972,6 @@ export default function App() {
   ) => {
     setSetupSaving(true);
     try {
-      const saved = await saveDesktopSetup(nextSetup);
-      if (!saved) {
-        return;
-      }
-
       for (const [providerId, apiKey] of Object.entries(apiKeys)) {
         if (!apiKey.trim()) {
           continue;
@@ -978,6 +981,11 @@ export default function App() {
         if (!stored) {
           return;
         }
+      }
+
+      const saved = await saveDesktopSetup(nextSetup);
+      if (!saved) {
+        return;
       }
 
       setSetupOpen(false);
@@ -1266,6 +1274,10 @@ export default function App() {
           onPullRecommendedOllamaModels={async () => {
             await pullRecommendedOllamaModels();
           }}
+          onAnalyzeWorkspace={analyzeWorkspace}
+          onValidateProvider={validateProvider}
+          onGetRecommendedProfile={getRecommendedProfile}
+          onApplyProfile={applyProfile}
         />
       ) : null}
 
@@ -1990,6 +2002,7 @@ export default function App() {
               onInstallGit={() => void installGit()}
               onInstallOllama={() => void installOllama()}
               onStartOllama={() => void startOllama()}
+              onApplyFixes={() => applyFixes(state?.desktopSetup.workspacePath)}
               onPreviewBranchCleanup={(thresholdMonths) =>
                 previewExperimentBranchCleanup(thresholdMonths)
               }

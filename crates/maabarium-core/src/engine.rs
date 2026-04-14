@@ -132,6 +132,52 @@ fn build_proposal_context(
     context
 }
 
+fn collapse_ascii_whitespace(input: &str) -> String {
+    input
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn extract_research_search_cue(summary: &str) -> Option<String> {
+    let lowered = summary.to_ascii_lowercase();
+    let search_index = lowered.find("search for")?;
+    let search_slice = &summary[search_index + "search for".len()..];
+    let first_quote = search_slice.find('"')?;
+    let remainder = &search_slice[first_quote + 1..];
+    let closing_quote = remainder.find('"')?;
+    let query = remainder[..closing_quote].trim();
+
+    if query.is_empty() {
+        None
+    } else {
+        Some(query.to_owned())
+    }
+}
+
+fn research_noop_signature(bp: &BlueprintFile, proposal: &crate::git_manager::Proposal) -> Option<String> {
+    if !bp.domain.language.eq_ignore_ascii_case("research") || !proposal.file_patches.is_empty() {
+        return None;
+    }
+
+    let lowered = proposal.summary.to_ascii_lowercase();
+    if !lowered.contains("evidence gap") && !lowered.contains("search for") {
+        return None;
+    }
+
+    if let Some(query) = extract_research_search_cue(&proposal.summary) {
+        return Some(format!(
+            "search:{}",
+            collapse_ascii_whitespace(&query.to_ascii_lowercase())
+        ));
+    }
+
+    Some(format!(
+        "summary:{}",
+        collapse_ascii_whitespace(&lowered)
+    ))
+}
+
 impl Engine {
     pub fn new(
         config: EngineConfig,
@@ -255,6 +301,10 @@ impl Engine {
         let bp_name = bp.blueprint.name.clone();
 
         let mut baseline: f64 = 0.0;
+        let mut completed_iterations: u64 = 0;
+        let mut previous_research_noop_signature: Option<String> = None;
+        let mut consecutive_research_noop_count: u64 = 0;
+        let mut early_completion_message: Option<String> = None;
 
         info!(
             "Engine starting: blueprint={bp_name}, run_id={}, max_iterations={max_iter}, baseline={baseline:.4}",
@@ -500,6 +550,18 @@ impl Engine {
             };
             self.log_phase_timing(iteration, "evaluating", evaluating_started);
 
+            let research_noop_signature = research_noop_signature(bp, &proposal);
+            let repeated_research_noop = research_noop_signature
+                .as_ref()
+                .zip(previous_research_noop_signature.as_ref())
+                .map(|(current, previous)| current == previous)
+                .unwrap_or(false);
+            if research_noop_signature.is_some() {
+                consecutive_research_noop_count += 1;
+            } else {
+                consecutive_research_noop_count = 0;
+            }
+
             info!(
                 "Iteration {iteration} score={:.4} baseline={baseline:.4}",
                 result.weighted_total
@@ -707,6 +769,7 @@ impl Engine {
 
             let iteration_duration_ms = iteration_started.elapsed().as_millis() as u64;
             self.record_iteration_timing(iteration_duration_ms);
+            completed_iterations = iteration;
             info!(
                 run_id = %self.run_id,
                 iteration,
@@ -714,6 +777,30 @@ impl Engine {
                 outcome = %format!("{}", promotion_outcome.as_db_value_for_display()),
                 "Engine iteration completed"
             );
+
+            previous_research_noop_signature = research_noop_signature;
+
+            if repeated_research_noop || consecutive_research_noop_count >= 2 {
+                let stop_message = if repeated_research_noop {
+                    "Stopping early after repeated research evidence-gap no-op proposals"
+                } else {
+                    "Stopping early after consecutive research evidence-gap no-op proposals"
+                };
+                info!(
+                    run_id = %self.run_id,
+                    iteration,
+                    "{stop_message}"
+                );
+                self.report_progress(
+                    EnginePhase::Completed,
+                    Some(iteration),
+                    Some(result.weighted_total),
+                    Some(result.duration_ms),
+                    Some(stop_message.to_owned()),
+                );
+                early_completion_message = Some(stop_message.to_owned());
+                break;
+            }
 
             if matches!(promotion_outcome, PromotionOutcome::Cancelled) {
                 return Err(EngineError::Cancelled);
@@ -725,16 +812,21 @@ impl Engine {
             if let Err(error) = self.git.cleanup_experiment_workspace(&workspace.path).await {
                 warn!("Failed to clean up experiment workspace: {error}");
             }
-            self.log_phase_timing(max_iter, "workspace_cleanup", cleanup_started);
+            self.log_phase_timing(completed_iterations.max(1), "workspace_cleanup", cleanup_started);
         }
 
-        info!("Engine completed {max_iter} iterations. Final baseline={baseline:.4}");
+        info!(
+            "Engine completed {completed_iterations} iteration(s). Final baseline={baseline:.4}"
+        );
         self.report_progress(
             EnginePhase::Completed,
-            Some(max_iter),
+            Some(completed_iterations),
             Some(baseline),
             None,
-            Some("Engine run completed".to_owned()),
+            Some(
+                early_completion_message
+                    .unwrap_or_else(|| "Engine run completed".to_owned()),
+            ),
         );
         Ok(())
     }

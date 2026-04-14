@@ -8,15 +8,25 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- Guided setup now ships as a full readiness feature set with the shared `setup_wizard` scanner, one-click local dependency fixes, supported-provider validation helpers, workspace auto-detection, saved environment profiles, and the CLI `maabarium setup` flow with `--check` and `--json` modes.
 
 ### Changed
 
-- None.
+- Guided setup and the desktop onboarding flow now reach a ready state faster by using the shared readiness scanner, real recommended-profile detection, supported-provider-aware remote model suggestions, searchable remote model pickers, and guided defaults that keep DuckDuckGo scrape as the free research mode unless operators explicitly switch to Advanced configuration.
 
 ### Fixed
 
-- None.
+- The workspace now pins Wasmtime to a patched 43.0.1 release line, clearing the RustSec advisories that were failing `cargo deny` in CI for the sandbox runtime dependency.
+- HTTP-backed model providers now use bounded request timeouts plus transient retries for 408, 429, and 5xx failures, reducing long stalls and improving resilience when hosted providers briefly timeout or flap during proposal rounds.
+- Research workflows now stop early after consecutive evidence-gap no-op proposals, even when the model rephrases the dead end or shifts to a slightly different follow-up query, so unresolved source-verification loops no longer burn through the remaining iteration budget.
+- Desktop development builds no longer migrate the legacy repo-local log file into the app log on first run, so the dev console log now starts cleanly under the real app log path instead of carrying stale repo-local trace history.
+- Desktop setup now lets remote provider validation discover model ids first, then exposes those results through an in-modal searchable picker for custom and known remote providers so validated remote models remain searchable, selectable, and persisted instead of falling back to Ollama-only choices.
+- Custom OpenAI-compatible provider validation now uses a longer default timeout than built-in providers, and OpenAI-compatible validation now accepts a successful `/models` response as a pass when the selected model is present, reducing false timeout failures for slower hosted endpoints during setup validation.
+- Desktop setup no longer resets the modal back to Guided mode on live console-state refresh while it is open, Guided versus Advanced now expose distinct onboarding controls instead of rendering the same UI, and the workspace widget no longer re-runs its inspection/analysis loop on every polled parent rerender.
+- Desktop now logs expected engine cancellations as cancellations instead of execution failures, reducing false-error noise when a run is intentionally stopped or unwinds during shutdown.
+- Guided setup now validates supported OpenAI-compatible remote providers plus native Anthropic and Gemini providers before saving desktop setup, uses the real recommended-profile detection path, maps desktop readiness through the shared core scanner, and exposes the native Anthropic/Gemini presets in suggested workflow models only after runtime support succeeds.
+- Guided setup profiles now keep DuckDuckGo scrape as the default research discovery mode for all presets, including Research Heavy; operators must switch to Advanced mode before opting into Brave API.
+- Desktop setup now suggests known-good default model names for native Anthropic and Gemini providers directly in the provider editor, reducing invalid manual model entry during first-run configuration.
 
 ### Breaking Changes
 

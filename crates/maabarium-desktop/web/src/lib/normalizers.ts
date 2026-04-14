@@ -321,8 +321,18 @@ function normalizeDesktopSetup(
           label: provider.label ?? provider.providerId ?? "Provider",
           endpoint: provider.endpoint ?? null,
           modelName: provider.modelName ?? null,
+          availableModelNames: Array.isArray(provider.availableModelNames)
+            ? provider.availableModelNames.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [],
           fallbackOnly: Boolean(provider.fallbackOnly),
           configured: Boolean(provider.configured),
+          supported: provider.supported !== false,
+          supportSummary:
+            typeof provider.supportSummary === "string"
+              ? provider.supportSummary
+              : null,
         }))
       : [],
     preferredUpdateChannel: setup?.preferredUpdateChannel ?? null,
@@ -341,6 +351,7 @@ function normalizeDesktopSetup(
             reason: setup.interruptedRunNotice.reason ?? null,
           }
         : null,
+    environmentProfile: setup?.environmentProfile ?? null,
   };
 }
 

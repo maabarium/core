@@ -1,23 +1,35 @@
 use async_trait::async_trait;
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 
 use secrecy::SecretString;
+use tokio::time::sleep;
+use tracing::warn;
 
 use crate::blueprint::{ModelAssignment, ModelDef, ModelsConfig};
 use crate::error::LLMError;
 use crate::error::SecretError;
 use crate::secrets::SecretStore;
 
+pub mod anthropic;
+pub mod gemini;
 pub mod mock;
 pub mod ollama;
 pub mod openai_compat;
 pub mod pool;
 
+pub use anthropic::AnthropicProvider;
+pub use gemini::GeminiProvider;
 pub use mock::MockProvider;
 pub use ollama::OllamaProvider;
 pub use openai_compat::OpenAICompatProvider;
 pub use pool::{ModelPool, PoolMember};
+
+const DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS: u64 = 90;
+const DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
@@ -52,6 +64,95 @@ pub trait LLMProvider: Send + Sync {
     }
 }
 
+pub(crate) fn build_provider_http_client() -> Client {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(
+            DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS,
+        ))
+        .timeout(Duration::from_secs(DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+pub(crate) async fn send_with_provider_retry<F>(
+    provider_name: &str,
+    model_name: &str,
+    mut build_request: F,
+) -> Result<Response, LLMError>
+where
+    F: FnMut() -> RequestBuilder,
+{
+    let mut backoff = Duration::from_millis(750);
+    let max_attempts = DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS.max(1);
+
+    for attempt in 1..=max_attempts {
+        match build_request().send().await {
+            Ok(response) if response.status().is_success() => return Ok(response),
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if is_transient_status(status) && attempt < max_attempts {
+                    warn!(
+                        provider = provider_name,
+                        model = model_name,
+                        status = %status,
+                        attempt,
+                        max_attempts,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "Retrying transient provider HTTP status"
+                    );
+                    sleep(backoff).await;
+                    backoff *= 2;
+                    continue;
+                }
+                return Err(LLMError::Provider(format!("HTTP {status}: {body}")));
+            }
+            Err(error)
+                if is_transient_reqwest_error(&error)
+                    && attempt < max_attempts =>
+            {
+                warn!(
+                    provider = provider_name,
+                    model = model_name,
+                    attempt,
+                    max_attempts,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %error,
+                    "Retrying transient provider request failure"
+                );
+                sleep(backoff).await;
+                backoff *= 2;
+            }
+            Err(error) => return Err(classify_provider_request_error(error)),
+        }
+    }
+
+    unreachable!("provider retry loop should always return a response or error")
+}
+
+fn classify_provider_request_error(error: reqwest::Error) -> LLMError {
+    if is_transient_reqwest_error(&error) {
+        LLMError::Timeout
+    } else {
+        LLMError::Http(error)
+    }
+}
+
+fn is_transient_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    ) || status.is_server_error()
+}
+
+fn is_transient_reqwest_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
 pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, SecretError> {
     let provider_name = model.provider.trim().to_ascii_lowercase();
     match provider_name.as_str() {
@@ -78,11 +179,40 @@ pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, Sec
                 model.max_tokens,
             )))
         }
+        "anthropic" => {
+            let api_key = required_provider_secret(&provider_name, model.api_key_env.as_deref())?;
+            Ok(Arc::new(AnthropicProvider::new(
+                model.endpoint.clone(),
+                model.name.clone(),
+                api_key,
+                model.max_tokens,
+            )))
+        }
+        "gemini" => {
+            let api_key = required_provider_secret(&provider_name, model.api_key_env.as_deref())?;
+            Ok(Arc::new(GeminiProvider::new(
+                model.endpoint.clone(),
+                model.name.clone(),
+                api_key,
+                model.max_tokens,
+            )))
+        }
         _ => Err(SecretError::InvalidInput(format!(
             "Unsupported model provider '{}' for model '{}'",
             model.provider, model.name
         ))),
     }
+}
+
+fn required_provider_secret(
+    provider_name: &str,
+    env_var: Option<&str>,
+) -> Result<SecretString, SecretError> {
+    provider_secret(provider_name, env_var)?.ok_or_else(|| {
+        SecretError::InvalidInput(format!(
+            "No API key configured for provider '{provider_name}'"
+        ))
+    })
 }
 
 pub fn provider_from_models(
@@ -128,9 +258,129 @@ pub fn provider_secret(
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        build_provider_http_client, send_with_provider_retry,
+        DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS,
+    };
     use super::provider_from_model;
     use crate::blueprint::ModelDef;
+    use crate::error::LLMError;
     use crate::error::SecretError;
+    use reqwest::Client;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
+
+    fn with_test_provider_key(action: impl FnOnce()) {
+        let previous = std::env::var_os("TEST_PROVIDER_KEY");
+        unsafe {
+            std::env::set_var("TEST_PROVIDER_KEY", "unit-test-provider-key");
+        }
+        action();
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("TEST_PROVIDER_KEY", value);
+            },
+            None => unsafe {
+                std::env::remove_var("TEST_PROVIDER_KEY");
+            },
+        }
+    }
+
+    fn spawn_retry_server(responses: Vec<(&'static str, &'static str)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener.local_addr().expect("local addr should resolve");
+
+        thread::spawn(move || {
+            for (status_line, body) in responses {
+                let (mut stream, _) = listener.accept().expect("request should arrive");
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer);
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("response should write");
+            }
+        });
+
+        format!("http://{address}")
+    }
+
+    fn spawn_timeout_server(request_count: usize, stall_for: Duration) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener.local_addr().expect("local addr should resolve");
+
+        thread::spawn(move || {
+            for _ in 0..request_count {
+                let (stream, _) = listener.accept().expect("request should arrive");
+                thread::spawn(move || {
+                    let _held_stream = stream;
+                    thread::sleep(stall_for);
+                });
+            }
+        });
+
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn retries_transient_provider_statuses() {
+        let endpoint = spawn_retry_server(vec![
+            ("503 Service Unavailable", r#"{"error":"busy"}"#),
+            ("200 OK", r#"{"ok":true}"#),
+        ]);
+        let client = build_provider_http_client();
+
+        let response = send_with_provider_retry("openai-compat", "retry-model", || {
+            client.get(&endpoint)
+        })
+        .await
+        .expect("second attempt should succeed");
+
+        let body = response.text().await.expect("response body should read");
+        assert_eq!(body, r#"{"ok":true}"#);
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_non_transient_provider_statuses() {
+        let endpoint = spawn_retry_server(vec![(
+            "400 Bad Request",
+            r#"{"error":"bad request"}"#,
+        )]);
+        let client = build_provider_http_client();
+
+        let error = send_with_provider_retry("openai-compat", "retry-model", || {
+            client.get(&endpoint)
+        })
+        .await
+        .expect_err("client error should not retry");
+
+        assert!(matches!(error, LLMError::Provider(message) if message.contains("400 Bad Request")));
+    }
+
+    #[tokio::test]
+    async fn maps_final_transient_reqwest_error_to_timeout() {
+        let endpoint = spawn_timeout_server(
+            DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS.max(1),
+            Duration::from_millis(200),
+        );
+        let client = Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .expect("client should build");
+
+        let error = send_with_provider_retry("openai-compat", "retry-model", || {
+            client.get(&endpoint)
+        })
+        .await
+        .expect_err("exhausted transient timeout should return an error");
+
+        assert!(matches!(error, LLMError::Timeout));
+    }
 
     fn test_model(provider: &str) -> ModelDef {
         ModelDef {
@@ -146,10 +396,34 @@ mod tests {
 
     #[test]
     fn resolves_xai_as_openai_compatible_provider() {
-        let provider = provider_from_model(&test_model("xai")).expect("xai should resolve");
+        with_test_provider_key(|| {
+            let provider = provider_from_model(&test_model("xai")).expect("xai should resolve");
 
-        assert_eq!(provider.provider_name(), "openai-compat");
-        assert_eq!(provider.model_name(), "test-model");
+            assert_eq!(provider.provider_name(), "openai-compat");
+            assert_eq!(provider.model_name(), "test-model");
+        });
+    }
+
+    #[test]
+    fn resolves_anthropic_as_native_provider() {
+        with_test_provider_key(|| {
+            let provider = provider_from_model(&test_model("anthropic"))
+                .expect("anthropic should resolve");
+
+            assert_eq!(provider.provider_name(), "anthropic");
+            assert_eq!(provider.model_name(), "test-model");
+        });
+    }
+
+    #[test]
+    fn resolves_gemini_as_native_provider() {
+        with_test_provider_key(|| {
+            let provider =
+                provider_from_model(&test_model("gemini")).expect("gemini should resolve");
+
+            assert_eq!(provider.provider_name(), "gemini");
+            assert_eq!(provider.model_name(), "test-model");
+        });
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { Layers, LifeBuoy, RefreshCw, Wrench } from "lucide-react";
 import type {
   ExperimentBranchCleanupResult,
   ExperimentBranchInventory,
+  FixOutcome,
   GitDependencyState,
   OllamaStatus,
   ReadinessItem,
@@ -62,6 +63,7 @@ export function ConsoleMaintenancePanel({
   onInstallGit,
   onInstallOllama,
   onStartOllama,
+  onApplyFixes,
   onPreviewBranchCleanup,
   onCleanupBranches,
   onCheckForUpdates,
@@ -90,6 +92,7 @@ export function ConsoleMaintenancePanel({
   onInstallGit: () => void;
   onInstallOllama: () => void;
   onStartOllama: () => void;
+  onApplyFixes: () => Promise<FixOutcome[] | null>;
   onPreviewBranchCleanup: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
@@ -222,6 +225,7 @@ export function ConsoleMaintenancePanel({
             onInstallGit={onInstallGit}
             onInstallOllama={onInstallOllama}
             onStartOllama={onStartOllama}
+            onApplyFixes={onApplyFixes}
             onPreviewBranchCleanup={onPreviewBranchCleanup}
             onCleanupBranches={onCleanupBranches}
             embedded

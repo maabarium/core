@@ -16,6 +16,7 @@ use maabarium_core::{
     GitDependencyEnsureOutcome, PersistedProposal, Persistence, ProcessPluginManifest,
     SecretStore, ensure_git_dependency, git_dependency_status,
 };
+use maabarium_core::error::EngineError;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -541,7 +542,14 @@ fn main() {
             update_blueprint_from_wizard,
             set_blueprint_path,
             check_for_updates,
-            install_available_update
+            install_available_update,
+            run_readiness_scan,
+            analyze_workspace_command,
+            validate_provider_command,
+            validate_ollama_command,
+            get_recommended_profile_command,
+            apply_profile_command,
+            apply_fixes_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -979,7 +987,6 @@ fn prepare_desktop_runtime_paths() -> anyhow::Result<DesktopRuntimePaths> {
 
     if desktop_runtime_allows_legacy_migration() {
         migrate_legacy_runtime_file(&default_db_path(), &db_path)?;
-        migrate_legacy_runtime_file(&default_log_path(), &log_path)?;
     }
 
     Ok(DesktopRuntimePaths {
@@ -2319,6 +2326,14 @@ fn engine_phase_label(phase: EnginePhase) -> &'static str {
     }
 }
 
+fn is_expected_engine_cancellation(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<EngineError>()
+            .is_some_and(|engine_error| matches!(engine_error, EngineError::Cancelled))
+    })
+}
+
 fn run_workspace_root(path: &Path) -> Result<PathBuf, String> {
     let repo = Repository::discover(path).map_err(|error| {
         format!(
@@ -2516,7 +2531,9 @@ fn set_provider_api_key(
         .iter_mut()
         .find(|provider| provider.provider_id == provider_id)
     {
-        provider.configured = has_api_key && provider.model_name.is_some();
+        if !has_api_key {
+            provider.configured = false;
+        }
     }
     persist_desktop_setup(&state.settings_path, &setup)?;
 
@@ -3012,7 +3029,11 @@ fn start_engine(
             .await;
 
             if let Err(error) = outcome {
-                error!(?error, "Desktop engine execution failed");
+                if is_expected_engine_cancellation(&error) {
+                    info!(?error, "Desktop engine execution cancelled");
+                } else {
+                    error!(?error, "Desktop engine execution failed");
+                }
             }
             running_flag.store(false, Ordering::SeqCst);
             reset_run_state_handle(&progress_state);
@@ -3315,6 +3336,81 @@ fn slugify_blueprint_name(input: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Setup Wizard Tauri Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn run_readiness_scan(
+    workspace: Option<String>,
+    strategy: Option<String>,
+) -> Result<maabarium_core::ReadinessReport, String> {
+    let workspace_ref = workspace.as_deref();
+    let strategy_ref = strategy.as_deref();
+    Ok(maabarium_core::ReadinessScanner::scan(
+        workspace_ref,
+        strategy_ref,
+    ))
+}
+
+#[tauri::command]
+fn analyze_workspace_command(path: String) -> Result<maabarium_core::WorkspaceAnalysis, String> {
+    Ok(maabarium_core::analyze_workspace(&path))
+}
+
+#[tauri::command]
+async fn validate_provider_command(
+    provider_id: String,
+    endpoint: String,
+    api_key: Option<String>,
+    test_model: Option<String>,
+) -> Result<maabarium_core::ProviderValidationResult, String> {
+    let api_key_ref = api_key.as_deref();
+    let model_ref = test_model.as_deref();
+    Ok(
+        maabarium_core::validate_provider_connection(
+            &provider_id,
+            &endpoint,
+            api_key_ref,
+            model_ref,
+        )
+        .await,
+    )
+}
+
+#[tauri::command]
+async fn validate_ollama_command(
+    endpoint: Option<String>,
+) -> Result<maabarium_core::ProviderValidationResult, String> {
+    let ep = endpoint
+        .as_deref()
+        .unwrap_or("http://localhost:11434");
+    Ok(maabarium_core::validate_ollama_connection(ep).await)
+}
+
+#[tauri::command]
+fn get_recommended_profile_command() -> Result<String, String> {
+    let profile = maabarium_core::detect_recommended_profile();
+    Ok(profile.runtime_strategy_label().to_owned())
+}
+
+#[tauri::command]
+fn apply_profile_command(profile_name: String) -> Result<maabarium_core::ProfileConfig, String> {
+    let profile = match profile_name.as_str() {
+        "local" => maabarium_core::EnvironmentProfile::LocalOnly,
+        "mixed" => maabarium_core::EnvironmentProfile::Mixed,
+        "research_heavy" | "remote" => maabarium_core::EnvironmentProfile::ResearchHeavy,
+        _ => return Err(format!("Unknown profile: {profile_name}")),
+    };
+    Ok(maabarium_core::apply_profile(profile))
+}
+
+#[tauri::command]
+fn apply_fixes_command(workspace: Option<String>) -> Result<Vec<maabarium_core::FixOutcome>, String> {
+    let workspace_ref = workspace.as_deref();
+    Ok(maabarium_core::apply_all_fixes(workspace_ref))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3352,6 +3448,21 @@ mod tests {
             created_at: "2026-03-28T00:00:00Z".to_owned(),
             file_patches: Vec::new(),
         }
+    }
+
+    #[test]
+    fn expected_engine_cancellation_detects_wrapped_cancelled_errors() {
+        let error = anyhow::Error::new(EngineError::Cancelled).context("Engine run failed");
+
+        assert!(is_expected_engine_cancellation(&error));
+    }
+
+    #[test]
+    fn expected_engine_cancellation_ignores_non_cancelled_engine_errors() {
+        let error = anyhow::Error::new(EngineError::Llm(maabarium_core::error::LLMError::Timeout))
+            .context("Engine run failed");
+
+        assert!(!is_expected_engine_cancellation(&error));
     }
 
     fn unique_test_directory(name: &str) -> PathBuf {
@@ -3461,6 +3572,53 @@ mod tests {
             telemetry.npu.status,
             HardwareSensorStatus::Unavailable
         ));
+    }
+
+    #[test]
+    fn desktop_runtime_paths_do_not_migrate_legacy_log_file() {
+        let legacy_log_path = default_log_path();
+        let original_legacy_content = std::fs::read(&legacy_log_path).ok();
+        let legacy_parent = legacy_log_path
+            .parent()
+            .expect("legacy log path should have a parent")
+            .to_path_buf();
+        std::fs::create_dir_all(&legacy_parent).expect("legacy log parent should exist");
+        std::fs::write(&legacy_log_path, "legacy repo-local log\n")
+            .expect("legacy log fixture should be written");
+
+        let temp_home = unique_test_directory("desktop-runtime-home");
+        let original_home = std::env::var_os("HOME");
+        std::fs::create_dir_all(&temp_home).expect("temp home should be created");
+        unsafe {
+            std::env::set_var("HOME", &temp_home);
+        }
+
+        let runtime_paths = prepare_desktop_runtime_paths().expect("runtime paths should prepare");
+        let expected_log_path =
+            desktop_log_directory().expect("desktop log directory should resolve").join("maabarium.log");
+
+        assert!(!runtime_paths.log_path.exists());
+        assert_eq!(runtime_paths.log_path, expected_log_path);
+
+        if let Some(home) = original_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+
+        match original_legacy_content {
+            Some(content) => std::fs::write(&legacy_log_path, content)
+                .expect("original legacy log content should be restored"),
+            None => {
+                let _ = std::fs::remove_file(&legacy_log_path);
+            }
+        }
+
+        std::fs::remove_dir_all(&temp_home).ok();
     }
 
     #[test]

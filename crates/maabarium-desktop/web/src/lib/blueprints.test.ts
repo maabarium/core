@@ -90,4 +90,61 @@ describe("blueprint wizard derivation", () => {
 
     expect(suggested[0]?.name).toBe("qwen3.5:9b");
   });
+
+  it("includes native Anthropic providers in suggested remote wizard models once supported", () => {
+    const suggested = buildSuggestedWizardModels({
+      desktopSetup: {
+        guidedMode: true,
+        onboardingCompleted: true,
+        runtimeStrategy: "remote",
+        researchSearchMode: "duckduckgo_scrape",
+        workspacePath: "/tmp/workspace",
+        selectedBlueprintPath: null,
+        selectedLocalModels: [],
+        remoteProviders: [
+          {
+            providerId: "anthropic",
+            label: "Anthropic",
+            endpoint: "https://api.anthropic.com",
+            modelName: "claude-sonnet-4",
+            fallbackOnly: false,
+            configured: true,
+            supported: true,
+            supportSummary: "Uses Anthropic's native Messages API.",
+          },
+          {
+            providerId: "openrouter",
+            label: "OpenRouter",
+            endpoint: "https://openrouter.ai/api/v1",
+            modelName: "openai/gpt-4o-mini",
+            fallbackOnly: false,
+            configured: true,
+            supported: true,
+            supportSummary: null,
+          },
+        ],
+        preferredUpdateChannel: null,
+        remindLaterUntil: null,
+        remindLaterVersion: null,
+        lastSetupCompletedAt: null,
+        interruptedRunNotice: null,
+        environmentProfile: null,
+      },
+      ollama: {
+        installed: false,
+        running: false,
+        commandAvailable: false,
+        launchAtLoginSupported: true,
+        installCommand: null,
+        startCommand: null,
+        statusDetail: "Ollama unavailable",
+        models: [],
+        recommendedModels: [],
+      },
+    } as never);
+
+    expect(suggested).toHaveLength(2);
+    expect(suggested[0]?.provider).toBe("anthropic");
+    expect(suggested[1]?.provider).toBe("openrouter");
+  });
 });

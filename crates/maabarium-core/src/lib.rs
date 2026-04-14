@@ -15,6 +15,7 @@ pub mod metrics;
 pub mod persistence;
 pub mod runtime_dependencies;
 pub mod secrets;
+pub mod setup_wizard;
 pub mod updater;
 
 pub use blueprint::{
@@ -40,6 +41,15 @@ pub use runtime_dependencies::{
     git_dependency_status,
 };
 pub use secrets::{ApiKeyStore, SecretStore};
+pub use setup_wizard::{
+    EnvironmentProfile, FixOutcome, FixTarget, OllamaStatus as SetupOllamaStatus,
+    ProfileConfig, ProviderValidationResult, ReadinessItem as SetupReadinessItem,
+    ReadinessLevel, ReadinessReport, ReadinessScanner, WorkspaceAnalysis,
+    analyze_workspace, apply_all_fixes, apply_git_fix, apply_profile,
+    detect_recommended_profile, ollama_status as setup_ollama_status,
+    start_ollama as setup_start_ollama, validate_ollama_connection,
+    validate_provider_connection,
+};
 pub use updater::{
     CliArtifactManifest, CliReleaseArtifact, ReleaseManifest, UpdaterConfiguration,
     check_for_cli_update, install_cli_update,
