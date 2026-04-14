@@ -16,6 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- The workspace now pins Wasmtime to a patched 43.0.1 release line, clearing the RustSec advisories that were failing `cargo deny` in CI for the sandbox runtime dependency.
 - HTTP-backed model providers now use bounded request timeouts plus transient retries for 408, 429, and 5xx failures, reducing long stalls and improving resilience when hosted providers briefly timeout or flap during proposal rounds.
 - Research workflows now stop early after consecutive evidence-gap no-op proposals, even when the model rephrases the dead end or shifts to a slightly different follow-up query, so unresolved source-verification loops no longer burn through the remaining iteration budget.
 - Desktop development builds no longer migrate the legacy repo-local log file into the app log on first run, so the dev console log now starts cleanly under the real app log path instead of carrying stale repo-local trace history.
