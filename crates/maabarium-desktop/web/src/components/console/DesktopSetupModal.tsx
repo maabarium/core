@@ -72,9 +72,7 @@ type DesktopSetupModalProps = {
   onInstallOllama: () => Promise<void>;
   onStartOllama: () => Promise<void>;
   onPullRecommendedOllamaModels: () => Promise<void>;
-  onAnalyzeWorkspace: (
-    path: string,
-  ) => Promise<import("../../types/console").WorkspaceAnalysis | null>;
+  onAnalyzeWorkspace: (path: string) => Promise<WorkspaceAnalysis | null>;
   onValidateProvider: (
     providerId: string,
     endpoint: string,
@@ -82,9 +80,7 @@ type DesktopSetupModalProps = {
     testModel?: string | null,
   ) => Promise<ProviderValidationResult | null>;
   onGetRecommendedProfile: () => Promise<string | null>;
-  onApplyProfile: (
-    profileName: string,
-  ) => Promise<import("../../types/console").ProfileConfig | null>;
+  onApplyProfile: (profileName: string) => Promise<ProfileConfig | null>;
 };
 
 export function DesktopSetupModal({

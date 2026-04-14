@@ -83,20 +83,21 @@ where
     F: FnMut() -> RequestBuilder,
 {
     let mut backoff = Duration::from_millis(750);
+    let max_attempts = DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS.max(1);
 
-    for attempt in 1..=DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS {
+    for attempt in 1..=max_attempts {
         match build_request().send().await {
             Ok(response) if response.status().is_success() => return Ok(response),
             Ok(response) => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                if is_transient_status(status) && attempt < DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS {
+                if is_transient_status(status) && attempt < max_attempts {
                     warn!(
                         provider = provider_name,
                         model = model_name,
                         status = %status,
                         attempt,
-                        max_attempts = DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS,
+                        max_attempts,
                         backoff_ms = backoff.as_millis() as u64,
                         "Retrying transient provider HTTP status"
                     );
@@ -108,13 +109,13 @@ where
             }
             Err(error)
                 if is_transient_reqwest_error(&error)
-                    && attempt < DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS =>
+                    && attempt < max_attempts =>
             {
                 warn!(
                     provider = provider_name,
                     model = model_name,
                     attempt,
-                    max_attempts = DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS,
+                    max_attempts,
                     backoff_ms = backoff.as_millis() as u64,
                     error = %error,
                     "Retrying transient provider request failure"
@@ -122,11 +123,19 @@ where
                 sleep(backoff).await;
                 backoff *= 2;
             }
-            Err(error) => return Err(LLMError::Http(error)),
+            Err(error) => return Err(classify_provider_request_error(error)),
         }
     }
 
-    Err(LLMError::Timeout)
+    unreachable!("provider retry loop should always return a response or error")
+}
+
+fn classify_provider_request_error(error: reqwest::Error) -> LLMError {
+    if is_transient_reqwest_error(&error) {
+        LLMError::Timeout
+    } else {
+        LLMError::Http(error)
+    }
 }
 
 fn is_transient_status(status: StatusCode) -> bool {
@@ -249,14 +258,19 @@ pub fn provider_secret(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_provider_http_client, send_with_provider_retry};
+    use super::{
+        build_provider_http_client, send_with_provider_retry,
+        DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS,
+    };
     use super::provider_from_model;
     use crate::blueprint::ModelDef;
     use crate::error::LLMError;
     use crate::error::SecretError;
+    use reqwest::Client;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+    use std::time::Duration;
 
     fn with_test_provider_key(action: impl FnOnce()) {
         let previous = std::env::var_os("TEST_PROVIDER_KEY");
@@ -296,6 +310,23 @@ mod tests {
         format!("http://{address}")
     }
 
+    fn spawn_timeout_server(request_count: usize, stall_for: Duration) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let address = listener.local_addr().expect("local addr should resolve");
+
+        thread::spawn(move || {
+            for _ in 0..request_count {
+                let (stream, _) = listener.accept().expect("request should arrive");
+                thread::spawn(move || {
+                    let _held_stream = stream;
+                    thread::sleep(stall_for);
+                });
+            }
+        });
+
+        format!("http://{address}")
+    }
+
     #[tokio::test]
     async fn retries_transient_provider_statuses() {
         let endpoint = spawn_retry_server(vec![
@@ -329,6 +360,26 @@ mod tests {
         .expect_err("client error should not retry");
 
         assert!(matches!(error, LLMError::Provider(message) if message.contains("400 Bad Request")));
+    }
+
+    #[tokio::test]
+    async fn maps_final_transient_reqwest_error_to_timeout() {
+        let endpoint = spawn_timeout_server(
+            DEFAULT_PROVIDER_TRANSIENT_RETRY_ATTEMPTS.max(1),
+            Duration::from_millis(200),
+        );
+        let client = Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .expect("client should build");
+
+        let error = send_with_provider_retry("openai-compat", "retry-model", || {
+            client.get(&endpoint)
+        })
+        .await
+        .expect_err("exhausted transient timeout should return an error");
+
+        assert!(matches!(error, LLMError::Timeout));
     }
 
     fn test_model(provider: &str) -> ModelDef {
