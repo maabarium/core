@@ -3594,16 +3594,11 @@ mod tests {
         }
 
         let runtime_paths = prepare_desktop_runtime_paths().expect("runtime paths should prepare");
+        let expected_log_path =
+            desktop_log_directory().expect("desktop log directory should resolve").join("maabarium.log");
 
         assert!(!runtime_paths.log_path.exists());
-        assert_eq!(
-            runtime_paths.log_path,
-            temp_home
-                .join("Library")
-                .join("Logs")
-                .join(DEV_DESKTOP_RUNTIME_ID)
-                .join("maabarium.log")
-        );
+        assert_eq!(runtime_paths.log_path, expected_log_path);
 
         if let Some(home) = original_home {
             unsafe {
