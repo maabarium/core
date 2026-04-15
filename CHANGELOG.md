@@ -16,6 +16,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.4.1] - 2026-04-15
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
 - The macOS desktop release flow now validates Apple notarization access before starting the signed bundle build, so expired or unsigned Apple legal agreements fail immediately with a clear action instead of surfacing only after the full notarization attempt.
 
 ### Breaking Changes
