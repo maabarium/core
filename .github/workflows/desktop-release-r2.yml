@@ -122,6 +122,12 @@ jobs:
           : "${AWS_SECRET_ACCESS_KEY:?CLOUDFLARE_R2_SECRET_ACCESS_KEY must be configured}"
           node "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-updater-pubkey.mjs" --github-env
 
+      - name: Validate Apple notarization access
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/crates/maabarium-desktop/scripts/validate-apple-notarization-auth.sh"
+
       - name: Install desktop dependencies
         run: cd crates/maabarium-desktop && pnpm install --frozen-lockfile
 

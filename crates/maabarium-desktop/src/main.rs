@@ -11,7 +11,7 @@ use maabarium_core::blueprint::{
 };
 use maabarium_core::persistence::PersistedExperiment;
 use maabarium_core::{
-    default_db_path, default_log_path, read_recent_log_lines_from_path, ApiKeyStore, BlueprintFile,
+    default_db_path, read_recent_log_lines_from_path, ApiKeyStore, BlueprintFile,
     Engine, EngineConfig, EnginePhase, EngineProgressUpdate, EvaluatorRegistry,
     GitDependencyEnsureOutcome, PersistedProposal, Persistence, ProcessPluginManifest,
     SecretStore, ensure_git_dependency, git_dependency_status,

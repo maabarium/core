@@ -287,6 +287,8 @@ if [[ -z "${APPLE_CERTIFICATE:-}" && -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   exit 1
 fi
 
+bash "$DESKTOP_DIR/scripts/validate-apple-notarization-auth.sh"
+
 if [[ "$PUBLISH_R2" == true ]]; then
   : "${CLOUDFLARE_R2_BUCKET:?CLOUDFLARE_R2_BUCKET must be configured}"
   : "${CLOUDFLARE_R2_ENDPOINT:?CLOUDFLARE_R2_ENDPOINT must be configured}"

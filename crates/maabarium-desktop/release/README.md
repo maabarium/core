@@ -250,6 +250,7 @@ Example values:
 - `APPLE_CERTIFICATE` must be the base64-encoded contents of your exported Developer ID Application `.p12` certificate.
 - `APPLE_CERTIFICATE_PASSWORD` is the password used when exporting that `.p12` file.
 - `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID` are used by Tauri's notarization flow. `APPLE_PASSWORD` should be an Apple app-specific password.
+- The release workflow now validates Apple notarization access before the bundle build starts. If Apple returns a 403 saying a required agreement is missing or expired, sign the latest legal agreements for the team in `developer.apple.com/account` before rerunning the release.
 - `APPLE_SIGNING_IDENTITY` is optional if the identity can be inferred from `APPLE_CERTIFICATE`, but setting it explicitly is safer for CI.
 - The macOS release flow now signs the bundled desktop CLI resource during Tauri's `beforeBundleCommand`, so the signing identity must be available in Keychain before `pnpm tauri build` starts. The GitHub Actions workflow imports the `.p12` into a temporary keychain first; for local validation, install the certificate in Keychain or import it manually before running the release script.
 - A Developer ID signature alone is not enough for a downloadable app on current macOS releases. If the app is not notarized and stapled, Finder can show a generic `cannot be opened because of a problem` error instead of a clear Gatekeeper prompt.
