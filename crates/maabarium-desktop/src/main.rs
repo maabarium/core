@@ -3416,6 +3416,7 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use maabarium_core::default_log_path;
 
     fn test_console_experiment(
         id: i64,
