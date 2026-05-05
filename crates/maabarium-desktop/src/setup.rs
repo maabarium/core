@@ -9,8 +9,7 @@ use maabarium_core::{GitDependencyStatus, ReadinessLevel, ReadinessScanner};
 
 const SUPPORTED_UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 const OLLAMA_MACOS_APP_PATH: &str = "/Applications/Ollama.app";
-const OLLAMA_MACOS_RESOURCE_CLI_PATH: &str =
-    "/Applications/Ollama.app/Contents/Resources/ollama";
+const OLLAMA_MACOS_RESOURCE_CLI_PATH: &str = "/Applications/Ollama.app/Contents/Resources/ollama";
 const OLLAMA_MACOS_APP_BINARY_PATH: &str = "/Applications/Ollama.app/Contents/MacOS/Ollama";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,9 +324,7 @@ pub fn build_ollama_status() -> OllamaStatus {
         "Ollama appears to be installed, but the local service is not responding on port 11434."
             .to_owned()
     } else if let Some(error) = model_discovery_error {
-        format!(
-            "Ollama is running, but Maabarium could not inspect local models yet: {error}"
-        )
+        format!("Ollama is running, but Maabarium could not inspect local models yet: {error}")
     } else if models.is_empty() {
         "Ollama is running, but no local models were detected yet.".to_owned()
     } else {
@@ -405,15 +402,11 @@ pub fn pull_recommended_ollama_models() -> Result<(), String> {
     .is_ok();
 
     if !running {
-        return Err(
-            "Ollama must be running before recommended models can be pulled.".to_owned(),
-        );
+        return Err("Ollama must be running before recommended models can be pulled.".to_owned());
     }
 
     let installed_models = read_ollama_models(&command_path).map_err(|error| {
-        format!(
-            "Failed to inspect installed Ollama models before pulling recommendations: {error}"
-        )
+        format!("Failed to inspect installed Ollama models before pulling recommendations: {error}")
     })?;
     let missing_models = recommended_ollama_models()
         .into_iter()
@@ -432,7 +425,9 @@ pub fn pull_recommended_ollama_models() -> Result<(), String> {
         let status = Command::new(&command_path)
             .args(["pull", model_name.as_str()])
             .status()
-            .map_err(|error| format!("Failed to launch Ollama model pull for '{model_name}': {error}"))?;
+            .map_err(|error| {
+                format!("Failed to launch Ollama model pull for '{model_name}': {error}")
+            })?;
 
         if !status.success() {
             return Err(format!(
@@ -488,7 +483,10 @@ pub fn build_readiness_items(
     let research_search_item = ReadinessItem {
         id: "research_search".to_owned(),
         title: "Research Search".to_owned(),
-        status: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
+        status: if matches!(
+            setup.research_search_mode,
+            ResearchSearchMode::DuckduckgoScrape
+        ) {
             ReadinessStatus::Ready
         } else if brave_search_configured {
             ReadinessStatus::Ready
@@ -497,7 +495,10 @@ pub fn build_readiness_items(
         } else {
             ReadinessStatus::Optional
         },
-        summary: if matches!(setup.research_search_mode, ResearchSearchMode::DuckduckgoScrape) {
+        summary: if matches!(
+            setup.research_search_mode,
+            ResearchSearchMode::DuckduckgoScrape
+        ) {
             "Free DuckDuckGo scraping is enabled for research discovery. It works out of the box, but it is unofficial and can be slower, less stable, or blocked without warning."
                 .to_owned()
         } else if brave_search_configured {
@@ -545,13 +546,12 @@ pub fn build_readiness_items(
                 db_path.display(),
                 log_path.display()
             );
-            diagnostics.status = if parent_directory_available(db_path)
-                && parent_directory_available(log_path)
-            {
-                ReadinessStatus::Ready
-            } else {
-                ReadinessStatus::NeedsAttention
-            };
+            diagnostics.status =
+                if parent_directory_available(db_path) && parent_directory_available(log_path) {
+                    ReadinessStatus::Ready
+                } else {
+                    ReadinessStatus::NeedsAttention
+                };
             diagnostics.action_label = "Inspect Paths".to_owned();
         }
     } else {
@@ -559,8 +559,7 @@ pub fn build_readiness_items(
         items.push(ReadinessItem {
             id: "diagnostics".to_owned(),
             title: "Diagnostics".to_owned(),
-            status: if parent_directory_available(db_path) && parent_directory_available(log_path)
-            {
+            status: if parent_directory_available(db_path) && parent_directory_available(log_path) {
                 ReadinessStatus::Ready
             } else {
                 ReadinessStatus::NeedsAttention

@@ -53,10 +53,7 @@ impl GitInstallerKind {
             Self::Dnf => ("sudo", &["dnf", "install", "-y", "git"]),
             Self::Yum => ("sudo", &["yum", "install", "-y", "git"]),
             Self::Pacman => ("sudo", &["pacman", "-Sy", "--noconfirm", "git"]),
-            Self::Zypper => (
-                "sudo",
-                &["zypper", "--non-interactive", "install", "git"],
-            ),
+            Self::Zypper => ("sudo", &["zypper", "--non-interactive", "install", "git"]),
             Self::Winget => (
                 "winget",
                 &["install", "--id", "Git.Git", "-e", "--source", "winget"],
@@ -70,7 +67,9 @@ impl GitInstallerKind {
             Self::XcodeCommandLineTools => {
                 "Git is still unavailable. Maabarium started the Xcode Command Line Tools installer because Git is required. Finish that installer, then retry the command or restart the desktop app."
             }
-            _ => "Git is still unavailable after the automatic installation attempt. Retry once the package manager finishes, then start Maabarium again.",
+            _ => {
+                "Git is still unavailable after the automatic installation attempt. Retry once the package manager finishes, then start Maabarium again."
+            }
         }
     }
 
@@ -95,7 +94,9 @@ pub struct GitDependencyStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitDependencyEnsureOutcome {
     AlreadyInstalled,
-    Installed { installer: GitInstallerKind },
+    Installed {
+        installer: GitInstallerKind,
+    },
     InstallationStarted {
         installer: GitInstallerKind,
         message: String,
@@ -202,7 +203,10 @@ fn detect_git_installer(runtime: &impl GitDependencyRuntime) -> Option<GitInstal
     None
 }
 
-fn run_installer(runtime: &impl GitDependencyRuntime, installer: GitInstallerKind) -> Result<(), String> {
+fn run_installer(
+    runtime: &impl GitDependencyRuntime,
+    installer: GitInstallerKind,
+) -> Result<(), String> {
     let (command_name, args) = installer.command_and_args();
     let command_path = runtime.find_command(command_name).ok_or_else(|| {
         format!(
@@ -282,8 +286,8 @@ fn find_command_in_directory(directory: &Path, name: &str) -> Option<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
-        let pathext = std::env::var_os("PATHEXT")
-            .unwrap_or_else(|| OsString::from(".EXE;.CMD;.BAT;.COM"));
+        let pathext =
+            std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".EXE;.CMD;.BAT;.COM"));
         let extensions = pathext
             .to_string_lossy()
             .split(';')
@@ -310,11 +314,7 @@ mod tests {
     fn test_installer_fixture() -> (Vec<&'static str>, GitInstallerKind, &'static str) {
         #[cfg(target_os = "macos")]
         {
-            return (
-                vec!["brew"],
-                GitInstallerKind::Homebrew,
-                "brew install git",
-            );
+            return (vec!["brew"], GitInstallerKind::Homebrew, "brew install git");
         }
 
         #[cfg(target_os = "windows")]
@@ -428,10 +428,7 @@ mod tests {
 
         let outcome = ensure_git_dependency_with_runtime(&runtime).expect("install should succeed");
 
-        assert_eq!(
-            outcome,
-            GitDependencyEnsureOutcome::Installed { installer }
-        );
+        assert_eq!(outcome, GitDependencyEnsureOutcome::Installed { installer });
         assert!(runtime.find_command("git").is_some());
     }
 

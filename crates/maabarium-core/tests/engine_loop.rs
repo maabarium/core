@@ -160,9 +160,8 @@ async fn engine_persists_explicit_promotion_outcomes() {
     let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
     engine.run().await.expect("engine should complete");
 
-    let persistence =
-        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
-            .expect("db should open");
+    let persistence = Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+        .expect("db should open");
     let experiments = persistence
         .recent_experiments_for_blueprint("mock-test", 10)
         .expect("experiments should load");
@@ -176,7 +175,8 @@ async fn engine_persists_explicit_promotion_outcomes() {
 
 #[tokio::test]
 async fn engine_does_not_bleed_baseline_between_runs() {
-    let first_repo_root = std::env::temp_dir().join(format!("maabarium-engine-{}", uuid::Uuid::new_v4()));
+    let first_repo_root =
+        std::env::temp_dir().join(format!("maabarium-engine-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(first_repo_root.join("src")).expect("temp repo src should be created");
     fs::write(first_repo_root.join("src/lib.rs"), "pub fn baseline() {}\n")
         .expect("baseline file should be created");
@@ -192,12 +192,16 @@ async fn engine_does_not_bleed_baseline_between_runs() {
     )
     .expect("blueprint should be written");
 
-    let first_blueprint = BlueprintFile::load(&first_blueprint_path).expect("Failed to load mock blueprint");
+    let first_blueprint =
+        BlueprintFile::load(&first_blueprint_path).expect("Failed to load mock blueprint");
 
     let first_engine = Engine::new(
         EngineConfig {
             blueprint: first_blueprint,
-            db_path: first_repo_root.join("maabarium_test.db").display().to_string(),
+            db_path: first_repo_root
+                .join("maabarium_test.db")
+                .display()
+                .to_string(),
             progress_reporter: None,
         },
         Arc::new(MockEvaluator { score: 1.0 }),
@@ -206,10 +210,14 @@ async fn engine_does_not_bleed_baseline_between_runs() {
     .expect("first engine init failed");
     first_engine.run().await.expect("first run should complete");
 
-    let second_repo_root = std::env::temp_dir().join(format!("maabarium-engine-{}", uuid::Uuid::new_v4()));
+    let second_repo_root =
+        std::env::temp_dir().join(format!("maabarium-engine-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(second_repo_root.join("src")).expect("temp repo src should be created");
-    fs::write(second_repo_root.join("src/lib.rs"), "pub fn baseline() {}\n")
-        .expect("baseline file should be created");
+    fs::write(
+        second_repo_root.join("src/lib.rs"),
+        "pub fn baseline() {}\n",
+    )
+    .expect("baseline file should be created");
     init_git_repo(&second_repo_root);
 
     let second_blueprint_path = second_repo_root.join("mock_blueprint.toml");
@@ -222,7 +230,8 @@ async fn engine_does_not_bleed_baseline_between_runs() {
     )
     .expect("blueprint should be written");
 
-    let second_blueprint = BlueprintFile::load(&second_blueprint_path).expect("Failed to load mock blueprint");
+    let second_blueprint =
+        BlueprintFile::load(&second_blueprint_path).expect("Failed to load mock blueprint");
     let db_path = first_repo_root.join("maabarium_test.db");
 
     let second_engine = Engine::new(
@@ -235,11 +244,13 @@ async fn engine_does_not_bleed_baseline_between_runs() {
         CancellationToken::new(),
     )
     .expect("second engine init failed");
-    second_engine.run().await.expect("second run should complete");
+    second_engine
+        .run()
+        .await
+        .expect("second run should complete");
 
-    let persistence =
-        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
-            .expect("db should open");
+    let persistence = Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+        .expect("db should open");
     let experiments = persistence
         .recent_experiments_for_blueprint("mock-independent-run", 10)
         .expect("experiments should load");
@@ -290,9 +301,17 @@ async fn engine_reuses_worktree_after_promoted_iteration() {
     engine.run().await.expect("engine should complete");
 
     let summary = engine.timing_summary();
-    assert_eq!(summary.phase_totals["applying_worktree_registration"].count, 1);
+    assert_eq!(
+        summary.phase_totals["applying_worktree_registration"].count,
+        1
+    );
     assert_eq!(summary.phase_totals["applying_reset_clean"].count, 1);
-    assert!(summary.phase_totals.get("applying_checkout_target_branch").is_none());
+    assert!(
+        summary
+            .phase_totals
+            .get("applying_checkout_target_branch")
+            .is_none()
+    );
 
     let _ = fs::remove_dir_all(&repo_root);
 }
@@ -330,9 +349,8 @@ async fn engine_rejects_empty_patchset_even_when_score_improves() {
     let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
     engine.run().await.expect("engine should complete");
 
-    let persistence =
-        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
-            .expect("db should open");
+    let persistence = Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+        .expect("db should open");
     let experiments = persistence
         .recent_experiments_for_blueprint("mock-empty-patchset", 10)
         .expect("experiments should load");
@@ -345,8 +363,12 @@ async fn engine_rejects_empty_patchset_even_when_score_improves() {
 
 #[tokio::test]
 async fn engine_stops_after_repeated_research_evidence_gap_noops() {
-    let repo_root = std::env::temp_dir().join(format!("maabarium-engine-research-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(repo_root.join("research")).expect("temp repo research dir should be created");
+    let repo_root = std::env::temp_dir().join(format!(
+        "maabarium-engine-research-{}",
+        uuid::Uuid::new_v4()
+    ));
+    fs::create_dir_all(repo_root.join("research"))
+        .expect("temp repo research dir should be created");
     fs::write(
         repo_root.join("research/comfortable.md"),
         "# Comfortable setup\n\n- Capture verified VRAM requirements here.\n",
@@ -380,9 +402,8 @@ async fn engine_stops_after_repeated_research_evidence_gap_noops() {
     let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
     engine.run().await.expect("engine should complete");
 
-    let persistence =
-        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
-            .expect("db should open");
+    let persistence = Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+        .expect("db should open");
     let experiments = persistence
         .recent_experiments_for_blueprint("mock-research-evidence-gap", 10)
         .expect("experiments should load");
@@ -404,8 +425,12 @@ async fn engine_stops_after_repeated_research_evidence_gap_noops() {
 
 #[tokio::test]
 async fn engine_stops_after_consecutive_research_evidence_gap_noops_even_when_queries_shift() {
-    let repo_root = std::env::temp_dir().join(format!("maabarium-engine-research-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(repo_root.join("research")).expect("temp repo research dir should be created");
+    let repo_root = std::env::temp_dir().join(format!(
+        "maabarium-engine-research-{}",
+        uuid::Uuid::new_v4()
+    ));
+    fs::create_dir_all(repo_root.join("research"))
+        .expect("temp repo research dir should be created");
     fs::write(
         repo_root.join("research/brief.md"),
         "# Research brief\n\n- Gather authoritative sources here.\n",
@@ -439,9 +464,8 @@ async fn engine_stops_after_consecutive_research_evidence_gap_noops_even_when_qu
     let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
     engine.run().await.expect("engine should complete");
 
-    let persistence =
-        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
-            .expect("db should open");
+    let persistence = Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+        .expect("db should open");
     let experiments = persistence
         .recent_experiments_for_blueprint("mock-research-evidence-gap-variant", 10)
         .expect("experiments should load");
@@ -458,7 +482,8 @@ async fn engine_stops_after_consecutive_research_evidence_gap_noops_even_when_qu
 
 #[tokio::test]
 async fn engine_uses_reusable_workspace_for_document_follow_up_iterations() {
-    let repo_root = std::env::temp_dir().join(format!("maabarium-engine-doc-{}", uuid::Uuid::new_v4()));
+    let repo_root =
+        std::env::temp_dir().join(format!("maabarium-engine-doc-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(repo_root.join("docs")).expect("temp repo docs should be created");
     fs::write(
         repo_root.join("docs/project-echo-implementation.md"),
@@ -493,9 +518,8 @@ async fn engine_uses_reusable_workspace_for_document_follow_up_iterations() {
     let engine = Engine::new(config, evaluator, cancel).expect("Engine init failed");
     engine.run().await.expect("engine should complete");
 
-    let persistence =
-        Persistence::open(db_path.to_str().expect("temp db path should be valid"))
-            .expect("db should open");
+    let persistence = Persistence::open(db_path.to_str().expect("temp db path should be valid"))
+        .expect("db should open");
     let proposals = persistence
         .recent_proposals_for_blueprint("mock-doc-test", 10)
         .expect("workflow proposals should load");
@@ -503,10 +527,22 @@ async fn engine_uses_reusable_workspace_for_document_follow_up_iterations() {
     assert_eq!(proposals.len(), 2);
     assert_eq!(proposals[0].file_patches.len(), 1);
     assert_eq!(proposals[1].file_patches.len(), 1);
-    assert_eq!(proposals[0].file_patches[0].operation, FilePatchOperation::Modify);
-    assert_eq!(proposals[1].file_patches[0].operation, FilePatchOperation::Modify);
-    assert_eq!(proposals[0].file_patches[0].path, "docs/project-echo-implementation.md");
-    assert_eq!(proposals[1].file_patches[0].path, "docs/project-echo-implementation.md");
+    assert_eq!(
+        proposals[0].file_patches[0].operation,
+        FilePatchOperation::Modify
+    );
+    assert_eq!(
+        proposals[1].file_patches[0].operation,
+        FilePatchOperation::Modify
+    );
+    assert_eq!(
+        proposals[0].file_patches[0].path,
+        "docs/project-echo-implementation.md"
+    );
+    assert_eq!(
+        proposals[1].file_patches[0].path,
+        "docs/project-echo-implementation.md"
+    );
     assert_eq!(
         proposals[1].file_patches[0]
             .content

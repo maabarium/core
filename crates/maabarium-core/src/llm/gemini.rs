@@ -1,6 +1,6 @@
 use super::{
-    CompletionRequest, CompletionResponse, LLMProvider, ResponseFormat,
-    build_provider_http_client, send_with_provider_retry,
+    CompletionRequest, CompletionResponse, LLMProvider, ResponseFormat, build_provider_http_client,
+    send_with_provider_retry,
 };
 use crate::error::LLMError;
 use async_trait::async_trait;
@@ -177,11 +177,9 @@ impl LLMProvider for GeminiProvider {
             )));
         }
 
-        let candidate = response
-            .candidates
-            .into_iter()
-            .next()
-            .ok_or_else(|| LLMError::InvalidResponse("No candidates in Gemini response".to_owned()))?;
+        let candidate = response.candidates.into_iter().next().ok_or_else(|| {
+            LLMError::InvalidResponse("No candidates in Gemini response".to_owned())
+        })?;
         let content = candidate
             .content
             .map(|content| {

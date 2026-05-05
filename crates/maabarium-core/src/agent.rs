@@ -101,7 +101,8 @@ fn exact_existing_markdown_target_disallows_raw_fallback(
         return false;
     }
 
-    if target_files.len() != 1 || !is_exact_target_path(&target_files[0]) || target_files[0] != path {
+    if target_files.len() != 1 || !is_exact_target_path(&target_files[0]) || target_files[0] != path
+    {
         return false;
     }
 
@@ -118,15 +119,14 @@ fn raw_content_fallback_prompt_guidance(language: &str, target_files: &[String])
 }
 
 fn proposal_max_tokens(language: &str, target_files: &[String], llm: &dyn LLMProvider) -> u32 {
-    let heuristic_budget = if language.eq_ignore_ascii_case("research")
-        || language.eq_ignore_ascii_case("lora")
-    {
-        COMPLEX_PROPOSAL_MAX_TOKENS
-    } else if prefers_incremental_document_proposals(language, target_files) {
-        EXACT_DOCUMENT_PROPOSAL_MAX_TOKENS
-    } else {
-        DEFAULT_PROPOSAL_MAX_TOKENS
-    };
+    let heuristic_budget =
+        if language.eq_ignore_ascii_case("research") || language.eq_ignore_ascii_case("lora") {
+            COMPLEX_PROPOSAL_MAX_TOKENS
+        } else if prefers_incremental_document_proposals(language, target_files) {
+            EXACT_DOCUMENT_PROPOSAL_MAX_TOKENS
+        } else {
+            DEFAULT_PROPOSAL_MAX_TOKENS
+        };
 
     llm.configured_max_tokens()
         .filter(|configured| *configured > 0)
@@ -244,7 +244,12 @@ fn diff_anchor_example(file_contexts: &[FileContext]) -> String {
 
     format!(
         "\nExact diff anchor for '{}' when modifying the first non-empty line (line {}):\n{{\n  \"summary\": \"short explanation\",\n  \"file_patches\": [\n    {{\n      \"path\": \"{}\",\n      \"operation\": \"modify\",\n      \"unified_diff\": \"@@ -{},1 +{},1 @@\\n-{}\\n+<replacement line with the same surrounding format>\\n\"\n    }}\n  ]\n}}\nCopy the '-' line exactly from Existing file contents if you modify that line.\n",
-        file.path, anchor_line_number, file.path, anchor_line_number, anchor_line_number, anchor_line,
+        file.path,
+        anchor_line_number,
+        file.path,
+        anchor_line_number,
+        anchor_line_number,
+        anchor_line,
     )
 }
 
@@ -254,9 +259,7 @@ fn markdown_section_anchor_example(file: &FileContext) -> Option<String> {
     }
 
     let lines = file.content.lines().collect::<Vec<_>>();
-    let title_line_index = lines
-        .iter()
-        .position(|line| !line.trim().is_empty())?;
+    let title_line_index = lines.iter().position(|line| !line.trim().is_empty())?;
     let (heading_line_index, heading_line) = lines
         .iter()
         .enumerate()
@@ -388,11 +391,13 @@ impl Agent {
                 .collect::<Vec<_>>()
                 .join("\n\n")
         };
-          let research_guidance = research_patch_guidance(language);
-          let document_guidance = incremental_document_guidance(language, target_files, &file_contexts);
-          let raw_content_fallback_guidance = raw_content_fallback_prompt_guidance(language, target_files);
-          let diff_anchor = diff_anchor_example(&file_contexts);
-          let prompt = format!(
+        let research_guidance = research_patch_guidance(language);
+        let document_guidance =
+            incremental_document_guidance(language, target_files, &file_contexts);
+        let raw_content_fallback_guidance =
+            raw_content_fallback_prompt_guidance(language, target_files);
+        let diff_anchor = diff_anchor_example(&file_contexts);
+        let prompt = format!(
             "Context:\n{context}\n\nTarget files:\n{targets_desc}\n\nMetrics to optimize:\n{metrics_desc}\n\n\
              Existing file contents:\n{files_desc}\n\n\
              {diff_anchor}\
@@ -2066,7 +2071,10 @@ mod tests {
             .expect("proposal should succeed");
 
         assert_eq!(proposal.summary, "Rename the function.");
-        assert_eq!(provider.last_seen_max_tokens(), Some(DEFAULT_PROPOSAL_MAX_TOKENS));
+        assert_eq!(
+            provider.last_seen_max_tokens(),
+            Some(DEFAULT_PROPOSAL_MAX_TOKENS)
+        );
 
         let _ = fs::remove_dir_all(repo_root);
     }
@@ -2232,16 +2240,19 @@ mod tests {
 }"##,
             &[FileContext {
                 path: "docs/project-echo-implementation.md".into(),
-                content: "# Project Echo Implementation\n\n## Architecture\n- Existing detail.\n".into(),
+                content: "# Project Echo Implementation\n\n## Architecture\n- Existing detail.\n"
+                    .into(),
             }],
             &HashSet::from(["docs/project-echo-implementation.md".to_owned()]),
             &["docs/project-echo-implementation.md".into()],
         )
         .expect_err("raw fallback should be rejected for exact existing markdown documents");
 
-        assert!(error
-            .to_string()
-            .contains("must provide a valid unified diff or substantive markdown content"));
+        assert!(
+            error
+                .to_string()
+                .contains("must provide a valid unified diff or substantive markdown content")
+        );
     }
 
     #[test]
@@ -2266,10 +2277,12 @@ mod tests {
         )
         .expect("substantive exact-document markdown content should be accepted through guarded raw fallback");
 
-        assert!(proposal.file_patches[0]
-            .content
-            .as_deref()
-            .is_some_and(|content| content.contains("persistent knowledge store")));
+        assert!(
+            proposal.file_patches[0]
+                .content
+                .as_deref()
+                .is_some_and(|content| content.contains("persistent knowledge store"))
+        );
     }
 
     #[test]
@@ -2326,7 +2339,9 @@ mod tests {
 
         assert_eq!(
             proposal.file_patches[0].content.as_deref(),
-            Some("\n# Project Echo Implementation\n\n## Product Scope\n\n- Define the persistent local-first project memory model.\n\n## Architecture\n")
+            Some(
+                "\n# Project Echo Implementation\n\n## Product Scope\n\n- Define the persistent local-first project memory model.\n\n## Architecture\n"
+            )
         );
     }
 
@@ -2452,7 +2467,11 @@ mod tests {
         )
         .expect_err("title-only scaffold refinements should be rejected");
 
-        assert!(error.to_string().contains("must add substantive section content"));
+        assert!(
+            error
+                .to_string()
+                .contains("must add substantive section content")
+        );
     }
 
     #[test]

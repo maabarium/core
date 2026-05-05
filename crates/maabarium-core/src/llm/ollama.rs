@@ -226,9 +226,11 @@ mod tests {
             .expect_err("empty content with eval tokens should fail");
 
         assert!(matches!(error, LLMError::Provider(_)));
-        assert!(error
-            .to_string()
-            .contains("empty response content despite reporting 42 eval tokens"));
+        assert!(
+            error
+                .to_string()
+                .contains("empty response content despite reporting 42 eval tokens")
+        );
     }
 
     #[tokio::test]

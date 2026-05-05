@@ -5,10 +5,7 @@ use std::process::{Command, Output};
 use uuid::Uuid;
 
 fn temp_test_dir() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "maabarium-process-plugin-smoke-{}",
-        Uuid::new_v4()
-    ))
+    std::env::temp_dir().join(format!("maabarium-process-plugin-smoke-{}", Uuid::new_v4()))
 }
 
 fn write_file(path: &Path, content: &str) {
@@ -64,7 +61,10 @@ fn run_cli_workflow(temp_dir: &Path, database_path: &Path) -> ExitStatus {
     Command::new(env!("CARGO_BIN_EXE_maabarium"))
         .args([
             "run",
-            temp_dir.join("blueprint.toml").to_str().expect("utf-8 path"),
+            temp_dir
+                .join("blueprint.toml")
+                .to_str()
+                .expect("utf-8 path"),
             "--db",
             database_path.to_str().expect("utf-8 path"),
         ])
@@ -103,7 +103,9 @@ fn cli_runs_process_plugin_workflow_end_to_end() {
     let experiments = persistence
         .recent_experiments(5)
         .expect("experiments should be readable");
-    let latest = experiments.first().expect("a persisted experiment should exist");
+    let latest = experiments
+        .first()
+        .expect("a persisted experiment should exist");
 
     assert_eq!(latest.blueprint_name, "temp-process-plugin");
     assert!(latest.error.is_none(), "latest experiment should succeed");
@@ -140,16 +142,17 @@ fn cli_records_process_plugin_failure_for_invalid_json_response() {
     let experiments = persistence
         .recent_experiments(5)
         .expect("experiments should be readable");
-    let latest = experiments.first().expect("a persisted experiment should exist");
+    let latest = experiments
+        .first()
+        .expect("a persisted experiment should exist");
 
     assert_eq!(latest.blueprint_name, "temp-process-plugin-invalid-json");
     assert_eq!(latest.weighted_total, 0.0);
     assert_eq!(latest.duration_ms, 0);
     assert!(
-        latest
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("Invalid evaluator plugin response from 'temp-score'")),
+        latest.error.as_deref().is_some_and(
+            |error| error.contains("Invalid evaluator plugin response from 'temp-score'")
+        ),
         "expected persisted evaluator parse error, got: {:?}",
         latest.error
     );
@@ -179,7 +182,9 @@ fn cli_records_process_plugin_failure_for_timeout() {
     let experiments = persistence
         .recent_experiments(5)
         .expect("experiments should be readable");
-    let latest = experiments.first().expect("a persisted experiment should exist");
+    let latest = experiments
+        .first()
+        .expect("a persisted experiment should exist");
 
     assert_eq!(latest.blueprint_name, "temp-process-plugin-timeout");
     assert_eq!(latest.weighted_total, 0.0);

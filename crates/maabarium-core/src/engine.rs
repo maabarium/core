@@ -133,10 +133,7 @@ fn build_proposal_context(
 }
 
 fn collapse_ascii_whitespace(input: &str) -> String {
-    input
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn extract_research_search_cue(summary: &str) -> Option<String> {
@@ -155,7 +152,10 @@ fn extract_research_search_cue(summary: &str) -> Option<String> {
     }
 }
 
-fn research_noop_signature(bp: &BlueprintFile, proposal: &crate::git_manager::Proposal) -> Option<String> {
+fn research_noop_signature(
+    bp: &BlueprintFile,
+    proposal: &crate::git_manager::Proposal,
+) -> Option<String> {
     if !bp.domain.language.eq_ignore_ascii_case("research") || !proposal.file_patches.is_empty() {
         return None;
     }
@@ -172,10 +172,7 @@ fn research_noop_signature(bp: &BlueprintFile, proposal: &crate::git_manager::Pr
         ));
     }
 
-    Some(format!(
-        "summary:{}",
-        collapse_ascii_whitespace(&lowered)
-    ))
+    Some(format!("summary:{}", collapse_ascii_whitespace(&lowered)))
 }
 
 impl Engine {
@@ -222,17 +219,19 @@ impl Engine {
         }
     }
 
-    fn log_phase_timing(&self, iteration: u64, phase: &'static str, started_at: std::time::Instant) {
+    fn log_phase_timing(
+        &self,
+        iteration: u64,
+        phase: &'static str,
+        started_at: std::time::Instant,
+    ) {
         let duration_ms = started_at.elapsed().as_millis() as u64;
         self.log_phase_duration(iteration, phase, duration_ms);
     }
 
     fn log_phase_duration(&self, iteration: u64, phase: &'static str, duration_ms: u64) {
         if let Ok(mut summary) = self.timing_summary.lock() {
-            let phase_entry = summary
-                .phase_totals
-                .entry(phase.to_owned())
-                .or_default();
+            let phase_entry = summary.phase_totals.entry(phase.to_owned()).or_default();
             phase_entry.count += 1;
             phase_entry.total_ms += duration_ms;
             phase_entry.max_ms = phase_entry.max_ms.max(duration_ms);
@@ -356,7 +355,8 @@ impl Engine {
                 .as_ref()
                 .map(|workspace| workspace.path.display().to_string())
                 .unwrap_or_else(|| bp.domain.repo_path.clone());
-            let proposal_context = build_proposal_context(bp, &proposal_repo_path, iteration, baseline);
+            let proposal_context =
+                build_proposal_context(bp, &proposal_repo_path, iteration, baseline);
             let planning_started = std::time::Instant::now();
 
             let proposal = match tokio::select! {
@@ -370,7 +370,9 @@ impl Engine {
                 ) => result.map_err(EngineError::from),
             } {
                 Ok(proposal) => {
-                    self.record_proposal_failure_counters(&self.council.last_proposal_failure_counters());
+                    self.record_proposal_failure_counters(
+                        &self.council.last_proposal_failure_counters(),
+                    );
                     proposal
                 }
                 Err(EngineError::Cancelled) => {
@@ -385,7 +387,9 @@ impl Engine {
                     return Err(EngineError::Cancelled);
                 }
                 Err(e) => {
-                    self.record_proposal_failure_counters(&self.council.last_proposal_failure_counters());
+                    self.record_proposal_failure_counters(
+                        &self.council.last_proposal_failure_counters(),
+                    );
                     warn!("Council failed to produce a proposal for iteration {iteration}: {e}");
                     let _ = self
                         .persistence
@@ -542,7 +546,10 @@ impl Engine {
                             "Cancellation requested while evaluating iteration {iteration}"
                         )),
                     );
-                    let _ = self.git.cleanup_experiment_workspace(&experiment_workspace.path).await;
+                    let _ = self
+                        .git
+                        .cleanup_experiment_workspace(&experiment_workspace.path)
+                        .await;
                     info!("Engine cancelled while evaluating iteration {iteration}");
                     return Err(EngineError::Cancelled);
                 }
@@ -582,7 +589,10 @@ impl Engine {
                         "Cancellation requested after iteration {iteration} completed"
                     )),
                 );
-                let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                let _ = self
+                    .git
+                    .detach_experiment_workspace(&experiment_workspace.path)
+                    .await;
                 let _ = self.git.delete_branch(&branch).await;
                 info!("Engine cancelled after iteration {iteration} completed");
                 PromotionOutcome::Cancelled
@@ -597,11 +607,12 @@ impl Engine {
                     Some(iteration),
                     Some(result.weighted_total),
                     Some(result.duration_ms),
-                    Some(format!(
-                        "Rejecting no-op proposal for branch '{branch}'"
-                    )),
+                    Some(format!("Rejecting no-op proposal for branch '{branch}'")),
                 );
-                let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                let _ = self
+                    .git
+                    .detach_experiment_workspace(&experiment_workspace.path)
+                    .await;
                 PromotionOutcome::Rejected
             } else if crate::metrics::is_improvement(
                 baseline,
@@ -645,9 +656,7 @@ impl Engine {
                                 Some(iteration),
                                 Some(result.weighted_total),
                                 Some(result.duration_ms),
-                                Some(format!(
-                                    "Rejecting no-op workspace for branch '{branch}'"
-                                )),
+                                Some(format!("Rejecting no-op workspace for branch '{branch}'")),
                             );
                             let _ = self
                                 .git
@@ -718,7 +727,10 @@ impl Engine {
                     Some(result.duration_ms),
                     Some(format!("Cleaning up non-promoted branch '{branch}'")),
                 );
-                let _ = self.git.detach_experiment_workspace(&experiment_workspace.path).await;
+                let _ = self
+                    .git
+                    .detach_experiment_workspace(&experiment_workspace.path)
+                    .await;
                 PromotionOutcome::Rejected
             };
             self.log_phase_timing(iteration, "promotion_decision", decision_started);
@@ -752,17 +764,14 @@ impl Engine {
             );
             let persisting_started = std::time::Instant::now();
 
-            if let Err(e) = self
-                .persistence
-                .log_experiment(
-                    &bp_name,
-                    &result,
-                    promotion_outcome,
-                    promoted_branch_name.as_deref(),
-                    promoted_target_branch_name.as_deref(),
-                    promoted_commit_oid.as_deref(),
-                )
-            {
+            if let Err(e) = self.persistence.log_experiment(
+                &bp_name,
+                &result,
+                promotion_outcome,
+                promoted_branch_name.as_deref(),
+                promoted_target_branch_name.as_deref(),
+                promoted_commit_oid.as_deref(),
+            ) {
                 error!("Failed to persist experiment: {e}");
             }
             self.log_phase_timing(iteration, "persisting", persisting_started);
@@ -812,21 +821,20 @@ impl Engine {
             if let Err(error) = self.git.cleanup_experiment_workspace(&workspace.path).await {
                 warn!("Failed to clean up experiment workspace: {error}");
             }
-            self.log_phase_timing(completed_iterations.max(1), "workspace_cleanup", cleanup_started);
+            self.log_phase_timing(
+                completed_iterations.max(1),
+                "workspace_cleanup",
+                cleanup_started,
+            );
         }
 
-        info!(
-            "Engine completed {completed_iterations} iteration(s). Final baseline={baseline:.4}"
-        );
+        info!("Engine completed {completed_iterations} iteration(s). Final baseline={baseline:.4}");
         self.report_progress(
             EnginePhase::Completed,
             Some(completed_iterations),
             Some(baseline),
             None,
-            Some(
-                early_completion_message
-                    .unwrap_or_else(|| "Engine run completed".to_owned()),
-            ),
+            Some(early_completion_message.unwrap_or_else(|| "Engine run completed".to_owned())),
         );
         Ok(())
     }
@@ -886,9 +894,10 @@ fn build_council(blueprint: &BlueprintFile) -> Result<Council, EngineError> {
         .iter()
         .take(blueprint.agents.council_size as usize)
     {
-        let provider = shared_provider
-            .clone()
-            .unwrap_or(provider_from_models(&blueprint.models, Some(&agent_def.model))?);
+        let provider = shared_provider.clone().unwrap_or(provider_from_models(
+            &blueprint.models,
+            Some(&agent_def.model),
+        )?);
         agents.push(Agent::new(agent_def.clone(), provider));
     }
 

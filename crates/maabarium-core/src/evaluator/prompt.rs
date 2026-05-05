@@ -156,7 +156,10 @@ mod tests {
 
     #[test]
     fn extracts_score_from_number_with_extra_text() {
-        assert_eq!(extract_score("0.95\nStrong structure and sequencing."), Some(0.95));
+        assert_eq!(
+            extract_score("0.95\nStrong structure and sequencing."),
+            Some(0.95)
+        );
         assert_eq!(extract_score("Score: 0.72 out of 1.0"), Some(0.72));
     }
 
@@ -169,7 +172,10 @@ mod tests {
 
     #[test]
     fn rejects_responses_without_numeric_score() {
-        assert_eq!(extract_score("High confidence, but no score provided."), None);
+        assert_eq!(
+            extract_score("High confidence, but no score provided."),
+            None
+        );
     }
 
     #[tokio::test]

@@ -93,10 +93,7 @@ impl MockProvider {
         } else {
             "pub fn maabarium_improvement() {}".to_owned()
         };
-        format!(
-            "@@ -1,1 +1,1 @@\n-{}\n+{}\n",
-            first_line, replacement
-        )
+        format!("@@ -1,1 +1,1 @@\n-{}\n+{}\n", first_line, replacement)
     }
 }
 
@@ -117,7 +114,10 @@ impl LLMProvider for MockProvider {
                     latency: std::time::Duration::from_millis(5),
                 });
             }
-            if request.prompt.contains("MAABARIUM_MOCK_RESEARCH_EVIDENCE_GAP") {
+            if request
+                .prompt
+                .contains("MAABARIUM_MOCK_RESEARCH_EVIDENCE_GAP")
+            {
                 return Ok(CompletionResponse {
                     content: json!({
                         "summary": "Evidence gap: No external URLs were available to verify the claim set. Search for \"Qwen-2.5-32B comfortable VRAM requirements\" before attempting another patch.",
@@ -147,7 +147,10 @@ impl LLMProvider for MockProvider {
                     latency: std::time::Duration::from_millis(5),
                 });
             }
-            if request.prompt.contains("No existing target files were found. Create a new markdown file") {
+            if request
+                .prompt
+                .contains("No existing target files were found. Create a new markdown file")
+            {
                 let path = Self::extract_safe_markdown_create_path(&request.prompt)
                     .unwrap_or_else(|| "docs/draft.md".to_owned());
                 let content = format!(
@@ -169,7 +172,8 @@ impl LLMProvider for MockProvider {
                     latency: std::time::Duration::from_millis(5),
                 });
             }
-            if let Some((path, existing_content)) = Self::extract_first_file_block(&request.prompt) {
+            if let Some((path, existing_content)) = Self::extract_first_file_block(&request.prompt)
+            {
                 if path.ends_with(".md") {
                     json!({
                         "summary": "Mock provider deepened the existing document",
