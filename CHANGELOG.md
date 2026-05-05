@@ -12,6 +12,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.4.2] - 2026-05-05
+
+### Added
+
+- None.
+
+### Changed
+
 - Improve 429 response handling
 
 ### Fixed
