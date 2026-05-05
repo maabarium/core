@@ -1143,8 +1143,10 @@ mod tests {
 
     #[test]
     fn loads_recent_history_for_a_single_blueprint() {
-        let db_path =
-            std::env::temp_dir().join(format!("maabarium-blueprint-history-{}.db", uuid::Uuid::new_v4()));
+        let db_path = std::env::temp_dir().join(format!(
+            "maabarium-blueprint-history-{}.db",
+            uuid::Uuid::new_v4()
+        ));
 
         let persistence =
             Persistence::open(db_path.to_str().expect("temp db path should be valid"))
@@ -1182,14 +1184,19 @@ mod tests {
             .recent_experiments_for_blueprint("general-research-test", 10)
             .expect("workflow experiments should load");
         assert_eq!(workflow_experiments.len(), 2);
-        assert!(workflow_experiments.iter().all(|experiment| {
-            experiment.blueprint_name == "general-research-test"
-        }));
+        assert!(
+            workflow_experiments
+                .iter()
+                .all(|experiment| { experiment.blueprint_name == "general-research-test" })
+        );
         assert_eq!(
             workflow_experiments[0].error.as_deref(),
             Some("Git operation failed: could not find repository")
         );
-        assert_eq!(workflow_experiments[1].promotion_outcome, PromotionOutcome::Rejected);
+        assert_eq!(
+            workflow_experiments[1].promotion_outcome,
+            PromotionOutcome::Rejected
+        );
 
         let workflow_proposals = persistence
             .recent_proposals_for_blueprint("general-research-test", 10)
@@ -1210,7 +1217,9 @@ mod tests {
             Some("abc123def456")
         );
         assert_eq!(
-            retained_other_winners[0].promoted_target_branch_name.as_deref(),
+            retained_other_winners[0]
+                .promoted_target_branch_name
+                .as_deref(),
             Some("master")
         );
 

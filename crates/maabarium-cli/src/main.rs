@@ -1,13 +1,12 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use maabarium_core::error::UpdaterError;
 use maabarium_core::{
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EngineTimingSummary, EvaluatorRegistry,
-    ExportFormat, GitDependencyEnsureOutcome, Persistence, PromotionOutcome, SecretStore,
-    UpdaterConfiguration, check_for_cli_update, default_db_path, default_log_path,
+    ExportFormat, GitDependencyEnsureOutcome, Persistence, PromotionOutcome, ReadinessLevel,
+    ReadinessScanner, SecretStore, UpdaterConfiguration, analyze_workspace, apply_all_fixes,
+    check_for_cli_update, default_db_path, default_log_path, detect_recommended_profile,
     ensure_git_dependency, install_cli_update,
-    ReadinessLevel, ReadinessScanner,
-    analyze_workspace, apply_all_fixes, detect_recommended_profile,
 };
-use maabarium_core::error::UpdaterError;
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -443,7 +442,8 @@ fn render_timing_summary(summary: &EngineTimingSummary) -> String {
 
     if !summary.iteration_durations_ms.is_empty() {
         let total_iterations_ms: u64 = summary.iteration_durations_ms.iter().sum();
-        let average_iteration_ms = total_iterations_ms / summary.iteration_durations_ms.len() as u64;
+        let average_iteration_ms =
+            total_iterations_ms / summary.iteration_durations_ms.len() as u64;
         let max_iteration_ms = summary
             .iteration_durations_ms
             .iter()
@@ -460,7 +460,10 @@ fn render_timing_summary(summary: &EngineTimingSummary) -> String {
         let total_failures = summary.proposal_failure_counters.values().sum::<u64>();
         lines.push(format!("- proposal_failures total={}", total_failures));
         for (counter_key, count) in &summary.proposal_failure_counters {
-            lines.push(format!("- proposal_failure counter={} count={}", counter_key, count));
+            lines.push(format!(
+                "- proposal_failure counter={} count={}",
+                counter_key, count
+            ));
         }
     }
 
@@ -652,10 +655,22 @@ mod tests {
 
     #[test]
     fn formats_all_known_promotion_outcomes() {
-        assert_eq!(format_promotion_outcome(PromotionOutcome::Unknown), "unknown");
-        assert_eq!(format_promotion_outcome(PromotionOutcome::Promoted), "promoted");
-        assert_eq!(format_promotion_outcome(PromotionOutcome::Rejected), "rejected");
-        assert_eq!(format_promotion_outcome(PromotionOutcome::Cancelled), "cancelled");
+        assert_eq!(
+            format_promotion_outcome(PromotionOutcome::Unknown),
+            "unknown"
+        );
+        assert_eq!(
+            format_promotion_outcome(PromotionOutcome::Promoted),
+            "promoted"
+        );
+        assert_eq!(
+            format_promotion_outcome(PromotionOutcome::Rejected),
+            "rejected"
+        );
+        assert_eq!(
+            format_promotion_outcome(PromotionOutcome::Cancelled),
+            "cancelled"
+        );
         assert_eq!(
             format_promotion_outcome(PromotionOutcome::PromotionFailed),
             "promotion_failed"

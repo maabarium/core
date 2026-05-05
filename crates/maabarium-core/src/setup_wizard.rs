@@ -6,8 +6,8 @@
 //! - Workspace auto-detection (repo health, test commands, language, target files)
 //! - Saved environment profiles (local-only, mixed, research-heavy)
 
-use serde::{Deserialize, Serialize};
 use secrecy::ExposeSecret;
+use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,14 +17,8 @@ use crate::error::SecretError;
 use crate::llm::{anthropic, gemini};
 use crate::secrets::{ApiKeyStore, SecretStore};
 
-const OPENAI_COMPATIBLE_PROVIDER_IDS: &[&str] = &[
-    "openai",
-    "custom",
-    "deepseek",
-    "groq",
-    "openrouter",
-    "xai",
-];
+const OPENAI_COMPATIBLE_PROVIDER_IDS: &[&str] =
+    &["openai", "custom", "deepseek", "groq", "openrouter", "xai"];
 
 const NATIVE_PROVIDER_IDS: &[&str] = &["anthropic", "gemini"];
 const DEFAULT_PROVIDER_VALIDATION_TIMEOUT_SECS: u64 = 10;
@@ -345,11 +339,7 @@ impl ReadinessScanner {
             } else {
                 ReadinessLevel::NeedsAction
             },
-            summary: format!(
-                "DB: {} | Log: {}",
-                db_path.display(),
-                log_path.display()
-            ),
+            summary: format!("DB: {} | Log: {}", db_path.display(), log_path.display()),
             fix_label: None,
             fix_hint: None,
         }
@@ -573,9 +563,8 @@ pub fn install_ollama() -> Result<(), String> {
     if !cfg!(target_os = "macos") {
         return Err("Guided Ollama installation is currently macOS only.".to_owned());
     }
-    let brew = find_command("brew").ok_or_else(|| {
-        "Homebrew is required. Install it first: https://brew.sh".to_owned()
-    })?;
+    let brew = find_command("brew")
+        .ok_or_else(|| "Homebrew is required. Install it first: https://brew.sh".to_owned())?;
     let status = Command::new(brew)
         .args(["install", "--cask", "ollama"])
         .status()
@@ -680,8 +669,7 @@ pub async fn validate_provider_connection(
             available_models: Vec::new(),
             error: Some("API key is missing.".to_owned()),
             diagnosis: Some(
-                "Store the provider API key in setup before validating this connection."
-                    .to_owned(),
+                "Store the provider API key in setup before validating this connection.".to_owned(),
             ),
         };
     }
@@ -811,8 +799,7 @@ pub async fn validate_provider_connection(
                     }
                     404 => "Endpoint not found. Verify the provider base URL.".to_owned(),
                     429 => {
-                        "Rate limited. The key works but has hit a quota or rate limit."
-                            .to_owned()
+                        "Rate limited. The key works but has hit a quota or rate limit.".to_owned()
                     }
                     _ => format!("Provider returned HTTP {status} while listing models."),
                 }),
@@ -881,9 +868,9 @@ pub async fn validate_provider_connection(
                     available_models,
                     error: None,
                     diagnosis: Some(match model_count {
-                        Some(count) => format!(
-                            "Connected in {latency}ms and listed {count} model(s)."
-                        ),
+                        Some(count) => {
+                            format!("Connected in {latency}ms and listed {count} model(s).")
+                        }
                         None => format!("Connected in {latency}ms"),
                     }),
                 }
@@ -951,8 +938,7 @@ async fn validate_anthropic_connection(
             available_models: Vec::new(),
             error: Some("API key is missing.".to_owned()),
             diagnosis: Some(
-                "Store the provider API key in setup before validating this connection."
-                    .to_owned(),
+                "Store the provider API key in setup before validating this connection.".to_owned(),
             ),
         };
     };
@@ -1052,8 +1038,7 @@ async fn validate_gemini_connection(
             available_models: Vec::new(),
             error: Some("API key is missing.".to_owned()),
             diagnosis: Some(
-                "Store the provider API key in setup before validating this connection."
-                    .to_owned(),
+                "Store the provider API key in setup before validating this connection.".to_owned(),
             ),
         };
     };
@@ -1226,7 +1211,9 @@ pub async fn validate_ollama_connection(endpoint: &str) -> ProviderValidationRes
                 model_count: None,
                 available_models: Vec::new(),
                 error: Some(format!("HTTP {status}")),
-                diagnosis: Some("Ollama responded but with an error. Is it fully started?".to_owned()),
+                diagnosis: Some(
+                    "Ollama responded but with an error. Is it fully started?".to_owned(),
+                ),
             }
         }
         Err(e) => {
@@ -1331,7 +1318,9 @@ pub fn analyze_workspace(path: &str) -> WorkspaceAnalysis {
         summary_parts.push("Not a git repository");
     }
     if let Some(lang) = &language {
-        summary_parts.push(Box::leak(format!("detected language: {lang}").into_boxed_str()));
+        summary_parts.push(Box::leak(
+            format!("detected language: {lang}").into_boxed_str(),
+        ));
     }
     if has_ci_config {
         summary_parts.push("CI config found");
@@ -1433,10 +1422,7 @@ pub fn apply_profile(profile: EnvironmentProfile) -> ProfileConfig {
         EnvironmentProfile::Mixed => ProfileConfig {
             runtime_strategy: "mixed".to_owned(),
             research_search_mode: "duckduckgo_scrape".to_owned(),
-            recommended_models: vec![
-                "qwen2.5-coder:7b".to_owned(),
-                "llama3.1:8b".to_owned(),
-            ],
+            recommended_models: vec!["qwen2.5-coder:7b".to_owned(), "llama3.1:8b".to_owned()],
         },
         EnvironmentProfile::ResearchHeavy => ProfileConfig {
             runtime_strategy: "remote".to_owned(),
@@ -1662,16 +1648,22 @@ mod tests {
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 84\r\n\r\n{\"content\":[{\"type\":\"text\",\"text\":\"OK\"}],\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}",
         ]);
 
-        let result =
-            validate_provider_connection("anthropic", &endpoint, Some("test-key"), Some("claude-sonnet-4"))
-                .await;
+        let result = validate_provider_connection(
+            "anthropic",
+            &endpoint,
+            Some("test-key"),
+            Some("claude-sonnet-4"),
+        )
+        .await;
 
         assert!(result.success);
-        assert!(result
-            .diagnosis
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Connected to Anthropic"));
+        assert!(
+            result
+                .diagnosis
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Connected to Anthropic")
+        );
     }
 
     #[tokio::test]
@@ -1714,11 +1706,13 @@ mod tests {
             result.available_models,
             vec!["google/gemma-3-27b-it".to_owned()]
         );
-        assert!(result
-            .diagnosis
-            .as_deref()
-            .unwrap_or_default()
-            .contains("found model 'google/gemma-3-27b-it'"));
+        assert!(
+            result
+                .diagnosis
+                .as_deref()
+                .unwrap_or_default()
+                .contains("found model 'google/gemma-3-27b-it'")
+        );
     }
 
     #[tokio::test]
@@ -1736,10 +1730,12 @@ mod tests {
         .await;
 
         assert!(result.success);
-        assert!(result
-            .diagnosis
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Connected to Gemini"));
+        assert!(
+            result
+                .diagnosis
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Connected to Gemini")
+        );
     }
 }

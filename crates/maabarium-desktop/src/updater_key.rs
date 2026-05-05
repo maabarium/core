@@ -13,7 +13,11 @@ pub(crate) fn normalize_updater_pubkey(raw_value: &str) -> Option<String> {
         return None;
     }
 
-    if lines.len() == 2 && !lines[0].to_ascii_lowercase().starts_with("untrusted comment:") {
+    if lines.len() == 2
+        && !lines[0]
+            .to_ascii_lowercase()
+            .starts_with("untrusted comment:")
+    {
         return None;
     }
 
@@ -84,10 +88,7 @@ mod tests {
             "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
         );
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(expected.as_str())
-        );
+        assert_eq!(pubkey.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -97,10 +98,7 @@ mod tests {
 
         let pubkey = normalize_updater_pubkey(wrapped);
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(wrapped)
-        );
+        assert_eq!(pubkey.as_deref(), Some(wrapped));
     }
 
     #[test]
@@ -112,15 +110,14 @@ mod tests {
             "untrusted comment: minisign public key\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
         );
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(expected.as_str())
-        );
+        assert_eq!(pubkey.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
     fn rejects_invalid_two_line_material() {
-        let pubkey = normalize_updater_pubkey("not a minisign header\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n");
+        let pubkey = normalize_updater_pubkey(
+            "not a minisign header\nRWQ3nIyDEVNzI3xcUlppEVPOUJxiqSLxH8+bYpR9p5bgqCOizJdh98e3\n",
+        );
 
         assert!(pubkey.is_none());
     }

@@ -1,6 +1,4 @@
-use crate::blueprint::{
-    BlueprintFile, BlueprintTemplateKind, BuiltinEvaluatorName, EvaluatorKind,
-};
+use crate::blueprint::{BlueprintFile, BlueprintTemplateKind, BuiltinEvaluatorName, EvaluatorKind};
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
 use crate::llm::provider_from_models;
@@ -107,7 +105,11 @@ impl EvaluationContext {
 
 impl EvaluatorRegistry {
     pub fn resolve_builtin(blueprint: &BlueprintFile) -> BuiltinEvaluatorKind {
-        if let Some(template) = blueprint.library.as_ref().and_then(|library| library.template) {
+        if let Some(template) = blueprint
+            .library
+            .as_ref()
+            .and_then(|library| library.template)
+        {
             if let Some(kind) = Self::resolve_builtin_from_template(template) {
                 return kind;
             }
@@ -160,20 +162,18 @@ impl EvaluatorRegistry {
 
     pub fn describe(blueprint: &BlueprintFile) -> String {
         match Self::resolve_selection(blueprint) {
-            EvaluatorSelection::Process => {
-                blueprint
-                    .evaluator
-                    .as_ref()
-                    .and_then(|config| config.plugin_id.clone())
-                    .or_else(|| {
-                        blueprint
-                            .evaluator
-                            .as_ref()
-                            .and_then(|config| config.manifest_path.clone())
-                    })
-                    .map(|value| format!("process:{value}"))
-                    .unwrap_or_else(|| "process".to_owned())
-            }
+            EvaluatorSelection::Process => blueprint
+                .evaluator
+                .as_ref()
+                .and_then(|config| config.plugin_id.clone())
+                .or_else(|| {
+                    blueprint
+                        .evaluator
+                        .as_ref()
+                        .and_then(|config| config.manifest_path.clone())
+                })
+                .map(|value| format!("process:{value}"))
+                .unwrap_or_else(|| "process".to_owned()),
             EvaluatorSelection::Builtin(kind) => kind.as_str().to_owned(),
         }
     }
@@ -185,15 +185,15 @@ impl EvaluatorRegistry {
     fn resolve_selection(blueprint: &BlueprintFile) -> EvaluatorSelection {
         match blueprint.evaluator.as_ref().map(|config| config.kind) {
             Some(EvaluatorKind::Process) => EvaluatorSelection::Process,
-            Some(EvaluatorKind::Builtin) => EvaluatorSelection::Builtin(
-                Self::resolve_explicit_builtin(
+            Some(EvaluatorKind::Builtin) => {
+                EvaluatorSelection::Builtin(Self::resolve_explicit_builtin(
                     blueprint
                         .evaluator
                         .as_ref()
                         .and_then(|config| config.builtin)
                         .expect("builtin evaluator kind should be validated"),
-                ),
-            ),
+                ))
+            }
             _ => EvaluatorSelection::Builtin(Self::resolve_builtin(blueprint)),
         }
     }
@@ -457,11 +457,8 @@ mod tests {
 
     #[test]
     fn registry_prefers_explicit_builtin_subtype_over_template_and_heuristics() {
-        let mut blueprint = sample_blueprint(
-            "prompt-like-name",
-            "research",
-            vec!["prompts/system.md"],
-        );
+        let mut blueprint =
+            sample_blueprint("prompt-like-name", "research", vec!["prompts/system.md"]);
         blueprint.library = Some(BlueprintLibraryMeta {
             kind: BlueprintLibraryKind::Template,
             setup_required: true,

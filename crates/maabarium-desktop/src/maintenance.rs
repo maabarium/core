@@ -89,7 +89,8 @@ pub fn inspect_experiment_branch_inventory(
         .branches(Some(BranchType::Local))
         .map_err(|error| format!("Failed to enumerate local branches: {error}"))?
     {
-        let (branch, _) = branch.map_err(|error| format!("Failed to inspect local branch: {error}"))?;
+        let (branch, _) =
+            branch.map_err(|error| format!("Failed to inspect local branch: {error}"))?;
         if let Some(info) = branch_info(&branch, current_branch.as_deref())? {
             branches.push(info);
         }
@@ -139,7 +140,11 @@ pub fn cleanup_experiment_branches(
     let matched = inventory
         .branches
         .iter()
-        .filter(|branch| branch.age_days.is_some_and(|age_days| age_days >= threshold_days))
+        .filter(|branch| {
+            branch
+                .age_days
+                .is_some_and(|age_days| age_days >= threshold_days)
+        })
         .cloned()
         .collect::<Vec<_>>();
     let mut deleted_branch_count = 0usize;
@@ -156,7 +161,9 @@ pub fn cleanup_experiment_branches(
                 age_days: branch.age_days,
                 last_commit_at: branch.last_commit_at,
                 action: ExperimentBranchCleanupAction::SkipCurrent,
-                reason: Some("The currently checked out branch is protected from cleanup.".to_owned()),
+                reason: Some(
+                    "The currently checked out branch is protected from cleanup.".to_owned(),
+                ),
             });
             continue;
         }
@@ -198,9 +205,7 @@ pub fn cleanup_experiment_branches(
 
     let matched_branch_count = branches.len();
     let summary = if matched_branch_count == 0 {
-        format!(
-            "No experiment branches are older than {threshold_months} month(s)."
-        )
+        format!("No experiment branches are older than {threshold_months} month(s).")
     } else if dry_run {
         format!(
             "Dry run matched {matched_branch_count} experiment branch(es) older than {threshold_months} month(s)."
@@ -277,7 +282,11 @@ fn stale_count_for_threshold(branches: &[ExperimentBranchInfo], threshold_months
     let threshold_days = u64::from(threshold_months) * 30;
     branches
         .iter()
-        .filter(|branch| branch.age_days.is_some_and(|age_days| age_days >= threshold_days))
+        .filter(|branch| {
+            branch
+                .age_days
+                .is_some_and(|age_days| age_days >= threshold_days)
+        })
         .count()
 }
 
@@ -325,18 +334,11 @@ mod tests {
 
         let tree_id = index.write_tree().expect("tree should write");
         let tree = repo.find_tree(tree_id).expect("tree should load");
-        let signature = Signature::now("Maabarium", "maabarium@local.invalid")
-            .expect("signature should build");
+        let signature =
+            Signature::now("Maabarium", "maabarium@local.invalid").expect("signature should build");
 
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "init",
-            &tree,
-            &[],
-        )
-        .expect("initial commit should succeed");
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .expect("initial commit should succeed");
 
         temp_dir
     }
@@ -442,8 +444,8 @@ mod tests {
         create_experiment_branch(&repo, "experiment-runcurrent/iter-1", 120);
         checkout_branch(&repo, "experiment-runcurrent/iter-1");
 
-        let result = cleanup_experiment_branches(temp_dir.path(), 3, false)
-            .expect("cleanup should succeed");
+        let result =
+            cleanup_experiment_branches(temp_dir.path(), 3, false).expect("cleanup should succeed");
 
         assert_eq!(result.matched_branch_count, 2);
         assert_eq!(result.deleted_branch_count, 1);
@@ -457,6 +459,9 @@ mod tests {
         let inventory = inspect_experiment_branch_inventory(temp_dir.path())
             .expect("inventory should be collected after cleanup");
         assert_eq!(inventory.total_branches, 1);
-        assert_eq!(inventory.current_branch.as_deref(), Some("experiment-runcurrent/iter-1"));
+        assert_eq!(
+            inventory.current_branch.as_deref(),
+            Some("experiment-runcurrent/iter-1")
+        );
     }
 }

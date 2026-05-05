@@ -3,20 +3,20 @@ mod updater_key;
 use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate};
 use git2::{IndexAddOption, Repository, Signature};
-use maabarium_core::git_manager::GitManager;
 use maabarium_core::blueprint::{
     AgentDef, AgentsConfig, BlueprintLibraryKind, BlueprintLibraryMeta, BlueprintMeta,
     BlueprintTemplateKind, ConstraintsConfig, DomainConfig, EvaluatorKind, MetricDef,
     MetricsConfig, ModelAssignment, ModelDef, ModelsConfig,
 };
+use maabarium_core::error::EngineError;
+use maabarium_core::git_manager::GitManager;
 use maabarium_core::persistence::PersistedExperiment;
 use maabarium_core::{
-    default_db_path, read_recent_log_lines_from_path, ApiKeyStore, BlueprintFile,
-    Engine, EngineConfig, EnginePhase, EngineProgressUpdate, EvaluatorRegistry,
-    GitDependencyEnsureOutcome, PersistedProposal, Persistence, ProcessPluginManifest,
-    SecretStore, ensure_git_dependency, git_dependency_status,
+    default_db_path, ensure_git_dependency, git_dependency_status, read_recent_log_lines_from_path,
+    ApiKeyStore, BlueprintFile, Engine, EngineConfig, EnginePhase, EngineProgressUpdate,
+    EvaluatorRegistry, GitDependencyEnsureOutcome, PersistedProposal, Persistence,
+    ProcessPluginManifest, SecretStore,
 };
-use maabarium_core::error::EngineError;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -44,9 +44,8 @@ use crate::maintenance::{
 use crate::setup::{
     build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
     load_desktop_setup, pull_recommended_ollama_models as pull_recommended_ollama_models_runtime,
-    save_desktop_setup as persist_desktop_setup,
-    start_ollama as start_ollama_runtime, DesktopSetupState, OllamaStatus, ReadinessItem,
-    ResearchSearchMode,
+    save_desktop_setup as persist_desktop_setup, start_ollama as start_ollama_runtime,
+    DesktopSetupState, OllamaStatus, ReadinessItem, ResearchSearchMode,
 };
 
 const RELEASE_DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
@@ -742,8 +741,10 @@ fn bundled_blueprints_directory(app: &tauri::AppHandle) -> anyhow::Result<PathBu
         .resource_dir()
         .context("Failed to resolve the desktop resource directory")?;
 
-    Ok(resolve_bundled_resource_path(&resource_dir, Path::new(BLUEPRINTS_DIR_NAME))
-        .unwrap_or_else(|| resource_dir.join(BLUEPRINTS_DIR_NAME)))
+    Ok(
+        resolve_bundled_resource_path(&resource_dir, Path::new(BLUEPRINTS_DIR_NAME))
+            .unwrap_or_else(|| resource_dir.join(BLUEPRINTS_DIR_NAME)),
+    )
 }
 
 fn bundled_cli_resource_path(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
@@ -1058,10 +1059,7 @@ fn desktop_log_directory() -> anyhow::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = desktop_home_directory()?;
-        return Ok(home
-            .join("Library")
-            .join("Logs")
-            .join(desktop_runtime_id()));
+        return Ok(home.join("Library").join("Logs").join(desktop_runtime_id()));
     }
 
     #[cfg(target_os = "windows")]
@@ -1127,7 +1125,7 @@ fn managed_cli_link_path() -> anyhow::Result<PathBuf> {
 fn cli_path_contains_directory(directory: &Path) -> bool {
     std::env::var_os("PATH")
         .into_iter()
-    .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
         .any(|entry| entry == directory)
 }
 
@@ -1206,8 +1204,8 @@ fn describe_cli_link_state(cli_path: &Path) -> CliLinkState {
     let managed_directory = home.join(".local").join("bin");
     let managed_link_path = managed_directory.join(cli_binary_name());
     let path_contains_managed_dir = cli_path_contains_directory(&managed_directory);
-    let shell_config_path = shell_config_path(&home, shell_name.as_deref())
-        .map(|path| path.display().to_string());
+    let shell_config_path =
+        shell_config_path(&home, shell_name.as_deref()).map(|path| path.display().to_string());
     let export_command = Some(shell_export_command(shell_name.as_deref()));
 
     match std::fs::symlink_metadata(&managed_link_path) {
@@ -1407,7 +1405,10 @@ fn remove_managed_cli_link() -> anyhow::Result<()> {
             }
 
             std::fs::remove_file(&link_path).with_context(|| {
-                format!("Failed to remove managed CLI symlink {}", link_path.display())
+                format!(
+                    "Failed to remove managed CLI symlink {}",
+                    link_path.display()
+                )
             })?;
             Ok(())
         }
@@ -1450,7 +1451,10 @@ fn merge_console_proposals(
     let mut seen_ids = HashSet::new();
     let mut proposals = Vec::new();
 
-    for proposal in recent_proposals.into_iter().chain(retained_winner_proposals) {
+    for proposal in recent_proposals
+        .into_iter()
+        .chain(retained_winner_proposals)
+    {
         if seen_ids.insert(proposal.id) {
             proposals.push(proposal);
         }
@@ -1481,7 +1485,9 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             .as_ref()
             .map(|path| path.display().to_string()),
         auto_install_supported: git_status.auto_install_supported,
-        installer_label: git_status.installer.map(|installer| installer.label().to_owned()),
+        installer_label: git_status
+            .installer
+            .map(|installer| installer.label().to_owned()),
         install_command: git_status.install_command.clone(),
         status_detail: git_status.status_detail.clone(),
     };
@@ -1526,17 +1532,16 @@ fn build_console_state(state: &AppState) -> ConsoleState {
                 let run_analytics = build_run_analytics(&recent_experiments, &state.log_path);
                 let retained_winner_ids = console_experiments
                     .iter()
-                    .filter(|experiment| experiment.promotion_outcome == maabarium_core::PromotionOutcome::Promoted)
+                    .filter(|experiment| {
+                        experiment.promotion_outcome == maabarium_core::PromotionOutcome::Promoted
+                    })
                     .map(|experiment| experiment.id)
                     .collect::<Vec<_>>();
                 let proposals = active_blueprint_name
                     .as_deref()
                     .map(|blueprint_name| {
                         let recent_proposals = persistence
-                            .recent_proposals_for_blueprint(
-                                blueprint_name,
-                                CONSOLE_PROPOSAL_LIMIT,
-                            )
+                            .recent_proposals_for_blueprint(blueprint_name, CONSOLE_PROPOSAL_LIMIT)
                             .unwrap_or_default();
                         let retained_winner_proposals = persistence
                             .proposals_for_experiment_ids(&retained_winner_ids)
@@ -1648,13 +1653,14 @@ fn build_console_state(state: &AppState) -> ConsoleState {
 }
 
 fn merge_saved_local_models_into_ollama(setup: &DesktopSetupState, ollama: &mut OllamaStatus) {
-    let mut merged_recommended_models = Vec::with_capacity(
-        setup.selected_local_models.len() + ollama.recommended_models.len(),
-    );
+    let mut merged_recommended_models =
+        Vec::with_capacity(setup.selected_local_models.len() + ollama.recommended_models.len());
 
     for model_name in &setup.selected_local_models {
         if ollama.models.iter().any(|model| model.name == *model_name)
-            || merged_recommended_models.iter().any(|name| name == model_name)
+            || merged_recommended_models
+                .iter()
+                .any(|name| name == model_name)
         {
             continue;
         }
@@ -1663,7 +1669,10 @@ fn merge_saved_local_models_into_ollama(setup: &DesktopSetupState, ollama: &mut 
     }
 
     for model_name in ollama.recommended_models.drain(..) {
-        if merged_recommended_models.iter().any(|name| name == &model_name) {
+        if merged_recommended_models
+            .iter()
+            .any(|name| name == &model_name)
+        {
             continue;
         }
 
@@ -2172,10 +2181,7 @@ fn resolved_update_pubkey(
 ) -> Option<String> {
     runtime_value
         .and_then(|value| normalize_update_pubkey_value(&value))
-        .or_else(|| {
-            compiled_value
-                .and_then(normalize_update_pubkey_value)
-        })
+        .or_else(|| compiled_value.and_then(normalize_update_pubkey_value))
 }
 
 fn normalize_update_pubkey_value(raw_value: &str) -> Option<String> {
@@ -2432,7 +2438,10 @@ fn ensure_git_runtime_dependency() -> Result<(), String> {
     match ensure_git_dependency() {
         Ok(GitDependencyEnsureOutcome::AlreadyInstalled) => Ok(()),
         Ok(GitDependencyEnsureOutcome::Installed { installer }) => {
-            info!(installer = installer.label(), "Git dependency installed automatically");
+            info!(
+                installer = installer.label(),
+                "Git dependency installed automatically"
+            );
             Ok(())
         }
         Ok(GitDependencyEnsureOutcome::InstallationStarted { message, .. }) => {
@@ -2582,8 +2591,11 @@ fn cleanup_experiment_branches_command(
     let blueprint = BlueprintFile::load(&blueprint_path).ok();
     let run_state = current_run_state(&state);
     let desktop_setup = hydrated_desktop_setup(&state);
-    let workspace_path = resolved_console_workspace_path(&run_state, blueprint.as_ref(), &desktop_setup)
-        .ok_or_else(|| "Choose a git-backed workspace before managing experiment branches".to_owned())?;
+    let workspace_path =
+        resolved_console_workspace_path(&run_state, blueprint.as_ref(), &desktop_setup)
+            .ok_or_else(|| {
+                "Choose a git-backed workspace before managing experiment branches".to_owned()
+            })?;
     let result = cleanup_experiment_branches(&workspace_path, older_than_months, dry_run)?;
 
     Ok(ExperimentBranchCleanupResponse {
@@ -2592,12 +2604,11 @@ fn cleanup_experiment_branches_command(
     })
 }
 
-
-    #[tauri::command]
-    fn install_git(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
-        ensure_git_runtime_dependency()?;
-        Ok(build_console_state(&state))
-    }
+#[tauri::command]
+fn install_git(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
+    ensure_git_runtime_dependency()?;
+    Ok(build_console_state(&state))
+}
 fn sample_hardware_telemetry(state: &AppState) -> HardwareTelemetry {
     match state.hardware_sampler.lock() {
         Ok(mut sampler) => sampler.sample(),
@@ -2666,7 +2677,9 @@ async fn export_retained_winner_files(
         .map_err(|error| format!("Failed to load retained winner proposal: {error}"))?
         .into_iter()
         .find(|proposal| proposal.experiment_id == experiment_id)
-        .ok_or_else(|| format!("No retained proposal patchset exists for experiment #{experiment_id}"))?;
+        .ok_or_else(|| {
+            format!("No retained proposal patchset exists for experiment #{experiment_id}")
+        })?;
 
     let export_paths = proposal
         .file_patches
@@ -2837,9 +2850,7 @@ fn inspect_workspace_git_status(path: String) -> Result<WorkspaceGitStatus, Stri
                 let root = if let Some(workdir) = repo.workdir() {
                     Some(workdir.display().to_string())
                 } else {
-                    repo.path()
-                        .parent()
-                        .map(|path| path.display().to_string())
+                    repo.path().parent().map(|path| path.display().to_string())
                 };
                 (true, root)
             }
@@ -2905,7 +2916,8 @@ fn update_blueprint_from_wizard(
     let existing_blueprint = BlueprintFile::load(&blueprint_path)
         .with_context(|| format!("Failed to load blueprint {}", blueprint_path.display()))
         .map_err(|error| error.to_string())?;
-    let updated_blueprint = build_blueprint_from_wizard_request(request, Some(&existing_blueprint))?;
+    let updated_blueprint =
+        build_blueprint_from_wizard_request(request, Some(&existing_blueprint))?;
 
     write_blueprint_file(&blueprint_path, &updated_blueprint)?;
     Ok(build_console_state(&state))
@@ -3081,12 +3093,16 @@ fn open_path_in_system_viewer(path: &Path) -> Result<(), String> {
         .map(|_| ())
 }
 
-fn open_repository_license_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+fn open_repository_license_path<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<(), String> {
     let license_path = resolved_repository_license_path(app)?;
     open_path_in_system_viewer(&license_path)
 }
 
-fn resolved_repository_license_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+fn resolved_repository_license_path<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         if let Some(bundled_license) =
             resolve_bundled_resource_path(&resource_dir, Path::new("LICENSE"))
@@ -3367,24 +3383,20 @@ async fn validate_provider_command(
 ) -> Result<maabarium_core::ProviderValidationResult, String> {
     let api_key_ref = api_key.as_deref();
     let model_ref = test_model.as_deref();
-    Ok(
-        maabarium_core::validate_provider_connection(
-            &provider_id,
-            &endpoint,
-            api_key_ref,
-            model_ref,
-        )
-        .await,
+    Ok(maabarium_core::validate_provider_connection(
+        &provider_id,
+        &endpoint,
+        api_key_ref,
+        model_ref,
     )
+    .await)
 }
 
 #[tauri::command]
 async fn validate_ollama_command(
     endpoint: Option<String>,
 ) -> Result<maabarium_core::ProviderValidationResult, String> {
-    let ep = endpoint
-        .as_deref()
-        .unwrap_or("http://localhost:11434");
+    let ep = endpoint.as_deref().unwrap_or("http://localhost:11434");
     Ok(maabarium_core::validate_ollama_connection(ep).await)
 }
 
@@ -3406,7 +3418,9 @@ fn apply_profile_command(profile_name: String) -> Result<maabarium_core::Profile
 }
 
 #[tauri::command]
-fn apply_fixes_command(workspace: Option<String>) -> Result<Vec<maabarium_core::FixOutcome>, String> {
+fn apply_fixes_command(
+    workspace: Option<String>,
+) -> Result<Vec<maabarium_core::FixOutcome>, String> {
     let workspace_ref = workspace.as_deref();
     Ok(maabarium_core::apply_all_fixes(workspace_ref))
 }
@@ -3595,8 +3609,9 @@ mod tests {
         }
 
         let runtime_paths = prepare_desktop_runtime_paths().expect("runtime paths should prepare");
-        let expected_log_path =
-            desktop_log_directory().expect("desktop log directory should resolve").join("maabarium.log");
+        let expected_log_path = desktop_log_directory()
+            .expect("desktop log directory should resolve")
+            .join("maabarium.log");
 
         assert!(!runtime_paths.log_path.exists());
         assert_eq!(runtime_paths.log_path, expected_log_path);
@@ -3672,16 +3687,11 @@ mod tests {
 
     #[test]
     fn resolved_update_pubkey_prefers_runtime_value() {
-        let pubkey = resolved_update_pubkey(
-            Some(" runtime-pubkey ".to_owned()),
-            Some("compiled-pubkey"),
-        );
+        let pubkey =
+            resolved_update_pubkey(Some(" runtime-pubkey ".to_owned()), Some("compiled-pubkey"));
         let expected = STANDARD.encode("untrusted comment: minisign public key\nruntime-pubkey\n");
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(expected.as_str())
-        );
+        assert_eq!(pubkey.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -3689,24 +3699,21 @@ mod tests {
         let pubkey = resolved_update_pubkey(Some("   ".to_owned()), Some(" compiled-pubkey "));
         let expected = STANDARD.encode("untrusted comment: minisign public key\ncompiled-pubkey\n");
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(expected.as_str())
-        );
+        assert_eq!(pubkey.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
     fn resolved_update_pubkey_normalizes_two_line_runtime_value() {
         let pubkey = resolved_update_pubkey(
-            Some("untrusted comment: generated by minisign\nnormalized-runtime-pubkey\n".to_owned()),
+            Some(
+                "untrusted comment: generated by minisign\nnormalized-runtime-pubkey\n".to_owned(),
+            ),
             None,
         );
-        let expected = STANDARD.encode("untrusted comment: generated by minisign\nnormalized-runtime-pubkey\n");
+        let expected = STANDARD
+            .encode("untrusted comment: generated by minisign\nnormalized-runtime-pubkey\n");
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(expected.as_str())
-        );
+        assert_eq!(pubkey.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -3715,12 +3722,10 @@ mod tests {
             None,
             Some("untrusted comment: generated by minisign\nnormalized-compiled-pubkey\n"),
         );
-        let expected = STANDARD.encode("untrusted comment: generated by minisign\nnormalized-compiled-pubkey\n");
+        let expected = STANDARD
+            .encode("untrusted comment: generated by minisign\nnormalized-compiled-pubkey\n");
 
-        assert_eq!(
-            pubkey.as_deref(),
-            Some(expected.as_str())
-        );
+        assert_eq!(pubkey.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
@@ -3865,6 +3870,9 @@ mod tests {
 
         assert_eq!(merged.len(), 4);
         assert_eq!(merged[0].id, 30);
-        assert_eq!(merged.last().map(|proposal| proposal.experiment_id), Some(1));
+        assert_eq!(
+            merged.last().map(|proposal| proposal.experiment_id),
+            Some(1)
+        );
     }
 }

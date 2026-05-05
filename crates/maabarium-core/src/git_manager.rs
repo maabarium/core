@@ -134,12 +134,18 @@ impl GitManager {
             let target_branch_name = repo
                 .find_branch("main", BranchType::Local)
                 .map(|_| "main")
-                .or_else(|_| repo.find_branch("master", BranchType::Local).map(|_| "master"))?;
+                .or_else(|_| {
+                    repo.find_branch("master", BranchType::Local)
+                        .map(|_| "master")
+                })?;
             let workdir = repo.workdir().map(Path::to_path_buf);
             let checked_out_branch = repo
                 .head()
                 .ok()
-                .and_then(|head| head.is_branch().then(|| head.shorthand().map(str::to_owned)))
+                .and_then(|head| {
+                    head.is_branch()
+                        .then(|| head.shorthand().map(str::to_owned))
+                })
                 .flatten();
             let checkout_was_clean = workdir
                 .as_ref()
@@ -366,10 +372,7 @@ impl GitManager {
         .map_err(|e| GitError::Io(std::io::Error::other(e.to_string())))?
     }
 
-    pub async fn detach_experiment_workspace(
-        &self,
-        workspace_path: &Path,
-    ) -> Result<(), GitError> {
+    pub async fn detach_experiment_workspace(&self, workspace_path: &Path) -> Result<(), GitError> {
         let workspace_path = workspace_path.to_path_buf();
         tokio::task::spawn_blocking(move || -> Result<(), GitError> {
             if !workspace_path.exists() {
@@ -436,7 +439,10 @@ impl GitManager {
     }
 }
 
-fn prepare_worktree(repo_root: &Path, workspace_path: &Path) -> Result<ApplyProposalTiming, GitError> {
+fn prepare_worktree(
+    repo_root: &Path,
+    workspace_path: &Path,
+) -> Result<ApplyProposalTiming, GitError> {
     let workspace_exists_before = workspace_path.exists();
     let workspace_valid_before = workspace_exists_before && is_valid_git_workspace(workspace_path);
     let created_workspace = !workspace_exists_before || !workspace_valid_before;
@@ -515,7 +521,10 @@ fn is_valid_git_workspace(workspace_path: &Path) -> bool {
 }
 
 fn is_branch_attached(workspace_path: &Path) -> bool {
-    matches!(run_git_status(workspace_path, ["symbolic-ref", "-q", "HEAD"]), Ok(0))
+    matches!(
+        run_git_status(workspace_path, ["symbolic-ref", "-q", "HEAD"]),
+        Ok(0)
+    )
 }
 
 fn is_checkout_clean(repo_path: &Path) -> Result<bool, GitError> {
@@ -529,9 +538,11 @@ fn is_checkout_clean(repo_path: &Path) -> Result<bool, GitError> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        return Err(GitError::Io(std::io::Error::other(
-            if !stderr.is_empty() { stderr } else { stdout },
-        )));
+        return Err(GitError::Io(std::io::Error::other(if !stderr.is_empty() {
+            stderr
+        } else {
+            stdout
+        })));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().is_empty())
@@ -558,18 +569,11 @@ mod tests {
 
         let tree_id = index.write_tree().expect("tree should write");
         let tree = repo.find_tree(tree_id).expect("tree should load");
-        let signature = Signature::now("Maabarium", "maabarium@local.invalid")
-            .expect("signature should build");
+        let signature =
+            Signature::now("Maabarium", "maabarium@local.invalid").expect("signature should build");
 
-        repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "init",
-            &tree,
-            &[],
-        )
-        .expect("initial commit should succeed");
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .expect("initial commit should succeed");
 
         temp_dir
     }
@@ -864,7 +868,9 @@ mod tests {
             .expect("git status should succeed");
         assert!(status_output.status.success());
         assert!(
-            String::from_utf8_lossy(&status_output.stdout).trim().is_empty(),
+            String::from_utf8_lossy(&status_output.stdout)
+                .trim()
+                .is_empty(),
             "promotion should not leave a dirty index or worktree"
         );
 
@@ -938,7 +944,9 @@ mod tests {
             .expect("git status should succeed");
         assert!(status_output.status.success());
         assert!(
-            String::from_utf8_lossy(&status_output.stdout).trim().is_empty(),
+            String::from_utf8_lossy(&status_output.stdout)
+                .trim()
+                .is_empty(),
             "promotion should not leave a dirty index or worktree"
         );
 
@@ -1080,14 +1088,19 @@ fn run_git<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Resu
 
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            Err(GitError::Io(std::io::Error::other(
-                if !stderr.is_empty() { stderr } else { stdout },
-            )))
+            Err(GitError::Io(std::io::Error::other(if !stderr.is_empty() {
+                stderr
+            } else {
+                stdout
+            })))
         }
     }
 }
 
-fn run_git_status<const N: usize>(repo_path: &std::path::Path, args: [&str; N]) -> Result<i32, GitError> {
+fn run_git_status<const N: usize>(
+    repo_path: &std::path::Path,
+    args: [&str; N],
+) -> Result<i32, GitError> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_path)

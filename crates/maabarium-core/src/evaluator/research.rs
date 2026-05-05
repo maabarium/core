@@ -16,8 +16,8 @@ use crate::git_manager::{FilePatchOperation, Proposal};
 use crate::secrets::SecretStore;
 
 use super::{
-    EvaluationContext, Evaluator, ExperimentResult, MetricScore, ResearchArtifacts, ResearchCitation,
-    ResearchQueryTrace, ResearchSource,
+    EvaluationContext, Evaluator, ExperimentResult, MetricScore, ResearchArtifacts,
+    ResearchCitation, ResearchQueryTrace, ResearchSource,
 };
 
 pub struct ResearchEvaluator {
@@ -332,9 +332,7 @@ impl ResearchEvaluator {
         requests: Vec<SourceVerificationRequest>,
     ) -> Vec<ResearchSource> {
         let total_limit = Arc::new(Semaphore::new(MAX_SOURCE_VERIFICATION_CONCURRENCY));
-        let host_limits = Arc::new(Mutex::new(
-            HashMap::<String, Arc<Semaphore>>::new(),
-        ));
+        let host_limits = Arc::new(Mutex::new(HashMap::<String, Arc<Semaphore>>::new()));
 
         stream::iter(requests.into_iter().map(|request| {
             let total_limit = Arc::clone(&total_limit);
@@ -556,10 +554,10 @@ fn is_unusable_discovery_summary(summary: &str) -> bool {
         || lowered.contains("insufficient evidence to create a new patch")
 }
 
-    fn is_explicit_evidence_gap_summary(summary: &str) -> bool {
-        let lowered = summary.to_ascii_lowercase();
+fn is_explicit_evidence_gap_summary(summary: &str) -> bool {
+    let lowered = summary.to_ascii_lowercase();
 
-        lowered.contains("evidence gap")
+    lowered.contains("evidence gap")
         || lowered.contains("no external url")
         || lowered.contains("no external urls")
         || lowered.contains("return no patch")
@@ -567,7 +565,7 @@ fn is_unusable_discovery_summary(summary: &str) -> bool {
         || lowered.contains("cannot verify")
         || lowered.contains("no credible")
         || lowered.contains("insufficient evidence")
-    }
+}
 
 fn extract_quoted_phrase(input: &str) -> Option<String> {
     for delimiter in ['\'', '"'] {
@@ -605,7 +603,8 @@ impl Evaluator for ResearchEvaluator {
         let sources = self.merge_sources(verified_sources, discovered_sources);
 
         if citations.is_empty() && sources.is_empty() {
-            if proposal.file_patches.is_empty() && is_explicit_evidence_gap_summary(&proposal.summary)
+            if proposal.file_patches.is_empty()
+                && is_explicit_evidence_gap_summary(&proposal.summary)
             {
                 let scores = self
                     .metrics
@@ -775,14 +774,11 @@ impl DuckDuckGoScrapeProvider {
                 message
             })?;
 
-        let body = response
-            .text()
-            .await
-            .map_err(|error| {
-                let message = format!("Failed to read DuckDuckGo HTML search response: {error}");
-                log_scraper_failure("response_body", query, &message);
-                message
-            })?;
+        let body = response.text().await.map_err(|error| {
+            let message = format!("Failed to read DuckDuckGo HTML search response: {error}");
+            log_scraper_failure("response_body", query, &message);
+            message
+        })?;
         let parsed_results = parse_duckduckgo_results(&body);
         if parsed_results.is_empty() {
             log_scraper_failure(
@@ -873,7 +869,8 @@ fn parse_duckduckgo_results(body: &str) -> Vec<DuckDuckGoSearchResult> {
             .find("result__snippet")
             .and_then(|snippet_class_offset| {
                 let snippet_class_index = title_end + snippet_class_offset;
-                let snippet_open_end = body[snippet_class_index..].find('>')? + snippet_class_index + 1;
+                let snippet_open_end =
+                    body[snippet_class_index..].find('>')? + snippet_class_index + 1;
                 let snippet_close = body[snippet_open_end..].find("</")? + snippet_open_end;
                 Some(clean_html_text(&body[snippet_open_end..snippet_close]))
             })
@@ -1189,11 +1186,16 @@ mod tests {
             fetch_error: None,
         }];
 
-        let verified_sources = evaluator.verify_discovered_sources(discovered_sources).await;
+        let verified_sources = evaluator
+            .verify_discovered_sources(discovered_sources)
+            .await;
 
         assert_eq!(verified_sources.len(), 1);
         assert!(verified_sources[0].verified);
-        assert_eq!(verified_sources[0].title.as_deref(), Some("Discovered Source"));
+        assert_eq!(
+            verified_sources[0].title.as_deref(),
+            Some("Discovered Source")
+        );
         assert_eq!(verified_sources[0].status_code, Some(200));
     }
 
@@ -1255,7 +1257,9 @@ mod tests {
         assert_eq!(result.iteration, 2);
         assert!(result.proposal.file_patches.is_empty());
         assert!(result.weighted_total >= 0.0);
-        let research = result.research.expect("research artifacts should be captured");
+        let research = result
+            .research
+            .expect("research artifacts should be captured");
         assert!(research.sources.is_empty());
         assert!(research.citations.is_empty());
     }

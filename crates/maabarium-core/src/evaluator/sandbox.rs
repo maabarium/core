@@ -148,12 +148,14 @@ impl WorkspaceMaterializer {
                 report.files_copied += nested_report.files_copied;
                 report.files_cloned += nested_report.files_cloned;
             } else if metadata.is_file() {
-                match self.materialize_file(&path, &destination).map_err(|error| {
-                    EvalError::Sandbox(format!(
-                        "failed to materialize snapshot file '{}': {error}",
-                        path.display()
-                    ))
-                })? {
+                match self
+                    .materialize_file(&path, &destination)
+                    .map_err(|error| {
+                        EvalError::Sandbox(format!(
+                            "failed to materialize snapshot file '{}': {error}",
+                            path.display()
+                        ))
+                    })? {
                     MaterializedFileMode::Copied => report.files_copied += 1,
                     MaterializedFileMode::Cloned => report.files_cloned += 1,
                 }
@@ -357,9 +359,7 @@ fn validate_summary_with_wasmtime(
         })?;
     let validate = instance
         .get_typed_func::<(i32, i64, i32, i64), i32>(&mut store, "validate")
-        .map_err(|error| {
-            EvalError::Sandbox(format!("failed to bind wasmtime policy: {error}"))
-        })?;
+        .map_err(|error| EvalError::Sandbox(format!("failed to bind wasmtime policy: {error}")))?;
     let accepted = validate
         .call(
             &mut store,
@@ -379,10 +379,7 @@ fn validate_summary_with_wasmtime(
     } else {
         Err(EvalError::Sandbox(format!(
             "wasmtime isolation policy rejected sandbox output: file_count={} total_bytes={} limits=({}, {})",
-            summary.file_count,
-            summary.total_bytes,
-            policy.max_files,
-            policy.max_total_bytes,
+            summary.file_count, summary.total_bytes, policy.max_files, policy.max_total_bytes,
         )))
     }
 }
@@ -418,10 +415,14 @@ fn try_clone_snapshot_file(source: &Path, destination: &Path) -> std::io::Result
         fn clonefile(src: *const c_char, dst: *const c_char, flags: c_int) -> c_int;
     }
 
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "source path contains NUL"))?;
+    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "source path contains NUL")
+    })?;
     let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "destination path contains NUL")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination path contains NUL",
+        )
     })?;
 
     let result = unsafe { clonefile(source.as_ptr(), destination.as_ptr(), 0) };
@@ -559,7 +560,8 @@ mod tests {
         fs::write(source.path().join("target/debug/ignored.txt"), "ignored")
             .expect("ignored file should be written");
 
-        let materializer = WorkspaceMaterializer::new(WorkspaceMaterializationStrategy::PortableCopy);
+        let materializer =
+            WorkspaceMaterializer::new(WorkspaceMaterializationStrategy::PortableCopy);
         let report = materializer
             .materialize_repo_snapshot(source.path(), destination.path())
             .expect("snapshot should materialize");
@@ -579,7 +581,8 @@ mod tests {
     fn benchmark_materializer_on_large_repo() {
         let source = tempfile::tempdir().expect("source tempdir should exist");
         let portable_destination = tempfile::tempdir().expect("portable destination should exist");
-        let optimized_destination = tempfile::tempdir().expect("optimized destination should exist");
+        let optimized_destination =
+            tempfile::tempdir().expect("optimized destination should exist");
 
         fs::create_dir_all(source.path().join("src/generated"))
             .expect("generated dir should be created");
@@ -587,13 +590,8 @@ mod tests {
             .expect("baseline file should be written");
         for index in 0..1500 {
             fs::write(
-                source
-                    .path()
-                    .join(format!("src/generated/file_{index}.rs")),
-                format!(
-                    "pub fn generated_{index}() -> usize {{ {} }}\n",
-                    index % 97
-                ),
+                source.path().join(format!("src/generated/file_{index}.rs")),
+                format!("pub fn generated_{index}() -> usize {{ {} }}\n", index % 97),
             )
             .expect("generated file should be written");
         }
@@ -622,8 +620,14 @@ mod tests {
             optimized_report.files_cloned,
         );
 
-        assert_eq!(portable_report.files_copied + portable_report.files_cloned, 1501);
-        assert_eq!(optimized_report.files_copied + optimized_report.files_cloned, 1501);
+        assert_eq!(
+            portable_report.files_copied + portable_report.files_cloned,
+            1501
+        );
+        assert_eq!(
+            optimized_report.files_copied + optimized_report.files_cloned,
+            1501
+        );
         assert_eq!(
             fs::read_to_string(optimized_destination.path().join("src/lib.rs"))
                 .expect("optimized baseline should exist"),

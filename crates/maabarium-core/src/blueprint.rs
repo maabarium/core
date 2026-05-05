@@ -229,12 +229,13 @@ impl BlueprintFile {
                 "Process evaluator blueprints must define evaluator.manifest_path".into(),
             ));
         }
-        if self.evaluator.as_ref().is_some_and(|config| {
-            config.kind != EvaluatorKind::Builtin && config.builtin.is_some()
-        }) {
+        if self
+            .evaluator
+            .as_ref()
+            .is_some_and(|config| config.kind != EvaluatorKind::Builtin && config.builtin.is_some())
+        {
             return Err(BlueprintError::Validation(
-                "evaluator.builtin can only be used when evaluator.kind = \"builtin\""
-                    .into(),
+                "evaluator.builtin can only be used when evaluator.kind = \"builtin\"".into(),
             ));
         }
         Ok(())
@@ -323,9 +324,11 @@ mod tests {
         });
 
         let error = blueprint.validate().expect_err("validation should fail");
-        assert!(error
-            .to_string()
-            .contains("Builtin evaluator blueprints must define evaluator.builtin"));
+        assert!(
+            error
+                .to_string()
+                .contains("Builtin evaluator blueprints must define evaluator.builtin")
+        );
     }
 
     #[test]
@@ -339,8 +342,10 @@ mod tests {
         });
 
         let error = blueprint.validate().expect_err("validation should fail");
-        assert!(error
-            .to_string()
-            .contains("evaluator.builtin can only be used when evaluator.kind = \"builtin\""));
+        assert!(
+            error
+                .to_string()
+                .contains("evaluator.builtin can only be used when evaluator.kind = \"builtin\"")
+        );
     }
 }

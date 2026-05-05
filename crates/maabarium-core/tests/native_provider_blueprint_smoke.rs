@@ -60,7 +60,9 @@ fn spawn_single_response_server(status_line: &str, body: &str) -> (String, mpsc:
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("request should arrive");
         let mut buffer = [0_u8; 4096];
-        let bytes_read = stream.read(&mut buffer).expect("request should be readable");
+        let bytes_read = stream
+            .read(&mut buffer)
+            .expect("request should be readable");
         tx.send(String::from_utf8_lossy(&buffer[..bytes_read]).into_owned())
             .expect("request payload should send back to test");
         let response = format!(
@@ -150,9 +152,7 @@ async fn gemini_blueprint_model_loads_and_completes_without_live_api() {
         .expect("gemini completion should succeed");
 
     let request = request_rx.recv().expect("request should be captured");
-    assert!(
-        request.contains("POST /v1beta/models/gemini-2.5-flash:generateContent HTTP/1.1")
-    );
+    assert!(request.contains("POST /v1beta/models/gemini-2.5-flash:generateContent HTTP/1.1"));
     assert!(request.contains("x-goog-api-key: gemini-test-key"));
     assert_eq!(response.content, "OK");
 }

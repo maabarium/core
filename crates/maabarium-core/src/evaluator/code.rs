@@ -7,7 +7,9 @@ use crate::blueprint::MetricDef;
 use crate::error::EvalError;
 use crate::git_manager::Proposal;
 
-use super::sandbox::{SandboxSummary, SandboxWorkspace, SubprocessRunner, summarize_existing_workspace};
+use super::sandbox::{
+    SandboxSummary, SandboxWorkspace, SubprocessRunner, summarize_existing_workspace,
+};
 use super::{EvaluationContext, Evaluator, ExperimentResult, MetricScore};
 
 pub struct CodeEvaluator {
@@ -86,10 +88,7 @@ impl CodeEvaluator {
         self.resolved_paths.evaluation_root.clone()
     }
 
-    fn execution_dir(
-        &self,
-        sandbox_root: &std::path::Path,
-    ) -> PathBuf {
+    fn execution_dir(&self, sandbox_root: &std::path::Path) -> PathBuf {
         self.resolved_paths
             .execution_subdir
             .as_ref()

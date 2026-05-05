@@ -12,7 +12,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- None.
+- Improve 429 response handling
 
 ### Fixed
 
