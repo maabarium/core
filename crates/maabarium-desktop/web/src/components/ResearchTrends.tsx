@@ -63,8 +63,8 @@ export function ResearchTrends({ days }: { days: TrendDay[] }) {
   const hasTokens = days.some(({ input, output }) => input !== null || output !== null);
   return <details className="mt-3 rounded-xl border p-3">
     <summary className="cursor-pointer font-medium">14-day trends</summary>
-    <p className="mb-3 mt-2 text-sm">Daily UTC totals. Older jobs without timestamps are excluded; unreported tokens are blank, not zero.</p>
-    {!hasOutcomes && !hasTokens ? <p className="text-sm">No dated activity yet. New job results will appear here.</p> : <>
+    <p className="mb-3 mt-2 text-sm">Dates use UTC. Older jobs without a recorded date are only in the summary above. Blank spaces mean no token count was reported.</p>
+    {!hasOutcomes && !hasTokens ? <p className="text-sm">New job results will appear here once they finish.</p> : <>
       <div className="grid gap-3 lg:grid-cols-2">
         {hasOutcomes && <TrendCard title="Job outcomes" metrics={outcomes} days={days} />}
         {hasTokens ? <TrendCard title="Reported token usage" metrics={tokens} days={days} /> : <p className="self-center text-sm">No token counters reported for this period.</p>}

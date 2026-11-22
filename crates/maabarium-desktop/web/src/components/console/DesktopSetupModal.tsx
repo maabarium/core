@@ -463,8 +463,8 @@ export function DesktopSetupModal({
         latencyMs: 0,
         modelCount: null,
         availableModels: [],
-        error: "Provider endpoint is required.",
-        diagnosis: "Complete the provider endpoint before validating.",
+        error: "Enter the provider’s server address.",
+        diagnosis: "Add the server address, then check the connection again.",
       };
       setProviderValidationResults((current) => ({
         ...current,
@@ -612,11 +612,11 @@ export function DesktopSetupModal({
               Guided Setup
             </div>
             <h2 className="mt-2 text-2xl font-black tracking-tight text-white">
-              Prepare Maabarium to run real workflows
+              Get ready to run your first workflow
             </h2>
             <p className="mt-2 max-w-3xl text-sm text-slate-400">
-              Choose a runtime strategy, point the app at a workspace, configure
-              providers, and make sure at least one model path is ready.
+              Choose a working folder and connect at least one model. You can
+              run models on this computer, use an online service, or use both.
             </p>
           </div>
           <button
@@ -667,12 +667,12 @@ export function DesktopSetupModal({
 
             <section className="rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
-                {isGuidedMode ? "Environment Profile" : "Advanced Controls"}
+                {isGuidedMode ? "Where models run" : "Advanced settings"}
               </div>
               <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
                 {isGuidedMode
-                  ? "Quick presets that configure runtime strategy and research mode for common workflows."
-                  : "Directly choose runtime behavior instead of relying on presets."}
+                  ? "Choose a starting setup for your workflows."
+                  : "Choose how models run without using a preset."}
               </div>
               {isGuidedMode ? (
                 <>
@@ -781,9 +781,8 @@ export function DesktopSetupModal({
                   </div>
 
                   <div className="rounded-lg border border-white/10 bg-slate-950/40 px-3 py-3 text-[11px] leading-relaxed text-slate-400">
-                    Advanced mode keeps the lower-level runtime strategy
-                    controls visible and stops applying preset labels unless you
-                    explicitly switch back to Guided.
+                    In Advanced mode, you choose these settings yourself.
+                    Switch to Guided to use a preset again.
                   </div>
                 </div>
               )}

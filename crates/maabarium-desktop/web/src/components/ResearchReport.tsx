@@ -66,7 +66,7 @@ export function ResearchReport() {
           <div><dt>Completed</dt><dd className="text-lg font-semibold">{sum("completed")}{terminal ? ` · ${rate(sum("completed"), terminal)}` : ""}</dd></div>
           <div><dt>Failed</dt><dd className="text-lg font-semibold">{sum("failed")}{terminal ? ` · ${rate(sum("failed"), terminal)}` : ""}</dd></div>
         </dl>
-        <p className="mt-2 text-sm">{sum("pending")} queued or running · {sum("stopped")} stopped. Completion rates exclude pending and stopped jobs.</p>
+        <p className="mt-2 text-sm">{sum("pending")} queued or running · {sum("stopped")} stopped. Percentages are based on completed and failed jobs only.</p>
         {report.trend && <ResearchTrends days={report.trend} />}
         <label className="mt-3 flex items-center gap-2 text-sm">
           <input type="checkbox" role="switch" className="workspace-switch" checked={details}
@@ -74,15 +74,15 @@ export function ResearchReport() {
           Show provider details
         </label>
         {details && <div className="mt-3 space-y-3">
-          <p className="text-sm">Completion means a result was returned, not that it passed scientific review. Token counts cover recorded completed jobs only; cache and reasoning counters may overlap input or output.</p>
+          <p className="text-sm">Completion means a result was returned, not that it passed scientific review. Token counts include only completed jobs with usage data. Cache and reasoning counts may already be included in input or output.</p>
           {report.lanes.map((lane) => <section className="rounded border p-3" key={lane.lane}>
             <h4 className="font-semibold">{providers[lane.lane] ?? lane.lane}</h4>
-            <p className="mb-2 text-sm">{lane.completed} completed · {lane.failed} failed · {lane.attempts} worker attempts · token data on {lane.observed_jobs} of {lane.jobs} jobs</p>
+            <p className="mb-2 text-sm">{lane.completed} completed · {lane.failed} failed · {lane.attempts} attempts · token data on {lane.observed_jobs} of {lane.jobs} jobs</p>
             <TokenDetails usage={lane} />
           </section>)}
           <section className="rounded border p-3">
             <h4 className="font-semibold">Subscription allowance</h4>
-            <p className="text-sm">Account-wide, not a Maabarium token total. Codex, Claude and Antigravity allowance is not imported here.</p>
+            <p className="text-sm">This shows usage across your account, not just in Maabarium. Only Muse usage can be checked here.</p>
             <button type="button" className="mt-2 rounded border px-3 py-1.5 text-sm" disabled={quotaBusy}
               onClick={() => void refreshAllowance()}>{quotaBusy ? "Checking…" : "Check Muse allowance"}</button>
             {quotaError && <p role="status" className="text-sm">{quotaError}</p>}

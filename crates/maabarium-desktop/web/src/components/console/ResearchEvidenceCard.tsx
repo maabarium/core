@@ -162,7 +162,7 @@ function buildResearchBriefing(experiment: PersistedExperiment): string[] {
     paragraphs.push(`Run note: ${proposalSummary}`);
   }
 
-  return paragraphs.length > 0 ? paragraphs : ["No research summary recorded."];
+  return paragraphs.length > 0 ? paragraphs : ["No research summary has been saved."];
 }
 
 function buildResearchMarkdown(experiment: PersistedExperiment) {
@@ -337,7 +337,7 @@ export function ResearchEvidenceCard({
             </div>
             {discoveryQuery ? (
               <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2">
-                <Badge color="blue">Discovery Query</Badge>
+                <Badge color="blue">Search terms</Badge>
                 <div
                   className="min-w-0 flex-1 truncate text-xs text-slate-300"
                   title={discoveryQuery}
@@ -467,7 +467,7 @@ export function ResearchEvidenceCard({
                             : `${trace.resultCount} results`}
                         </Badge>
                         {isScraperDiscoveryError(trace.error) ? (
-                          <Badge color="rose">Scraper Issue</Badge>
+                          <Badge color="rose">Couldn’t read this page</Badge>
                         ) : null}
                         <Badge color="slate">{trace.latencyMs}ms</Badge>
                       </div>
@@ -503,7 +503,7 @@ export function ResearchEvidenceCard({
         </div>
       ) : (
         <div className="flex h-full min-h-[18rem] items-center justify-center rounded-lg border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
-          No persisted research evidence is available yet. Run a research
+          No research evidence has been saved yet. Run a research
           blueprint to inspect verified sources and citation snippets here.
         </div>
       )}

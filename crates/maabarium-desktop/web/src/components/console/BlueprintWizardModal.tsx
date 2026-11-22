@@ -181,7 +181,7 @@ const WIZARD_STEPS: Array<{
   {
     id: "review",
     label: "Review",
-    copy: "Verify the derived workflow summary before saving the generated TOML.",
+    copy: "Review what the workflow will do before saving.",
   },
 ];
 
@@ -2553,8 +2553,8 @@ function BlueprintWizardModalBody({
                               }
                               className={textFieldClass}
                             >
-                              <option value="explicit">Explicit</option>
-                              <option value="round_robin">Round Robin</option>
+                              <option value="explicit">Choose each model</option>
+                              <option value="round_robin">Take turns</option>
                             </select>
                           </div>
                           <div>
@@ -3319,8 +3319,8 @@ function BlueprintWizardModalBody({
                             }
                             className={textFieldClass}
                           >
-                            <option value="explicit">Explicit</option>
-                            <option value="round_robin">Round Robin</option>
+                            <option value="explicit">Choose each model</option>
+                            <option value="round_robin">Take turns</option>
                           </select>
                           <FieldHint>
                             Explicit means each agent keeps the exact model you

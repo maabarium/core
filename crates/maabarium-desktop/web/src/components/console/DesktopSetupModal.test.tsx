@@ -329,8 +329,8 @@ describe("DesktopSetupModal", () => {
 
     await user.click(advancedButton);
 
-    expect(screen.getByText(/Advanced Controls/i)).toBeTruthy();
-    expect(screen.queryByText(/^Environment Profile$/i)).toBeNull();
+    expect(screen.getByText(/^Advanced settings$/i)).toBeTruthy();
+    expect(screen.queryByText(/^Where models run$/i)).toBeNull();
 
     rerender(
       <DesktopSetupModal
@@ -373,8 +373,8 @@ describe("DesktopSetupModal", () => {
       />,
     );
 
-    expect(screen.getByText(/Advanced Controls/i)).toBeTruthy();
-    expect(screen.queryByText(/^Environment Profile$/i)).toBeNull();
+    expect(screen.getByText(/^Advanced settings$/i)).toBeTruthy();
+    expect(screen.queryByText(/^Where models run$/i)).toBeNull();
   });
 
   it("does not re-run workspace inspection on same-path parent rerenders", async () => {

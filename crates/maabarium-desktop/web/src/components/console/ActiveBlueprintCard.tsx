@@ -29,7 +29,7 @@ export function ActiveBlueprintCard({
 }) {
   return (
     <GlassCard
-      title="Active Blueprint"
+      title="Current workflow"
       icon={FileText}
       collapsible
       collapsed={collapsed}

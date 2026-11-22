@@ -305,7 +305,7 @@ export function RetainedArtifactExplorerCard({
                   <div className="mt-2 text-sm leading-relaxed text-slate-300">
                     {selectedEntry.proposal?.summary ||
                       selectedEntry.experiment.proposal_summary ||
-                      "No retained proposal summary recorded."}
+                      "No summary was saved for this proposal."}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">

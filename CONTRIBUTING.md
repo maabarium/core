@@ -116,3 +116,11 @@ For new LLM providers:
 - Use the roadmap idea template for future capabilities, product-direction changes, and UX/workflow proposals.
 - Use the contributor report template for bugs, regressions, and contributor workflow problems.
 - If an issue changes project behavior, keep the linked roadmap and active docs in sync as the work lands.
+## Writing for the desktop app
+
+Use everyday words for navigation, setup, results and errors. Say what the
+user can do next. Use “workflow” in the interface; reserve “blueprint” for
+the file format and interfaces that use that term. Keep exact commands,
+provider setting names, file formats and diagnostic output where the user
+needs them, preferably in advanced settings or details. Do not rename
+stored values, command options or provider fields just to change a label.

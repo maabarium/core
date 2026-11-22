@@ -220,7 +220,7 @@ describe("ConsoleEvidencePanel", () => {
       screen.getByTestId("evidence-panel-research").getAttribute("aria-hidden"),
     ).toBe("false");
     expect(
-      screen.getByText(/No persisted research evidence is available yet/i),
+      screen.getByText(/No research evidence has been saved yet/i),
     ).toBeTruthy();
     expect(window.localStorage.getItem("maabarium.console.evidenceTab")).toBe(
       "research",

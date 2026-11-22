@@ -87,7 +87,7 @@ export function WorkflowLibraryCard({
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <div className="text-sm font-semibold text-slate-100">
-              Load runnable workflows or hydrate setup-required templates
+              Open a ready-to-run workflow or finish setting up a template
               without leaving the main console.
             </div>
             <div className="mt-1 text-xs text-slate-500">

@@ -493,7 +493,7 @@ export default function App() {
             )
           : successfulExperiments.length > 0
             ? "Single run"
-            : "No persisted runs",
+            : "No saved runs",
       currentScoreSeries: currentScoreSeries,
       winnerScoreLabel: "Winner Score",
       winnerScore: winnerExperiment
@@ -511,7 +511,7 @@ export default function App() {
             ? `Retained via experiment #${winnerExperiment?.id ?? "--"}`
             : legacySuccessful.length > 0
               ? "Legacy winner inferred"
-              : "No retained winner",
+              : "No best result saved",
       winnerScoreSeries,
       avgIterationLabel: liveRunActive ? "Iteration Elapsed" : "Avg Iteration",
       avgIteration: liveDurationValue,
@@ -523,7 +523,7 @@ export default function App() {
             )
           : successfulExperiments.length > 0
             ? "Single run"
-            : "No persisted runs",
+            : "No saved runs",
       avgIterationSeries: avgDurationSeries,
       tokenUsage:
         tokenSamples.length > 0
@@ -1235,7 +1235,7 @@ export default function App() {
                   {interruptedRunTimestamp ??
                     interruptedRunNotice.interruptedAt}
                   . Reopening the app does not resume that loop automatically;
-                  the next Run Flow action starts a fresh run.
+                  choosing Run workflow starts a new run.
                 </div>
                 <div className="mt-2 text-xs leading-relaxed text-amber-100/80">
                   Workspace: {interruptedRunNotice.workspacePath}
@@ -1451,7 +1451,7 @@ export default function App() {
               className="px-5 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
               type="button"
             >
-              Blueprints
+              Workflow library
             </button>
             <button
               onClick={() => scrollToSection("maintenance-section")}
@@ -1469,7 +1469,7 @@ export default function App() {
               type="button"
               disabled={workflowActionsLocked}
             >
-              New flow
+              New workflow
             </button>
             <button
               onClick={() => void selectBlueprint()}
@@ -1477,7 +1477,7 @@ export default function App() {
               type="button"
               disabled={workflowActionsLocked}
             >
-              Open flow
+              Open workflow
             </button>
             <button type="button" className="workspace-theme" aria-pressed={theme === "dark"} onClick={toggleTheme}>
               Dark mode
@@ -1508,7 +1508,7 @@ export default function App() {
               disabled={loading || runStatus === "stopping" || runLoopStarting}
               onClick={() => void handleRunFlowClick()}>
               {runStatus === "idle" ? <Play size={14} aria-hidden="true" /> : <Square size={14} aria-hidden="true" />}
-              {runStatus === "idle" ? (runLoopStarting ? "Starting…" : "Run flow") : runStatus === "stopping" ? "Stopping…" : "Stop run"}
+              {runStatus === "idle" ? (runLoopStarting ? "Starting…" : "Run workflow") : runStatus === "stopping" ? "Stopping…" : "Stop run"}
             </button>
           </div>
         </header>
@@ -1521,7 +1521,7 @@ export default function App() {
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <ResearchQueue />
           <details id="overview-section" className="workspace-metrics">
-            <summary>Run health, analytics and hardware</summary>
+            <summary>Run history and system activity</summary>
           <section
             className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
@@ -1599,7 +1599,7 @@ export default function App() {
                   <div className="pt-6 text-[10px] font-black uppercase tracking-[0.16em] text-slate-600">
                     {stat.data.length > 0
                       ? `${stat.data.length} recent points`
-                      : "Awaiting persisted data"}
+                      : "No data yet"}
                   </div>
                 </div>
               </GlassCard>
@@ -1643,11 +1643,11 @@ export default function App() {
                     {cpuInfoOpen ? (
                       <div className="absolute right-0 top-full z-30 mt-3 w-80 rounded-lg border border-white/10 bg-slate-950/95 px-3 py-3 text-left text-xs leading-relaxed text-slate-300 shadow-2xl shadow-black/40 backdrop-blur-xl">
                         <div className="font-black uppercase tracking-[0.16em] text-slate-400">
-                          CPU Telemetry
+                          CPU usage
                         </div>
                         <div className="mt-2">
                           {cpuSensor?.statusDetail ??
-                            "Telemetry is unavailable in the current build."}
+                            "CPU usage isn’t available in this version."}
                         </div>
                         <div className="mt-3 space-y-1 text-slate-500">
                           {(hardwareTelemetry?.notes.length
@@ -1833,7 +1833,7 @@ export default function App() {
                 {latestAnalyticsBucket ? (
                   <div className="rounded-lg border border-white/10 bg-slate-950/60 px-4 py-3">
                     <div className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
-                      Latest Bucket
+                      Latest period
                     </div>
                     <div className="mt-2 flex flex-col gap-2 text-sm text-slate-200 md:flex-row md:items-center md:justify-between">
                       <div className="font-semibold text-slate-100">

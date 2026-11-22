@@ -23,12 +23,12 @@ it("starts a public experiment with an ordered provider plan", async () => {
   cleanup();
   vi.mocked(invoke).mockReset().mockResolvedValueOnce("example-loop").mockResolvedValueOnce([]);
   render(<ResearchQueue />);
-  fireEvent.click(screen.getByText("Configure an experiment"));
+  fireEvent.click(screen.getByText("Set up an experiment"));
   fireEvent.change(screen.getByLabelText("Public research target"), { target: { value: "Compare public rules" } });
   fireEvent.click(screen.getByRole("button", { name: "Add Codex step" }));
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "muse" } });
   fireEvent.click(screen.getByRole("button", { name: "Add Muse step" }));
-  fireEvent.change(screen.getByLabelText("Review every successful step or batch"), { target: { value: "2" } });
+  fireEvent.change(screen.getByLabelText("Pause for review after"), { target: { value: "2" } });
   fireEvent.click(screen.getByRole("button", { name: "Start experiment" }));
   expect(await screen.findByText(/Experiment ID: example-loop/)).toBeTruthy();
   expect(invoke).toHaveBeenNthCalledWith(1, "research_loop_start", {

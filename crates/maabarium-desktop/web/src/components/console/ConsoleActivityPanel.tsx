@@ -232,7 +232,7 @@ export function ConsoleActivityPanel({
               </div>
 
               {activeDiffProposal.file_patches.length === 0 ? (
-                <div>Waiting for persisted proposal patch data.</div>
+                <div>No saved changes to show yet.</div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-[15rem_minmax(0,1fr)]">
                   <div className="max-h-64 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-slate-950/60 p-3">
@@ -320,7 +320,7 @@ export function ConsoleActivityPanel({
                     <div key={`${line}-${index}`}>{line}</div>
                   ))
               ) : (
-                <div>Waiting for tracing output in {logPath}</div>
+                <div>Waiting for activity in {logPath}</div>
               )}
             </div>
           </div>
