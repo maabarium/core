@@ -1,7 +1,7 @@
 import { Disclosure } from "./ui/Disclosure";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown } from "lucide-react";
-import { useState, type ComponentProps } from "react";
+import { lazy, Suspense, useEffect, useState, type ComponentProps } from "react";
 import { ResearchReport, TokenDetails, type TokenUsage } from "./ResearchReport";
 import { EvaluationRuleFields, EvidenceCheck, type EvaluationSetup } from "./ResearchEvaluation";
 
@@ -60,9 +60,9 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
     check: "Worker option: --enable-deepseek",
   },
 };
-type Job = {
+export type ResearchJob = {
   id: string;
-  lane: Lane;
+  lane: string;
   state: string;
   attempts: number;
   detail: string | null;
@@ -71,7 +71,66 @@ type Job = {
   due?: number;
   model?: string | null;
   effort?: string | null;
+  experiment_title?: string | null;
+  experiment_active?: boolean | null;
+  review_pending?: boolean;
 };
+
+const ResearchOutput = lazy(() => import("./ResearchOutput"));
+
+function QueueEntry({ job }: { job: ResearchJob }) {
+  const experiment = job.id.startsWith("loop:");
+  const local = job.lane === "Local evidence";
+  const provider = labels[job.lane as Lane] ?? job.lane;
+  const retry = job.state === "queued" && job.due && job.due > Date.now() / 1000 ? job.due : null;
+  const status = job.review_pending ? "Awaiting human review"
+    : retry ? "Retry scheduled"
+    : ({ queued: "Waiting to run", done: "Completed", running: "Running", failed: "Failed" } as Record<string, string>)[job.state] ?? "Unknown status";
+  const title = job.experiment_title ?? (local ? job.detail?.split(": waiting for the local runner")[0] ?? "Local benchmark"
+    : experiment ? "Research experiment" : `${provider} check`);
+  const subtitle = local ? "Runs locally. No model provider or paid API is used."
+    : experiment ? (job.id.endsWith(":review") ? `AI review · ${provider}` : provider) : null;
+  const finding = job.result?.match(/^(?:#{1,6}\s+)?(?:\*\*)?(?:Answer|Finding|Verdict)(?:\*\*)?\s*:(?:\*\*)?\s*(.{1,240})(?:\r?\n|$)/im)?.[1];
+  const next = local && job.state === "queued" ? "The benchmark hasn’t started."
+    : job.review_pending ? "Read the report before deciding whether to continue."
+    : retry ? `${job.detail?.includes("quota") ? "Waiting for the provider’s quota to reset. " : ""}Next attempt: ${new Date(retry * 1000).toLocaleString()}`
+    : job.state === "failed" ? job.detail ?? "See technical details for more information."
+    : job.state === "queued" ? "Waiting for the selected provider."
+    : null;
+  return <li className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
+    <div className="flex flex-wrap items-start justify-between gap-2">
+      <h4 className="min-w-0 break-words font-semibold">{title}</h4>
+      <span className="rounded-full border border-[var(--line)] bg-[var(--subtle)] px-2.5 py-1 text-xs font-semibold">{status}</span>
+    </div>
+    {subtitle && <p className="mt-1 text-sm text-[var(--muted)]">{subtitle}</p>}
+    {next && <p className="mt-2 text-sm">{next}</p>}
+    {finding && <div className="mt-2"><Suspense fallback={<p className="text-sm">Formatting finding…</p>}>
+      <ResearchOutput text={finding} />
+    </Suspense></div>}
+    {job.result && <Disclosure title="Report" className="mt-3" mountWhenExpanded>
+      <Suspense fallback={<p className="text-sm">Formatting report…</p>}><ResearchOutput text={job.result} /></Suspense>
+    </Disclosure>}
+    <Disclosure title="Technical details" className="mt-3" mountWhenExpanded>
+      <dl className="space-y-1 text-sm">
+        <div><dt className="inline font-semibold">Job ID: </dt><dd className="inline break-all font-mono">{job.id}</dd></div>
+        <div><dt className="inline font-semibold">Attempts: </dt><dd className="inline">{job.attempts}</dd></div>
+        {job.detail && <div><dt className="inline font-semibold">Worker note: </dt><dd className="inline">{job.detail}</dd></div>}
+        {(job.model || job.effort) && <div><dt className="inline font-semibold">Model and effort: </dt><dd className="inline">{job.model ?? "Default"} · {job.effort ?? "Default"}</dd></div>}
+      </dl>
+      {job.usage && <Disclosure title="Reported tokens" className="mt-2"><TokenDetails usage={job.usage} /></Disclosure>}
+      {job.result && <Disclosure title="Raw output" className="mt-2" mountWhenExpanded>
+        <pre className="whitespace-pre-wrap break-words text-xs">{job.result}</pre>
+      </Disclosure>}
+    </Disclosure>
+  </li>;
+}
+
+export function ResearchRunHistory({ jobs }: { jobs: ResearchJob[] }) {
+  if (!jobs.length) return <p className="text-sm text-[var(--muted)]">No research queue experiments yet.</p>;
+  return <ul className="space-y-2" aria-label="Research queue experiments">
+    {jobs.map(job => <QueueEntry key={job.id} job={job} />)}
+  </ul>;
+}
 
 function ResearchSelect({ className = "", children, ...props }: ComponentProps<"select">) {
   return <span className={`relative inline-flex max-w-full align-middle ${className}`}>
@@ -82,9 +141,9 @@ function ResearchSelect({ className = "", children, ...props }: ComponentProps<"
   </span>;
 }
 
-export function ResearchQueue() {
+export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: ResearchJob[]) => void } = {}) {
   const [lane, setLane] = useState<Lane>("codex");
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [checking, setChecking] = useState(false);
@@ -101,6 +160,29 @@ export function ResearchQueue() {
   const hasPaid = plan.some((step) => step.lane === "deepseek") || (useReviewer && reviewer?.lane === "deepseek");
   const finalLane = plan[plan.length - 1]?.lane;
   const reviewerValid = !useReviewer || (reviewer && reviewer.lane !== finalLane);
+  useEffect(() => {
+    if (!onJobsChange) return;
+    let mounted = true;
+    let loading = false;
+    const refresh = async () => {
+      if (loading || document.visibilityState === "hidden") return;
+      loading = true;
+      try {
+        const latest = await invoke<ResearchJob[]>("research_queue_list");
+        if (mounted) { setJobs(latest); onJobsChange(latest); }
+      } catch { /* The explicit Refresh action reports errors. */ }
+      finally { loading = false; }
+    };
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 10000);
+    return () => { mounted = false; window.clearInterval(interval); };
+  }, [onJobsChange]);
+
+  async function readJobs() {
+    const latest = await invoke<ResearchJob[]>("research_queue_list");
+    setJobs(latest);
+    onJobsChange?.(latest);
+  }
   async function startLoop() {
     setBusy(true);
     setMessage("");
@@ -112,7 +194,7 @@ export function ResearchQueue() {
       });
       setLoopId(id);
       setMessage("Experiment saved and its first step queued.");
-      setJobs(await invoke<Job[]>("research_queue_list"));
+      await readJobs();
     } catch (error) {
       setMessage(String(error));
     } finally {
@@ -136,7 +218,7 @@ export function ResearchQueue() {
     let id: string | undefined;
     try {
       if (enqueue) id = await invoke<string>("research_queue_enqueue", { lane });
-      setJobs(await invoke<Job[]>("research_queue_list"));
+      await readJobs();
       setMessage(id ? `Queued ${id}.` : "Queue refreshed.");
     } catch (error) {
       setMessage(id ? `Queued ${id}, but refresh failed: ${String(error)}` : String(error));
@@ -290,23 +372,16 @@ export function ResearchQueue() {
       <EvidenceCheck experimentId={loopId} />
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
       <ResearchReport />
-      {jobs.length > 0 && (
-        <ul className="mt-3 space-y-2" aria-label="Latest research jobs">
-          {jobs.map((job) => (
-            <li key={job.id} className="rounded border p-3">
-              <p className="font-semibold">{job.id.endsWith(":review") ? "AI review · " : ""}{labels[job.lane] ?? job.lane}: {job.state}</p>
-              <p className="break-all text-sm">{job.id}</p>
-              <p className="text-sm">{job.attempts} attempts{job.detail ? ` · ${job.detail}` : ""}</p>
-              {(job.model || job.effort) && <p className="text-sm">Model: {job.model ?? "Default"} · Thinking effort: {job.effort ?? "Default"}</p>}
-              {job.state === "queued" && job.due && job.due > Date.now() / 1000 ? (
-                <p className="text-sm">Next attempt: {new Date(job.due * 1000).toLocaleString()}</p>
-              ) : null}
-              {job.usage && <Disclosure className="mt-2" title="Reported tokens"><TokenDetails usage={job.usage} /></Disclosure>}
-              {job.result && <Disclosure className="mt-2" title="Result"><p className="whitespace-pre-wrap break-words">{job.result}</p></Disclosure>}
-            </li>
-          ))}
+      {[
+        { title: "Active experiments", entries: jobs.filter(job => job.id.startsWith("loop:") && job.experiment_active !== false) },
+        { title: "Earlier experiments", entries: jobs.filter(job => job.id.startsWith("loop:") && job.experiment_active === false) },
+        { title: "Provider checks", entries: jobs.filter(job => !job.id.startsWith("loop:")) },
+      ].filter(group => group.entries.length > 0).map(group => <div key={group.title} className="mt-5">
+        <h3 className="mb-2 font-semibold">{group.title}</h3>
+        <ul className="space-y-2" aria-label={group.title}>
+          {group.entries.map(job => <QueueEntry key={job.id} job={job} />)}
         </ul>
-      )}
+      </div>)}
     </section>
   );
 }

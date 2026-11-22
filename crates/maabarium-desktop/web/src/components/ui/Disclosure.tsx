@@ -14,12 +14,13 @@ export function CollapseToggle({ title, expanded, controls, onToggle }: {
   </button>;
 }
 
-export function Disclosure({ title, children, className = "", contentClassName = "", id }: {
+export function Disclosure({ title, children, className = "", contentClassName = "", id, mountWhenExpanded = false }: {
   title: string;
   children: ReactNode;
   className?: string;
   contentClassName?: string;
   id?: string;
+  mountWhenExpanded?: boolean;
 }) {
   const contentId = useId();
   const [expanded, setExpanded] = useState(false);
@@ -28,6 +29,8 @@ export function Disclosure({ title, children, className = "", contentClassName =
       <span className="text-sm font-semibold">{title}</span>
       <CollapseToggle title={title} expanded={expanded} controls={contentId} onToggle={() => setExpanded(!expanded)} />
     </div>
-    <div id={contentId} hidden={!expanded} className={`border-t border-[var(--line)] p-3 ${contentClassName}`}>{children}</div>
+    <div id={contentId} hidden={!expanded} className={`border-t border-[var(--line)] p-3 ${contentClassName}`}>
+      {(!mountWhenExpanded || expanded) && children}
+    </div>
   </div>;
 }

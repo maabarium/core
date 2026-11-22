@@ -165,6 +165,9 @@ pub(crate) struct QueueJob {
     due: i64,
     model: Option<String>,
     effort: Option<String>,
+    experiment_title: Option<String>,
+    experiment_active: Option<bool>,
+    review_pending: bool,
 }
 
 #[derive(serde::Deserialize, Serialize)]
@@ -605,8 +608,21 @@ pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
         let db = connect()?;
         let mut stmt = db
             .prepare(
-                "SELECT id,lane,state,attempts,detail,substr(result,1,16384),usage_json,due,model,effort
-                      FROM jobs ORDER BY rowid DESC LIMIT 50",
+                "SELECT j.id,j.lane,j.state,j.attempts,j.detail,substr(j.result,1,16384),j.usage_json,j.due,j.model,j.effort,
+                        substr(l.target,1,160), l.status='active',
+                        COALESCE(l.status='active' AND j.state='done' AND (
+                            j.id='loop:' || l.id || ':review' OR
+                            (j.id='loop:' || l.id || ':' || l.step
+                             AND (l.step % l.review_every=0 OR l.step=json_array_length(l.plan))
+                             AND (NOT EXISTS (SELECT 1 FROM research_reviewers WHERE loop_id=l.id)
+                                  OR l.step < json_array_length(l.plan))
+                             AND (l.step < json_array_length(l.plan) OR NOT EXISTS (
+                                  SELECT 1 FROM research_evaluations WHERE loop_id=l.id AND verdict IS NULL)))
+                        ), 0)
+                 FROM (SELECT rowid,* FROM jobs ORDER BY rowid DESC LIMIT 50) j
+                 LEFT JOIN research_loops l ON j.id LIKE 'loop:%'
+                     AND l.id=substr(j.id,6,instr(substr(j.id,6),':')-1)
+                 ORDER BY j.rowid DESC",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -624,6 +640,9 @@ pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
                     due: r.get(7)?,
                     model: r.get(8)?,
                     effort: r.get(9)?,
+                    experiment_title: r.get(10)?,
+                    experiment_active: r.get(11)?,
+                    review_pending: r.get(12)?,
                 })
             })
             .map_err(|e| e.to_string())?;

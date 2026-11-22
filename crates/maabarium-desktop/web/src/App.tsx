@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ResearchQueue } from "./components/ResearchQueue";
+import { ResearchQueue, type ResearchJob } from "./components/ResearchQueue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -150,6 +150,7 @@ export default function App() {
     latestPromotedExperimentId: null,
   });
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
+  const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
@@ -1533,8 +1534,14 @@ export default function App() {
         ) : null}
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-          <ResearchQueue />
-          <Disclosure id="overview-section" title="Run history and system activity" contentClassName="space-y-4">
+          <ResearchQueue onJobsChange={setResearchJobs} />
+          <Disclosure id="overview-section" title="Workflow history and system activity" contentClassName="space-y-4">
+          <p className="text-sm text-[var(--muted)]">
+            The scores, tokens, and run totals below are for the workflow engine. Local benchmarks
+            appear in Console History as well as the{" "}
+            <button type="button" onClick={() => scrollToSection("research-queue")}
+              className="font-semibold text-[var(--accent)] underline">Research queue</button>.
+          </p>
           <section
             className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
@@ -1924,9 +1931,26 @@ export default function App() {
                 />
               </div>
 
+              {researchJobs.some(job => job.id.startsWith("loop:")) && (
+                <GlassCard title="Research experiment activity" icon={Activity}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+                      <span>{researchJobs.filter(job => job.id.startsWith("loop:") && job.state === "running").length} running</span>
+                      <span>{researchJobs.filter(job => job.id.startsWith("loop:") && job.state === "queued").length} waiting</span>
+                      <span>{researchJobs.filter(job => job.id.startsWith("loop:") && job.review_pending).length} awaiting review</span>
+                    </div>
+                    <button type="button" className="font-semibold text-[var(--accent)] underline"
+                      onClick={() => { setActiveTab("history"); document.getElementById("console-activity")?.scrollIntoView({ block: "start" }); }}>
+                      View research history
+                    </button>
+                  </div>
+                  <p className="mt-2 text-sm text-[var(--muted)]">Counts are for research queue steps and are separate from workflow scores.</p>
+                </GlassCard>
+              )}
               <ConsoleActivityPanel
                 activeTab={activeTab}
                 history={history}
+                researchJobs={researchJobs.filter(job => job.id.startsWith("loop:"))}
                 latestProposal={latestProposal}
                 winnerProposal={winnerProposal}
                 selectedWinnerProposal={selectedRetainedWinnerProposal}

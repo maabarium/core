@@ -249,7 +249,10 @@ python3 scripts/subscription_lane.py local-checkpoint-finish --id example --resu
 python3 scripts/subscription_lane.py loop-status --id example
 ```
 
-Use **Refresh queue** to see the report under **Local evidence**. The finish
+The desktop shows a local benchmark under **Active experiments** in the
+Research queue and under **Research queue experiments** in Console History.
+Both views refresh while the app is visible. Workflow scores remain separate
+from local benchmark reports. The finish
 command stores the independently verified report once and pauses at human
 review. It does not run or certify the benchmark itself. A local checkpoint
 cannot be exported to a provider and does not consume subscription quota.

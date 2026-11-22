@@ -20,6 +20,8 @@ an optional automatic run window and mandatory human review checkpoints.
 
 ### Changed
 
+- The research queue separates experiments from provider checks, shows the next action first, and formats Markdown and math while keeping raw reports under Technical details.
+
 - Updated the Maabarium identity for 0.5.0 with the Specimen mark, a lowercase wordmark, and matching desktop and browser icons.
 
 - Rebuilt the console around the active workflow, with a light default, a remembered dark option, and run controls beside the workflow status. Moved analytics and hardware metrics behind a disclosure. Workflow groups keep inline deletion confirmation.

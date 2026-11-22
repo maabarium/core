@@ -34,6 +34,18 @@ function buildProposal(
 }
 
 describe("ConsoleActivityPanel", () => {
+  it("shows a separately labelled local checkpoint in the existing console history", () => {
+    render(<ConsoleActivityPanel activeTab="history" history={[]}
+      researchJobs={[{ id: "loop:pilot:1", lane: "Local evidence", state: "done", attempts: 0,
+        detail: null, result: "Audit report", experiment_title: "Pilot against both baselines", review_pending: true }]}
+      latestProposal={null} winnerProposal={null} selectedWinnerProposal={null}
+      logs={[]} logPath="test.log" onChangeTab={() => undefined} onOpenLogFile={() => undefined} />);
+    expect(screen.getByRole("heading", { name: "Pilot against both baselines" })).toBeTruthy();
+    expect(screen.getByText("Awaiting human review")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workflow engine runs" })).toBeTruthy();
+    expect(screen.queryByText("loop:pilot:1")).toBeNull();
+  });
+
   it("lets the user switch the diff view from latest to winning proposal", async () => {
     const user = userEvent.setup();
     render(

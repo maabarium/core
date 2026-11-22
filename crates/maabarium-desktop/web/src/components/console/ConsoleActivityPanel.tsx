@@ -7,6 +7,7 @@ import type {
   PersistedProposal,
 } from "../../types/console";
 import { Badge } from "../ui/Badge";
+import { ResearchRunHistory, type ResearchJob } from "../ResearchQueue";
 
 const historyBadge: Record<
   HistoryRow["status"],
@@ -23,6 +24,7 @@ const historyBadge: Record<
 export function ConsoleActivityPanel({
   activeTab,
   history,
+  researchJobs = [],
   latestProposal,
   winnerProposal,
   selectedWinnerProposal,
@@ -33,6 +35,7 @@ export function ConsoleActivityPanel({
 }: {
   activeTab: ConsoleTab;
   history: HistoryRow[];
+  researchJobs?: ResearchJob[];
   latestProposal: PersistedProposal | null;
   winnerProposal: PersistedProposal | null;
   selectedWinnerProposal: PersistedProposal | null;
@@ -130,7 +133,7 @@ export function ConsoleActivityPanel({
   const truncatedPatchPreview = activePatchPreview.slice(0, 40);
 
   return (
-    <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
+    <div id="console-activity" className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
       <div className="flex overflow-x-auto border-b border-slate-800">
         {[
           { id: "history" as const, label: "History", icon: History },
@@ -151,7 +154,14 @@ export function ConsoleActivityPanel({
       </div>
       <div className="p-4 max-h-80 overflow-y-auto">
         {activeTab === "history" ? (
-          history.length > 0 ? (
+          <div className="space-y-5">
+          <section aria-label="Research history">
+            <h3 className="mb-2 font-semibold">Research queue experiments</h3>
+            <ResearchRunHistory jobs={researchJobs} />
+          </section>
+          <section aria-label="Workflow history">
+            <h3 className="mb-2 font-semibold">Workflow engine runs</h3>
+          {history.length > 0 ? (
             <table className="w-full text-left text-xs">
               <tbody className="divide-y divide-white/5">
                 {history.map((entry) => (
@@ -201,7 +211,9 @@ export function ConsoleActivityPanel({
               No persisted experiments yet. Start the engine to populate real
               history rows.
             </div>
-          )
+          )}
+          </section>
+          </div>
         ) : activeTab === "diff" ? (
           activeDiffProposal ? (
             <div className="space-y-4 font-mono text-[11px] text-slate-500 leading-loose">

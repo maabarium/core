@@ -14,7 +14,7 @@ it("queues the selected provider and displays manual handoff without claiming au
   fireEvent.click(screen.getByRole("button", { name: "Expand Set up Muse" }));
   expect(screen.getByText("muse usage")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Queue task" }));
-  expect(await screen.findByText("Muse: queued")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Muse check" })).toBeTruthy();
   expect(invoke).toHaveBeenNthCalledWith(1, "research_queue_enqueue", { lane: "muse" });
   expect(invoke).toHaveBeenNthCalledWith(2, "research_queue_list");
 });
