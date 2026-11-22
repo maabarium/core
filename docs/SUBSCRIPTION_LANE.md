@@ -143,3 +143,15 @@ agent loaded. The launch agent completed it through the installed
 ChatGPT-authenticated Codex CLI on its first attempt; the temporary
 agent was then unloaded. SIGKILL and restart were tested separately
 with the fake CLI. A real quota exhaustion/reset was not induced.
+
+## Reporting
+
+The desktop **Research activity** report counts durable queue jobs and
+experiment plans, not workflow-engine history. Completion rates use
+completed and failed jobs only. Stop and retry states stay visible
+separately. The provider detail switch reveals observed token breakdowns.
+Provider token values are recorded from new successful runs only, when
+the CLI supplies recognised counters.
+Older, manual, or unsupported records are not counted as zero. Reported
+categories may overlap and are not added into a billing total. The optional
+Muse allowance check reads account-wide windows without running a model.

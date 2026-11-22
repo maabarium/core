@@ -16,6 +16,24 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_usage_counters_distinguish_zero_from_not_reported(self):
+        parse = runpy.run_path(str(SCRIPT))["reported_usage"]
+        self.assertIsNone(parse("claude", {"usage": {"input_tokens": True, "output_tokens": -1}}))
+        self.assertEqual(json.loads(parse("claude", {"usage": {
+            "input_tokens": 42, "output_tokens": 0, "cache_read_input_tokens": 17,
+            "unrecognized": 99,
+        }})), {"input": 42, "output": 0, "cached": 17})
+        self.assertEqual(json.loads(parse("antigravity", {"usage": {"thinking_tokens": 10}})), {"reasoning": 10})
+        stream = runpy.run_path(str(SCRIPT))["stream_usage"]
+        event = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 20}})
+        self.assertEqual(json.loads(stream("codex", event)), {"input": 20})
+        self.assertIsNone(stream("codex", event + "\n" + event))
+        self.assertEqual(json.loads(stream("muse", json.dumps({
+            "payload_type": "run.usage", "payload": {"models": [
+                {"input_tokens": 5, "output_tokens": 2}, {"input_tokens": 3},
+            ]},
+        }))), {"input": 8})
+
     def test_autonomous_checkpoint_pauses_and_final_step_needs_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

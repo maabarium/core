@@ -252,6 +252,33 @@ body {
 .workspace-theme { border-radius: 0.5rem; padding: 0.55rem; font-size: 0.8rem; font-weight: 650; }
 .workspace-theme[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
 
+.workspace-switch {
+  appearance: none;
+  flex: none;
+  width: 2.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--muted, #64748b);
+  border-radius: 999px;
+  background: var(--subtle, #334155);
+  cursor: pointer;
+  display: inline-grid;
+  align-items: center;
+  padding: 2px;
+}
+.workspace-switch::before {
+  content: "";
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--muted, #cbd5e1);
+}
+.workspace-switch:checked { background: var(--accent, #0f766e); }
+.workspace-switch:checked::before {
+  justify-self: end;
+  background: var(--on-accent, #fff);
+}
+.workspace-switch:disabled { opacity: 0.55; cursor: not-allowed; }
+
 .maabarium-app .workspace-heading {
   display: flex;
   align-items: center;

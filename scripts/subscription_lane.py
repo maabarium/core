@@ -149,6 +149,41 @@ def muse_quota_reset(raw):
     return None
 
 
+def reported_usage(lane, data):
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    fields = {"input": "input_tokens", "output": "output_tokens"}
+    if lane == "claude":
+        fields.update(cached="cache_read_input_tokens", cache_write="cache_creation_input_tokens")
+    elif lane == "antigravity":
+        fields.update(cached="cache_read_tokens", reasoning="thinking_tokens")
+    elif lane == "codex":
+        fields.update(cached="cached_input_tokens")
+    elif lane == "muse":
+        fields.update(cached="cached_tokens", reasoning="reasoning_tokens")
+    counters = {label: usage[key] for label, key in fields.items()
+                if type(usage.get(key)) is int and 0 <= usage[key] <= 10**9}
+    return json.dumps(counters) if counters else None
+
+
+def stream_usage(lane, raw):
+    """Read one authoritative usage record, never sum cumulative records."""
+    try:
+        records = [json.loads(line) for line in raw.splitlines()]
+        if lane == "codex":
+            matches = [row for row in records if row.get("type") == "turn.completed"]
+            return reported_usage(lane, matches[0]) if len(matches) == 1 else None
+        matches = [row["payload"]["models"] for row in records if row.get("payload_type") == "run.usage"]
+        if len(matches) != 1 or not matches[0]:
+            return None
+        observations = [json.loads(reported_usage(lane, {"usage": model}) or "{}") for model in matches[0]]
+        keys = set(observations[0]).intersection(*observations[1:])
+        return json.dumps({key: sum(obs[key] for obs in observations) for key in sorted(keys)}) if keys else None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
 def worker(db, runners, lock_fd, state):
     slots = ",".join("?" for _ in runners)
     job = db.execute(
@@ -207,7 +242,7 @@ def worker(db, runners, lock_fd, state):
         output = Path(scratch) / "answer.txt"
         cmd = [binary, *flags, "-a", "never", "exec", "--ignore-user-config", "--ephemeral",
                "--disable", "shell_tool", "--disable", "hooks", "-c", 'web_search="disabled"',
-               "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", str(output), "-"]
+               "--sandbox", "read-only", "--skip-git-repo-check", "--json", "--output-last-message", str(output), "-"]
         if lane == "claude":
             cmd = [binary, "-p", "--tools", "", "--setting-sources", "", "--strict-mcp-config",
                    "--settings", '{"disableAllHooks":true}', "--no-session-persistence",
@@ -226,7 +261,8 @@ def worker(db, runners, lock_fd, state):
         try:
             # The guardian, not the vendor process, holds the lock and enforces
             # the deadline even if the queue worker is killed.
-            with (output.open("wb") if lane != "codex" else open(os.devnull, "wb")) as stdout:
+            events = Path(scratch) / "events.jsonl"
+            with (output if lane != "codex" else events).open("wb") as stdout:
                 process = subprocess.Popen([sys.executable, "-I", "-c", GUARD, str(CHILD_TIMEOUT), *cmd],
                                            cwd=scratch, env=env, stdin=subprocess.PIPE,
                                            stdout=stdout, stderr=subprocess.DEVNULL,
@@ -244,16 +280,24 @@ def worker(db, runners, lock_fd, state):
                     )
                     return
                 raise ValueError("provider did not complete")
+            usage_json = None
             if lane == "muse":
+                usage_json = stream_usage(lane, result)
                 result = muse_result(result)
             elif lane != "codex":
                 data = json.loads(result)
                 if not isinstance(data, dict):
                     raise ValueError("invalid response")
+                usage_json = reported_usage(lane, data)
                 if lane == "claude":
                     result = data.get("result") if data.get("subtype") == "success" and data.get("is_error") is False else None
                 else:
                     result = data.get("response") if data.get("status") == "SUCCESS" else None
+            elif events.stat().st_size <= 65536:
+                try:
+                    usage_json = stream_usage(lane, events.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError):
+                    pass
             if not isinstance(result, str) or not result.strip() or len(result.encode()) > 16384:
                 raise ValueError("empty reply")
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -271,7 +315,8 @@ def worker(db, runners, lock_fd, state):
         detail = {"codex": "ChatGPT", "claude": "Claude account; API credentials excluded",
                   "antigravity": "Antigravity account; AI credits disabled for run",
                   "muse": "Muse browser account; API-key overrides excluded"}[lane]
-        db.execute("UPDATE jobs SET state='done', result=?, detail=? WHERE id=?", (result, detail, job_id))
+        db.execute("UPDATE jobs SET state='done', result=?, detail=?, usage_json=? WHERE id=?",
+                   (result, detail, usage_json, job_id))
 
 
 def main():
@@ -344,6 +389,8 @@ def main():
                 db.execute("ALTER TABLE jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'codex'")
             if "prompt" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN prompt TEXT")
+            if "usage_json" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN usage_json TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS research_loops (
                 id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
                 step INTEGER NOT NULL, status TEXT NOT NULL)""")

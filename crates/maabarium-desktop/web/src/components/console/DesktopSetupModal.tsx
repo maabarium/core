@@ -1506,6 +1506,8 @@ export function DesktopSetupModal({
                     <label className="mt-3 flex items-center gap-2 text-[11px] text-slate-400">
                       <input
                         type="checkbox"
+                        role="switch"
+                        className="workspace-switch"
                         checked={provider.fallbackOnly}
                         onChange={(event) =>
                           updateProvider(provider.providerId, (current) => ({

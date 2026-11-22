@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import { ResearchReport, TokenDetails, type TokenUsage } from "./ResearchReport";
 
 const labels = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse" };
 type Lane = keyof typeof labels;
@@ -45,6 +46,8 @@ type Job = {
   attempts: number;
   detail: string | null;
   result: string | null;
+  usage?: TokenUsage | null;
+  due?: number;
 };
 
 export function ResearchQueue() {
@@ -160,6 +163,7 @@ export function ResearchQueue() {
         {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Use the CLI to review and advance it.</p>}
       </details>
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
+      <ResearchReport />
       {jobs.length > 0 && (
         <ul className="mt-3 space-y-2" aria-label="Latest research jobs">
           {jobs.map((job) => (
@@ -167,6 +171,10 @@ export function ResearchQueue() {
               <p className="font-semibold">{labels[job.lane] ?? job.lane}: {job.state}</p>
               <p className="break-all text-sm">{job.id}</p>
               <p className="text-sm">{job.attempts} attempts{job.detail ? ` · ${job.detail}` : ""}</p>
+              {job.state === "queued" && job.due && job.due > Date.now() / 1000 ? (
+                <p className="text-sm">Next attempt: {new Date(job.due * 1000).toLocaleString()}</p>
+              ) : null}
+              {job.usage && <details className="mt-2"><summary>Reported tokens</summary><TokenDetails usage={job.usage} /></details>}
               {job.result && <details className="mt-2"><summary>Result</summary><p className="whitespace-pre-wrap break-words">{job.result}</p></details>}
             </li>
           ))}

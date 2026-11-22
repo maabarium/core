@@ -131,6 +131,119 @@ pub(crate) struct QueueJob {
     attempts: u32,
     detail: Option<String>,
     result: Option<String>,
+    usage: Option<serde_json::Value>,
+    due: i64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct QueueReport {
+    experiments: i64,
+    lanes: Vec<LaneReport>,
+}
+
+#[derive(Serialize)]
+struct LaneReport {
+    lane: String,
+    jobs: i64,
+    completed: i64,
+    failed: i64,
+    stopped: i64,
+    pending: i64,
+    attempts: i64,
+    observed_jobs: i64,
+    input: Option<i64>,
+    output: Option<i64>,
+    cached: Option<i64>,
+    cache_write: Option<i64>,
+    reasoning: Option<i64>,
+}
+
+fn report(db: &Connection) -> rusqlite::Result<QueueReport> {
+    let experiments = db.query_row("SELECT COUNT(*) FROM research_loops", [], |r| r.get(0))?;
+    let mut stmt = db.prepare(
+        "WITH observations AS (
+            SELECT *, CASE WHEN json_valid(usage_json) THEN usage_json END AS usage FROM jobs
+         )
+         SELECT lane,COUNT(*),COUNT(*) FILTER (WHERE state='done'),
+                COUNT(*) FILTER (WHERE state='failed' AND detail IS NOT 'loop stopped'),
+                COUNT(*) FILTER (WHERE state='failed' AND detail='loop stopped'),
+                COUNT(*) FILTER (WHERE state IN ('queued','running')),
+                SUM(attempts),COUNT(usage),
+                SUM(json_extract(usage,'$.input')), SUM(json_extract(usage,'$.output')),
+                SUM(json_extract(usage,'$.cached')), SUM(json_extract(usage,'$.cache_write')),
+                SUM(json_extract(usage,'$.reasoning'))
+         FROM observations GROUP BY lane ORDER BY lane",
+    )?;
+    let lanes = stmt
+        .query_map([], |r| {
+            Ok(LaneReport {
+                lane: r.get(0)?,
+                jobs: r.get(1)?,
+                completed: r.get(2)?,
+                failed: r.get(3)?,
+                stopped: r.get(4)?,
+                pending: r.get(5)?,
+                attempts: r.get(6)?,
+                observed_jobs: r.get(7)?,
+                input: r.get(8)?,
+                output: r.get(9)?,
+                cached: r.get(10)?,
+                cache_write: r.get(11)?,
+                reasoning: r.get(12)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(QueueReport { experiments, lanes })
+}
+
+#[tauri::command]
+pub(crate) async fn research_queue_report() -> Result<QueueReport, String> {
+    tauri::async_runtime::spawn_blocking(|| report(&connect()?).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn research_muse_allowance() -> Result<Option<serde_json::Value>, String> {
+    let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
+    let binary = std::path::PathBuf::from(&home).join(".local/bin/muse");
+    if !binary.is_file() {
+        return Ok(None);
+    }
+    // Never start a model, read credentials directly, or return raw provider data.
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.args(["usage", "--json"])
+        .current_dir("/")
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin")
+        .env("MUSE_NO_AUTO_UPDATE", "1")
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(8), cmd.output())
+        .await
+        .map_err(|_| "Muse allowance check timed out")?
+        .map_err(|_| "Muse allowance check could not start")?;
+    if !output.status.success() || output.stdout.len() > 65536 {
+        return Ok(None);
+    }
+    let Ok(data) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return Ok(None);
+    };
+    Ok(allowance_summary(&data["allowance"]))
+}
+
+fn allowance_summary(usage: &serde_json::Value) -> Option<serde_json::Value> {
+    let observed = usage["observedAtMs"].as_u64()?;
+    let mut windows = Vec::new();
+    for (key, label) in [("window", "Current window"), ("weekly", "Weekly")] {
+        if let (Some(used), Some(reset)) = (
+            usage[key]["usedPercent"].as_u64(),
+            usage[key]["resetsAtMs"].as_u64(),
+        ) {
+            windows.push(serde_json::json!({"label":label,"used":used,"reset":reset}));
+        }
+    }
+    (!windows.is_empty()).then(|| serde_json::json!({"observed":observed,"windows":windows}))
 }
 
 #[cfg(target_os = "macos")]
@@ -200,6 +313,14 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
     )?;
     if !has_prompt {
         tx.execute_batch("ALTER TABLE jobs ADD COLUMN prompt TEXT")?;
+    }
+    let has_usage: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='usage_json')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_usage {
+        tx.execute_batch("ALTER TABLE jobs ADD COLUMN usage_json TEXT")?;
     }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS research_loops (
@@ -288,7 +409,7 @@ pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
         let db = connect()?;
         let mut stmt = db
             .prepare(
-                "SELECT id,lane,state,attempts,detail,substr(result,1,16384)
+                "SELECT id,lane,state,attempts,detail,substr(result,1,16384),usage_json,due
                       FROM jobs ORDER BY rowid DESC LIMIT 50",
             )
             .map_err(|e| e.to_string())?;
@@ -301,6 +422,10 @@ pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
                     attempts: r.get(3)?,
                     detail: r.get(4)?,
                     result: r.get(5)?,
+                    usage: r
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|raw| serde_json::from_str(&raw).ok()),
+                    due: r.get(7)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -334,6 +459,48 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_separates_stops_and_missing_token_data() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        db.execute_batch(
+            "INSERT INTO jobs(id,lane,state,attempts,detail,usage_json) VALUES
+            ('a','claude','done',1,NULL,'{\"input\":25,\"cached\":0}'),
+            ('b','claude','done',0,'manual result',NULL),
+            ('c','claude','failed',4,'attempt limit',NULL),
+            ('d','claude','failed',0,'loop stopped',NULL),
+            ('e','muse','queued',1,NULL,NULL)",
+        )
+        .unwrap();
+        let report = report(&db).unwrap();
+        let claude = &report.lanes[0];
+        assert_eq!(
+            (claude.jobs, claude.completed, claude.failed, claude.stopped),
+            (4, 2, 1, 1)
+        );
+        assert_eq!((claude.attempts, claude.observed_jobs), (5, 1));
+        assert_eq!(
+            (claude.input, claude.output, claude.cached),
+            (Some(25), None, Some(0))
+        );
+        assert_eq!(report.lanes[1].pending, 1);
+        assert!(report.lanes[1].input.is_none());
+    }
+
+    #[test]
+    fn allowance_is_optional_and_filters_extra_fields() {
+        assert!(allowance_summary(&serde_json::Value::Null).is_none());
+        let summary = allowance_summary(&serde_json::json!({
+            "observedAtMs": 100, "accountIdentifier": "not shown",
+            "weekly": {"usedPercent": 44, "resetsAtMs": 200}
+        }))
+        .unwrap();
+        assert_eq!(
+            summary,
+            serde_json::json!({"observed":100,"windows":[{"label":"Weekly","used":44,"reset":200}]})
+        );
+    }
 
     #[test]
     fn legacy_rows_are_routed_to_codex() {
