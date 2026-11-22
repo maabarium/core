@@ -124,6 +124,31 @@ describe("ConsoleEvidencePanel", () => {
     window.localStorage.clear();
   });
 
+  it("opens current research evidence over retained history without changing the workflow preference", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("maabarium.console.evidenceTab", "retained");
+    const props = {
+      winnerHistory: [{ experiment: buildRetainedExperiment(), proposal: buildRetainedProposal() }],
+      selectedExperimentId: 7,
+      onSelectExperimentId: vi.fn(),
+      onExportFiles: vi.fn(),
+      latestResearchExperiment: buildResearchExperiment(),
+      latestLoraExperiment: null,
+    };
+    const benchmark = { id: "loop:pilot:1", lane: "Local evidence", state: "done", attempts: 0,
+      detail: null, result: "Both baselines evaluated.", experiment_title: "CODA pilot", review_pending: true };
+    const view = render(<ConsoleEvidencePanel {...props} />);
+    expect(screen.getByRole("button", { name: /Retained/ }).getAttribute("aria-pressed")).toBe("true");
+    view.rerender(<ConsoleEvidencePanel {...props} currentResearchJob={benchmark} />);
+    expect(screen.getByRole("button", { name: /Research CODA pilot Awaiting review/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("heading", { name: "CODA pilot" })).toBeTruthy();
+    expect(screen.getByTestId("evidence-panel-retained").getAttribute("aria-hidden")).toBe("true");
+    await user.click(screen.getByRole("button", { name: /Retained/ }));
+    view.rerender(<ConsoleEvidencePanel {...props} currentResearchJob={{ ...benchmark, id: "loop:another:1" }} />);
+    expect(screen.getByTestId("evidence-panel-research").getAttribute("aria-hidden")).toBe("false");
+    expect(window.localStorage.getItem("maabarium.console.evidenceTab")).toBe("retained");
+  });
+
   it("defaults to the retained tab when a retained winner exists", () => {
     const winnerHistory: RetainedWinnerEntry[] = [
       {

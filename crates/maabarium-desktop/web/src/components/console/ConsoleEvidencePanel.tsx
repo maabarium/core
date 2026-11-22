@@ -4,6 +4,7 @@ import type { RetainedWinnerEntry } from "../../lib/winners";
 import type { PersistedExperiment } from "../../types/console";
 import { Badge } from "../ui/Badge";
 import { GlassCard } from "../ui/GlassCard";
+import { ResearchRunHistory, type ResearchJob } from "../ResearchQueue";
 import { LoraEvidenceCard } from "./LoraEvidenceCard";
 import { ResearchEvidenceCard } from "./ResearchEvidenceCard";
 import { RetainedArtifactExplorerCard } from "./RetainedArtifactExplorerCard";
@@ -59,6 +60,7 @@ export function ConsoleEvidencePanel({
   onSelectExperimentId,
   onExportFiles,
   latestResearchExperiment,
+  currentResearchJob,
   latestLoraExperiment,
   className,
   collapsed = false,
@@ -75,6 +77,7 @@ export function ConsoleEvidencePanel({
     | null
     | void;
   latestResearchExperiment: PersistedExperiment | null;
+  currentResearchJob?: ResearchJob;
   latestLoraExperiment: PersistedExperiment | null;
   className?: string;
   collapsed?: boolean;
@@ -93,10 +96,12 @@ export function ConsoleEvidencePanel({
       },
       research: {
         label: "Research",
-        detail: latestResearchExperiment?.research
+        detail: currentResearchJob
+          ? currentResearchJob.experiment_title ?? "Current experiment"
+          : latestResearchExperiment?.research
           ? `${latestResearchExperiment.research.sources.length} sources`
           : "No evidence",
-        ready: Boolean(latestResearchExperiment?.research),
+        ready: currentResearchJob ? Boolean(currentResearchJob.result) : Boolean(latestResearchExperiment?.research),
         icon: Search,
       },
       lora: {
@@ -108,9 +113,9 @@ export function ConsoleEvidencePanel({
         icon: FlaskConical,
       },
     }),
-    [latestLoraExperiment, latestResearchExperiment, winnerHistory],
+    [currentResearchJob, latestLoraExperiment, latestResearchExperiment, winnerHistory],
   );
-  const [activeTab, setActiveTab] = useState<EvidenceTab>(
+  const [workflowTab, setWorkflowTab] = useState<EvidenceTab>(
     () =>
       loadStoredEvidenceTab() ??
       defaultEvidenceTab(
@@ -119,6 +124,10 @@ export function ConsoleEvidencePanel({
         latestLoraExperiment,
       ),
   );
+  const [researchSelection, setResearchSelection] = useState<{ id: string; tab: EvidenceTab } | null>(null);
+  const activeTab = currentResearchJob
+    ? (researchSelection?.id === currentResearchJob.id ? researchSelection.tab : "research")
+    : workflowTab;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -126,11 +135,11 @@ export function ConsoleEvidencePanel({
     }
 
     try {
-      window.localStorage.setItem(EVIDENCE_TAB_STORAGE_KEY, activeTab);
+      window.localStorage.setItem(EVIDENCE_TAB_STORAGE_KEY, workflowTab);
     } catch {
       return;
     }
-  }, [activeTab]);
+  }, [workflowTab]);
 
   return (
     <GlassCard
@@ -151,7 +160,9 @@ export function ConsoleEvidencePanel({
               <button
                 key={tabId}
                 type="button"
-                onClick={() => setActiveTab(tabId)}
+                onClick={() => currentResearchJob
+                  ? setResearchSelection({ id: currentResearchJob.id, tab: tabId })
+                  : setWorkflowTab(tabId)}
                 aria-pressed={activeTab === tabId}
                 className={`flex min-w-[10rem] flex-1 items-center justify-between gap-3 rounded-lg border px-3 py-3 text-left transition ${
                   activeTab === tabId
@@ -168,8 +179,9 @@ export function ConsoleEvidencePanel({
                     {tab.detail}
                   </div>
                 </div>
-                <Badge color={tab.ready ? "emerald" : "slate"}>
-                  {tab.ready ? "Ready" : "Idle"}
+                <Badge color={tabId === "research" && currentResearchJob?.review_pending ? "amber" : tab.ready ? "emerald" : "slate"}>
+                  {tabId === "research" && currentResearchJob?.review_pending
+                    ? "Awaiting review" : tab.ready ? "Ready" : "Idle"}
                 </Badge>
               </button>
             );
@@ -195,10 +207,10 @@ export function ConsoleEvidencePanel({
           aria-hidden={activeTab !== "research"}
           className={activeTab === "research" ? "block" : "hidden"}
         >
-          <ResearchEvidenceCard
+          {currentResearchJob ? <ResearchRunHistory jobs={[currentResearchJob]} /> : <ResearchEvidenceCard
             latestResearchExperiment={latestResearchExperiment}
             embedded
-          />
+          />}
         </div>
 
         <div

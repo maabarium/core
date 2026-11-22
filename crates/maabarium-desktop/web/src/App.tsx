@@ -2002,6 +2002,7 @@ export default function App() {
                   return exportedArchive;
                 }}
                 latestResearchExperiment={latestResearchExperiment}
+                currentResearchJob={showResearch ? featuredResearch : undefined}
                 latestLoraExperiment={latestLoraExperiment}
               />
             </div>
