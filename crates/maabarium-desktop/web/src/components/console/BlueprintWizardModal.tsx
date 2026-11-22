@@ -22,6 +22,8 @@ import {
   useEffect,
   useMemo,
   useState,
+  useId,
+  useRef,
 } from "react";
 import {
   applyWizardDeliverable,
@@ -491,22 +493,23 @@ function StepButton({
       type="button"
       onClick={onClick}
       disabled={!enabled}
+      aria-current={active ? "step" : undefined}
       className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition ${
         active
-          ? "border-teal-400/35 bg-teal-500/10 text-teal-50"
+          ? "border-[var(--accent,#9be1cb)] bg-[var(--subtle,#263330)] text-[var(--ink,#edf5f0)]"
           : completed
-            ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15"
+            ? "border-[var(--line,#3a4a44)] bg-[var(--subtle,#263330)] text-[var(--ink,#edf5f0)] hover:border-[var(--accent,#9be1cb)]"
             : enabled
               ? "border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.05]"
               : "cursor-not-allowed border-white/10 bg-white/[0.02] text-slate-600"
       }`}
     >
-      <div
+      <div aria-hidden="true"
         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-[10px] font-black uppercase tracking-[0.16em] ${
           active
-            ? "border-teal-400/40 bg-teal-500/15 text-teal-100"
+            ? "border-[var(--accent,#9be1cb)] text-[var(--accent,#9be1cb)]"
             : completed
-              ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-100"
+              ? "border-[var(--line,#3a4a44)] text-[var(--accent,#9be1cb)]"
               : enabled
                 ? "border-white/10 bg-slate-950/60 text-slate-300"
                 : "border-white/5 bg-white/[0.03] text-slate-600"
@@ -1097,6 +1100,25 @@ function BlueprintWizardModalBody({
     providerOptionsById,
     setForm,
   ]);
+
+  const wizardTitleId = useId();
+  const wizardDialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = wizardDialogRef.current;
+    if (!open || !dialog) return;
+    // A modal dialog keeps focus and assistive technology inside the wizard
+    // and stops the page behind it from scrolling; focus returns afterwards.
+    const previousFocus = document.activeElement;
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) dialog.showModal();
+    } else {
+      dialog.setAttribute("open", "");
+    }
+    return () => {
+      if (typeof dialog.close === "function" && dialog.open) dialog.close();
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, [open]);
 
   if (!open) {
     return null;
@@ -1780,7 +1802,14 @@ function BlueprintWizardModalBody({
             : null;
 
   return (
-    <div className="fixed inset-0 z-[140] overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+    <dialog
+      ref={wizardDialogRef}
+      aria-labelledby={wizardTitleId}
+      // Escape has never closed the wizard; keep that so a long form is not
+      // lost by accident. Use Close to leave.
+      onCancel={(event) => event.preventDefault()}
+      className="m-0 h-full max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-transparent px-4 py-8 backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+    >
       <div className="mx-auto max-w-6xl">
         <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl">
           <div className="flex items-start justify-between gap-6 border-b border-white/5 bg-white/5 px-6 py-4">
@@ -1788,7 +1817,7 @@ function BlueprintWizardModalBody({
               <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200">
                 Blueprint Wizard
               </div>
-              <h2 className="mt-2 text-2xl font-black tracking-tight text-white">
+              <h2 id={wizardTitleId} className="mt-2 text-2xl font-black tracking-tight text-white">
                 {isEditMode
                   ? "Edit an existing workflow"
                   : "Create a workflow from the outcome you want"}
@@ -3700,7 +3729,7 @@ function BlueprintWizardModalBody({
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 

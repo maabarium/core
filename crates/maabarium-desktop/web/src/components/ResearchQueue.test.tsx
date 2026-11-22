@@ -96,3 +96,38 @@ it("accepts a dropped JSON evidence file and rejects oversized files", async () 
   expect(await screen.findByText("Loaded candidate.json")).toBeTruthy();
   expect((screen.getByLabelText("Candidate results (JSON)") as HTMLTextAreaElement).value).toBe("{}");
 });
+
+it("tells reviewers how to decide AI steps and points local reviews to their checkpoint", async () => {
+  cleanup();
+  const longTarget = "Public synthetic research: exact subset-existence under edits. Given four sets of bit masks, a query is true iff each set contains a row that is a subset of the query mask.";
+  vi.mocked(invoke).mockReset().mockResolvedValueOnce([
+    { id: "loop:ai-run:3", lane: "codex", state: "done", attempts: 1, detail: "ChatGPT", result: "Finding: ok",
+      experiment_title: longTarget, experiment_active: true, review_pending: true, review_continues: true },
+    { id: "loop:bench:review", lane: "claude", state: "done", attempts: 1, detail: "review", result: "Finding: advice",
+      experiment_title: "Bench", experiment_active: true, review_pending: true },
+    { id: "loop:bench:1", lane: "Local evidence", state: "done", attempts: 1, detail: "Local check complete",
+      result: "Finding: **Local gate pass**", experiment_title: "Bench", experiment_active: true, review_pending: false },
+  ]);
+  render(<ResearchQueue />);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh queue" }));
+  const heading = await screen.findByRole("heading", { name: /^Public synthetic research/ });
+  expect(heading.textContent?.endsWith("…")).toBe(true);
+  expect(screen.queryByText("Decide in Terminal")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Approve and continue" }));
+  expect(screen.getByText("Approval queues the next configured step.")).toBeTruthy();
+  expect(screen.getByText(/approve or stop the experiment on its local benchmark card/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Approve and close review" })).toBeTruthy();
+});
+
+it("shows a held adaptive successor as waiting for approval", async () => {
+  cleanup();
+  vi.mocked(invoke).mockReset().mockResolvedValueOnce([
+    { id: "loop:bench-next:1", lane: "Local evidence", state: "queued", attempts: 0,
+      detail: "Held until bench is approved", result: null, experiment_title: "Next benchmark",
+      experiment_active: false, review_pending: false },
+  ]);
+  render(<ResearchQueue />);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh queue" }));
+  expect(await screen.findByText("Held for your approval")).toBeTruthy();
+  expect(screen.getByText(/runs only after you approve that result/)).toBeTruthy();
+});

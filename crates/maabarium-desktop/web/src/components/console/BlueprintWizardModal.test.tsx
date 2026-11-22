@@ -217,6 +217,17 @@ function readFormState(): BlueprintWizardForm {
 }
 
 describe("BlueprintWizardModal", () => {
+  it("is a named modal dialog whose Escape key does not discard the form", () => {
+    render(<TestHarness />);
+    const dialog = screen.getByRole("dialog", { name: "Create a workflow from the outcome you want" });
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(screen.getByRole("button", { name: "Goal" }).getAttribute("aria-current")).toBe("step");
+    const cancel = new Event("cancel", { cancelable: true });
+    dialog.dispatchEvent(cancel);
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it("shows the stepped goal-first flow without the old template picker in the guided view", () => {
     render(<TestHarness />);
 

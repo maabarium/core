@@ -1,3 +1,4 @@
+import { ModalDialog } from "../ui/ModalDialog";
 import { useEffect, useMemo, useState } from "react";
 import {
   GitBranch,
@@ -497,7 +498,7 @@ export function ReadinessCenterCard({
       </div>
 
       {cleanupConfirmOpen ? (
-        <div className="fixed inset-0 z-[160] flex items-center justify-center bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+        <ModalDialog label="Confirm cleanup" role="alertdialog" onCancel={() => setCleanupConfirmOpen(false)} className="items-center justify-center open:flex">
           <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-rose-500/30 bg-slate-950/95 shadow-2xl shadow-rose-950/30">
             <div className="border-b border-white/5 bg-rose-500/10 px-6 py-5">
               <div className="flex items-start gap-3">
@@ -564,7 +565,7 @@ export function ReadinessCenterCard({
               </div>
             </div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
     </>
   );

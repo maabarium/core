@@ -109,16 +109,18 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   </Disclosure>;
 }
 
-export function LocalCheckpointActions({ jobId, onChanged }: { jobId: string; onChanged: () => Promise<void> }) {
+export function LocalCheckpointActions({ jobId, continues = false, onChanged }: { jobId: string; continues?: boolean; onChanged: () => Promise<void> }) {
   const [choice, setChoice] = useState<"approve" | "stop">();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const approveLabel = continues ? "Approve and continue" : "Approve and close review";
   return <div className="mt-3 space-y-2 text-sm">
     {!choice ? <div className="flex flex-wrap gap-2">
-      <button type="button" className="h-10 rounded-md border px-3" onClick={() => setChoice("approve")}>Approve checkpoint</button>
+      <button type="button" className="h-10 rounded-md border px-3" onClick={() => setChoice("approve")}>{approveLabel}</button>
       <button type="button" className="h-10 rounded-md border px-3" onClick={() => setChoice("stop")}>Stop experiment</button>
     </div> : <>
-      <p>{choice === "approve" ? "Acknowledge this report and close the checkpoint." : "Close this experiment without approval."} No follow-up will start.</p>
+      <p>{choice === "approve" && continues ? "Approval queues the next configured step." :
+        choice === "approve" ? "Approval closes this review. No follow-up will start." : "Stop closes this experiment without starting another step."}</p>
       <div className="flex gap-2">
         <button type="button" disabled={busy} className="h-10 rounded-md border px-3" onClick={() => setChoice(undefined)}>Cancel</button>
         <button type="button" disabled={busy} className="h-10 rounded-md border px-3 font-semibold" onClick={async () => {
@@ -128,7 +130,7 @@ export function LocalCheckpointActions({ jobId, onChanged }: { jobId: string; on
             await onChanged();
           } catch (cause) { setError(String(cause)); }
           finally { setBusy(false); }
-        }}>{choice === "approve" ? "Approve this report" : "Stop this experiment"}</button>
+        }}>{choice === "approve" ? approveLabel : "Stop this experiment"}</button>
       </div>
     </>}
     {error && <p role="alert">{error}</p>}

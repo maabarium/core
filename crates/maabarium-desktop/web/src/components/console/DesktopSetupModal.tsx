@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, LoaderCircle, Wrench } from "lucide-react";
 import type {
@@ -234,6 +234,25 @@ export function DesktopSetupModal({
       cancelled = true;
     };
   }, [form.workspacePath, isOpen]);
+
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!isOpen || !dialog) return;
+    // A modal dialog keeps keyboard focus and assistive technology inside
+    // setup, stops the page behind from scrolling, and restores focus after.
+    const previousFocus = document.activeElement;
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) dialog.showModal();
+    } else {
+      dialog.setAttribute("open", "");
+    }
+    return () => {
+      if (typeof dialog.close === "function" && dialog.open) dialog.close();
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, [isOpen]);
 
   if (!isOpen) {
     return null;
@@ -604,14 +623,19 @@ export function DesktopSetupModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[145] overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+    <dialog
+      ref={dialogRef}
+      aria-labelledby={titleId}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      className="m-0 h-full max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-transparent px-4 py-8 backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+    >
       <div className="mx-auto max-w-5xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl">
         <div className="flex items-start justify-between gap-6 border-b border-white/5 bg-white/5 px-6 py-4">
           <div>
             <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200">
               Guided Setup
             </div>
-            <h2 className="mt-2 text-2xl font-black tracking-tight text-white">
+            <h2 id={titleId} className="mt-2 text-2xl font-black tracking-tight text-white">
               Get ready to run your first workflow
             </h2>
             <p className="mt-2 max-w-3xl text-sm text-slate-400">
@@ -733,7 +757,7 @@ export function DesktopSetupModal({
                     ))}
                   </div>
                   {recommendedProfile ? (
-                    <div className="mt-3 rounded-lg border border-teal-400/20 bg-teal-500/10 px-3 py-2 text-[11px] leading-relaxed text-teal-100">
+                    <div className="mt-3 rounded-lg border border-[var(--line,#3a4a44)] bg-[var(--subtle,#263330)] px-3 py-2 text-sm leading-relaxed text-[var(--ink,#edf5f0)]">
                       Recommended for your system:{" "}
                       <strong>{profileLabel(recommendedProfile)}</strong>
                     </div>
@@ -844,16 +868,16 @@ export function DesktopSetupModal({
             </section>
           ) : null}
 
-          <section className="rounded-xl border border-white/10 bg-white/5 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
-                  Shell CLI
-                </div>
-                <div className="mt-2 text-sm text-slate-300">
+          <section className="rounded-xl border border-white/10 bg-white/5 p-4" aria-label="Command-line access">
+            <div className="flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-[var(--ink,#edf5f0)]">
+                  Command-line access
+                </h3>
+                <div className="mt-2 text-sm text-[var(--ink,#edf5f0)]">
                   {cliLink.statusDetail}
                 </div>
-                <div className="mt-3 space-y-1 text-[11px] leading-relaxed text-slate-500">
+                <div className="mt-3 space-y-1 text-sm leading-relaxed text-[var(--muted,#b8c8c0)] [overflow-wrap:anywhere]">
                   <div>
                     Managed link: {cliLink.managedLinkPath || "Unavailable"}
                   </div>
@@ -865,7 +889,7 @@ export function DesktopSetupModal({
                   ) : null}
                 </div>
               </div>
-              <Badge color={cliLinkBadgeColor}>{cliLinkBadgeLabel}</Badge>
+              <div className="shrink-0"><Badge color={cliLinkBadgeColor}>{cliLinkBadgeLabel}</Badge></div>
             </div>
 
             {cliLinkNeedsInstallAction || cliLinkCanRemove ? (
@@ -892,27 +916,25 @@ export function DesktopSetupModal({
             ) : null}
 
             {showMacPathGuidance ? (
-              <div className="mt-4 rounded-lg border border-amber-300/20 bg-amber-500/10 px-3 py-3 text-xs leading-relaxed text-amber-100">
-                <div className="font-semibold text-amber-50">
-                  Your shell PATH does not include{" "}
-                  {cliLink.managedLinkDirectory}.
-                </div>
-                <div className="mt-2 text-amber-100/85">
-                  Add the managed CLI directory to your
+              <div className="mt-4 rounded-lg border border-[var(--line,#3a4a44)] border-l-4 border-l-[var(--accent,#9be1cb)] bg-[var(--surface,#1b2523)] px-3 py-3 text-sm leading-relaxed text-[var(--ink,#edf5f0)] [overflow-wrap:anywhere]">
+                <p className="font-semibold">One more step to run Maabarium from Terminal</p>
+                <p className="mt-2">
+                  Your shell PATH does not include <code>{cliLink.managedLinkDirectory}</code>.
+                </p>
+                <p className="mt-2">
+                  Add this directory to your
                   {cliLink.shellName ? ` ${cliLink.shellName}` : " shell"}
                   {cliLink.shellConfigPath
                     ? ` profile at ${cliLink.shellConfigPath}`
                     : " profile"}
                   , then open a new terminal.
-                </div>
+                </p>
                 {cliLink.exportCommand ? (
-                  <div className="mt-3 rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 font-mono text-[11px] text-slate-100">
-                    {cliLink.exportCommand}
-                  </div>
+                  <pre className="mt-3 whitespace-pre-wrap rounded-lg border border-[var(--line,#3a4a44)] bg-[var(--subtle,#263330)] px-3 py-2 text-sm"><code>{cliLink.exportCommand}</code></pre>
                 ) : null}
               </div>
             ) : cliLink.installationSupported ? (
-              <div className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-3 text-xs leading-relaxed text-emerald-100">
+              <div className="mt-4 rounded-lg border border-[var(--line,#3a4a44)] bg-[var(--surface,#1b2523)] px-3 py-3 text-sm leading-relaxed text-[var(--ink,#edf5f0)] [overflow-wrap:anywhere]">
                 {cliLink.pathContainsManagedDir
                   ? `${cliLink.managedLinkDirectory} is already on your shell PATH.`
                   : "Shell PATH guidance is unavailable for this platform."}
@@ -1332,7 +1354,10 @@ export function DesktopSetupModal({
                               }, 120);
                             }}
                             onKeyDown={(event) => {
-                              if (event.key === "Escape") {
+                              if (event.key === "Escape" && openProviderModelPickerId === provider.providerId) {
+                                // Close only the suggestion list, not the setup dialog.
+                                event.preventDefault();
+                                event.stopPropagation();
                                 setOpenProviderModelPickerId((current) =>
                                   current === provider.providerId
                                     ? null
@@ -1760,6 +1785,6 @@ export function DesktopSetupModal({
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

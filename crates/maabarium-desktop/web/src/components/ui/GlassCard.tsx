@@ -37,8 +37,10 @@ export function GlassCard({
       >
         {(title || Icon) && (
           <div className="px-5 py-3 border-b border-white/5 flex items-center justify-between bg-gradient-to-r from-white/5 to-transparent">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.22em] flex items-center gap-2">
-              {Icon ? <Icon size={14} className="text-teal-300" /> : null}
+            {/* Same heading style as Disclosure titles, so collapsible cards
+                and disclosures read as one family. */}
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ink,#edf5f0)]">
+              {Icon ? <Icon size={14} className="text-teal-300" aria-hidden="true" /> : null}
               {title}
             </h3>
             {headerActions || collapsible ? (

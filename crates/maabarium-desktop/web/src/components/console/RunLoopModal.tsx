@@ -1,3 +1,4 @@
+import { ModalDialog } from "../ui/ModalDialog";
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { WorkspaceGitStatus } from "../../types/console";
@@ -172,7 +173,7 @@ export function RunLoopModal({
     (workspaceNeedsGitInit && !initializeGitIfNeeded);
 
   return (
-    <div className="fixed inset-0 z-[145] overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+    <ModalDialog label="Run flow" onCancel={onClose}>
       <div className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl">
         <div className="border-b border-white/5 bg-white/5 px-6 py-4">
           <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200">
@@ -306,6 +307,6 @@ export function RunLoopModal({
           </div>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 }

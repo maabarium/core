@@ -255,7 +255,9 @@ python3 scripts/subscription_lane.py local-benchmark-enqueue --id public-benchma
 ```
 
 The same worker runs the pinned benchmark and auditor with separate bounded
-processes. The runner writes evidence to stdout. The auditor receives those
+processes: each has the wall-clock time limit, a CPU-time limit five seconds
+longer, 1 MiB output files and, where macOS enforces it, 2 GiB of data
+memory. These limits contain mistakes; they are not a security sandbox. The runner writes evidence to stdout. The auditor receives those
 bytes on stdin and writes a JSON object with `evidence_sha256`, `outcome`
 (`pass` or `fail`), and a human-readable `report`. The worker verifies the
 evidence hash before saving the result, preserves the local evidence and
@@ -274,7 +276,24 @@ brief that will be sent with the local pass/fail result. Leave it off to keep th
 benchmark local. Neither option asks again before the human checkpoint.
 When the benchmark and any requested independent
 review finish, **Approve** records acceptance and **Stop** closes the run.
-Neither decision queues another experiment.
+For research checkpoints, the app labels approval according to its effect:
+**Approve and continue** queues the next configured step (including a held
+adaptive successor); **Approve and close review** ends the run. **Stop**
+closes a checkpoint without starting another step. Set the review interval
+above one to let eligible provider steps continue between checkpoints.
+The final and explicitly configured human reviews never auto-approve.
+
+For a bounded adaptive dry run, the CLI's `local-benchmark-enqueue` accepts
+`--adaptive-branches <manifest.json>`. The local manifest must contain exactly
+`pass` and `fail` entries with `title`, `runner`, `runner_sha256`, `auditor`,
+and `auditor_sha256`. The audited outcome selects only the matching pinned
+successor, under the original ID suffixed with `-next`, and holds it: the
+first result still pauses for human review, the successor runs only after
+you approve it (desktop **Approve checkpoint** or `loop-review --decision
+accept`), and stopping the first experiment stops the successor without
+running it. An operational error does not select a branch. The successor cannot branch again; the configured AI
+evaluator reviews its local verdict, then the run pauses for human review.
+Provider replies cannot select or change executable work.
 
 A trusted local runner can make an experiment visible in the desktop queue
 without sending its title or report to a provider:

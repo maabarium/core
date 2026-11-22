@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -87,8 +87,10 @@ const baseSetupState: DesktopSetupState = {
 
 function renderModal(options?: {
   setupState?: DesktopSetupState;
+  cliLink?: CliLinkState;
   onInspectWorkspace?: (path: string) => Promise<null>;
   onAnalyzeWorkspace?: (path: string) => Promise<null>;
+  onClose?: () => void;
 }) {
   const setupState = options?.setupState;
   const onSave = vi.fn<
@@ -117,11 +119,11 @@ function renderModal(options?: {
       setupState={setupState ?? baseSetupState}
       readinessItems={readinessItems}
       gitDependency={gitDependency}
-      cliLink={cliLink}
+      cliLink={options?.cliLink ?? cliLink}
       ollama={null}
       pluginRuntime={null}
       saving={false}
-      onClose={() => undefined}
+      onClose={options?.onClose ?? (() => undefined)}
       onInspectWorkspace={onInspectWorkspace}
       onSave={onSave}
       onInstallGit={vi.fn(async () => undefined)}
@@ -151,6 +153,25 @@ function renderModal(options?: {
 }
 
 describe("DesktopSetupModal", () => {
+  it("is a named modal dialog that Escape dismisses like Skip for now", () => {
+    const onClose = vi.fn();
+    renderModal({ onClose });
+    const dialog = screen.getByRole("dialog", { name: "Get ready to run your first workflow" });
+    expect(dialog.tagName).toBe("DIALOG");
+    // Escape on a modal <dialog> fires "cancel".
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("presents Terminal setup as named guidance with a selectable command", () => {
+    const exportCommand = 'export PATH="$HOME/.local/bin:$PATH"';
+    renderModal({ cliLink: { ...cliLink, pathContainsManagedDir: false, exportCommand } });
+
+    const region = screen.getByRole("region", { name: "Command-line access" });
+    expect(region.textContent).toContain("One more step to run Maabarium from Terminal");
+    expect(region.querySelector("pre > code")?.textContent).toBe(exportCommand);
+  });
+
   it("shows the real recommended profile label from the desktop command", async () => {
     renderModal();
 

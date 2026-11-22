@@ -15,6 +15,7 @@
       {
         "label": "main",
         "dragDropEnabled": false,
+        "zoomHotkeysEnabled": true,
         "title": "Maabarium Console",
         "width": 1440,
         "height": 940,

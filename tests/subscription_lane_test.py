@@ -18,7 +18,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
-    def managed_benchmark(self, live=False, damage=None, local_only=False):
+    def managed_benchmark(self, live=False, damage=None, local_only=False, adaptive=None, decision="accept"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = root / "runner"
@@ -45,6 +45,9 @@ assert report["scan_work"] == 39 and report["index_work"] == 14
 print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
     outcome="pass", report="PRIVATE-LOCAL-REPORT. Six matches; 14 versus 39 work units.")))
 """)
+            expected_gate = adaptive or "pass"
+            if expected_gate == "fail":
+                auditor.write_text(auditor.read_text().replace('outcome="pass"', 'outcome="fail"'))
             fake = root / "codex"
             fake.write_text(f"""#!{sys.executable}
 import pathlib, sys
@@ -52,7 +55,7 @@ if "login" in sys.argv:
     print("Logged in using ChatGPT")
     sys.exit()
 prompt = sys.stdin.read()
-assert "PRIVATE-LOCAL-REPORT" not in prompt and "PRIVATE-TITLE" not in prompt and '"local_gate": "pass"' in prompt
+assert "PRIVATE-LOCAL-REPORT" not in prompt and "PRIVATE-TITLE" not in prompt and '"local_gate": "{expected_gate}"' in prompt
 pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("Review complete; a handoff needs a human.")
 """)
             if damage == "bad-audit":
@@ -70,13 +73,53 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                 result = run(*args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return result.stdout
+            adaptive_args = ()
+            if adaptive:
+                branches = {}
+                for outcome in ("pass", "fail"):
+                    successor = root / ("successor-" + outcome)
+                    successor.write_text(fixture.read_text() + f"\n# {outcome} branch\n")
+                    successor.chmod(0o700)
+                    branches[outcome] = dict(title=outcome, runner=str(successor),
+                        runner_sha256=hashlib.sha256(successor.read_bytes()).hexdigest(),
+                        auditor=str(auditor), auditor_sha256=hashlib.sha256(auditor.read_bytes()).hexdigest())
+                manifest = root / "branches.json"
+                manifest.write_text(json.dumps(branches))
+                adaptive_args = ("--adaptive-branches", str(manifest))
             successful("local-benchmark-enqueue", "--id", "fresh-public-check",
                        "--local-title", "PRIVATE-TITLE",
                        "--public-target", "Public test of exact integer membership: linear scan versus a prebuilt set on six fixed queries, charging set setup and probes.",
                        "--reviewer", "codex", "--runner", str(fixture),
                        "--runner-sha256", hashlib.sha256(fixture.read_bytes()).hexdigest(),
                        "--auditor", str(auditor),
-                       "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest())
+                       "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
+            if adaptive:
+                successful("tick")
+                next_args = ("loop-status", "--id", "fresh-public-check-next")
+                next_loop = json.loads(successful(*next_args))
+                # The successor is selected but held until a human decides.
+                self.assertEqual((next_loop["target"], next_loop["phase"]), (adaptive, "held"))
+                parent = json.loads(successful("loop-status", "--id", "fresh-public-check"))
+                self.assertEqual(parent["phase"], "awaiting_review")
+                successful("tick")
+                self.assertEqual(json.loads(successful(*next_args))["phase"], "held")
+                self.assertEqual(len(json.loads(successful("status"))), 2)
+                successful("loop-review", "--id", "fresh-public-check", "--step", "1", "--decision", decision)
+                if decision == "stop":
+                    self.assertEqual(json.loads(successful(*next_args))["phase"], "stopped")
+                    successful("tick")
+                    held = [job for job in json.loads(successful("status")) if job["id"].endswith("-next:1")]
+                    self.assertEqual((held[0]["state"], held[0]["attempts"]), ("failed", 0))
+                    return
+                self.assertEqual(json.loads(successful(*next_args))["phase"], "awaiting_job")
+                successful("tick")
+                self.assertEqual(json.loads(successful(*next_args))["phase"], "awaiting_independent_review")
+                successful("tick")
+                successful("tick")
+                self.assertEqual(json.loads(successful(*next_args))["phase"], "awaiting_review")
+                jobs = json.loads(successful("status"))
+                self.assertEqual(len(jobs), 3)
+                return
             if local_only:
                 # Exercise the same persisted spec that desktop setup writes.
                 with sqlite3.connect(state / "queue.db") as db:
@@ -115,6 +158,14 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
 
     def test_managed_local_benchmark_reaches_human_checkpoint(self):
         self.managed_benchmark()
+
+    def test_adaptive_benchmark_runs_only_the_selected_successor(self):
+        for outcome in ("pass", "fail"):
+            with self.subTest(outcome=outcome):
+                self.managed_benchmark(adaptive=outcome)
+
+    def test_adaptive_successor_never_runs_when_the_parent_is_stopped(self):
+        self.managed_benchmark(adaptive="pass", decision="stop")
 
     def test_managed_local_only_benchmark_never_queues_ai_review(self):
         self.managed_benchmark(local_only=True)
@@ -232,6 +283,14 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             answer.write_text("Synthetic result")
             for step, expected_count in ((1, 2), (2, 2), (3, 3)):
                 run("import-result", "--id", f"loop:batch:{step}", "--result-file", str(answer))
+                if step == 1:
+                    run("tick")
+                    self.assertEqual(len(json.loads(run("status"))), 1)
+                    self.assertEqual(json.loads(run("loop-status", "--id", "batch"))["phase"], "awaiting_review")
+                    # Simulate a verified completion in this disposable queue.
+                    with sqlite3.connect(root / "queue.db") as db:
+                        db.execute("UPDATE jobs SET attempts=1,detail=? WHERE id='loop:batch:1'",
+                                   ("Muse browser account; API-key overrides excluded",))
                 run("tick")
                 run("tick")
                 self.assertEqual(len(json.loads(run("status"))), expected_count)

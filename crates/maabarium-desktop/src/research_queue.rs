@@ -168,6 +168,7 @@ pub(crate) struct QueueJob {
     experiment_title: Option<String>,
     experiment_active: Option<bool>,
     review_pending: bool,
+    review_continues: bool,
 }
 
 #[derive(serde::Deserialize, Serialize)]
@@ -650,6 +651,35 @@ fn dismiss_local_checkpoint(db: &Connection, job_id: &str, approved: bool) -> Re
     if count != 1 {
         return Err("This local experiment is no longer awaiting human review.".into());
     }
+    release_successor(db, id, approved).map_err(|e| e.to_string())
+}
+
+/// Start (on approval) or stop the held adaptive successor of a reviewed
+/// local experiment. Successors never run before a human decides.
+fn release_successor(db: &Connection, loop_id: &str, approved: bool) -> rusqlite::Result<()> {
+    let successor = format!("{loop_id}-next");
+    let job = format!("loop:{successor}:1");
+    if approved {
+        if db.execute(
+            "UPDATE research_loops SET status='active' WHERE id=? AND status='held'",
+            [&successor],
+        )? == 1
+        {
+            db.execute(
+                "UPDATE jobs SET detail='Approved; waiting for the managed benchmark worker' WHERE id=?",
+                [&job],
+            )?;
+        }
+    } else if db.execute(
+        "UPDATE research_loops SET status='stopped' WHERE id=? AND status='held'",
+        [&successor],
+    )? == 1
+    {
+        db.execute(
+            "UPDATE jobs SET state='failed',finished_at=unixepoch(),detail='loop stopped' WHERE id=? AND state='queued'",
+            [&job],
+        )?;
+    }
     Ok(())
 }
 
@@ -659,10 +689,100 @@ pub(crate) async fn research_decide_local_checkpoint(
     approved: bool,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        dismiss_local_checkpoint(&connect()?, &job_id, approved)
+        let mut db = connect()?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        decide_checkpoint(&tx, &job_id, approved)?;
+        tx.commit().map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn decide_checkpoint(db: &Connection, job_id: &str, approved: bool) -> Result<(), String> {
+    let stale = || "This checkpoint is no longer current. Refresh the research queue.".to_owned();
+    let (prefix, suffix) = job_id.rsplit_once(':').ok_or_else(stale)?;
+    let id = prefix
+        .strip_prefix("loop:")
+        .filter(|id| !id.is_empty() && id.len() <= 64)
+        .ok_or_else(stale)?;
+    let (target, raw_plan, step, every): (String, String, u32, u32) = db.query_row(
+        "SELECT target,plan,step,review_every FROM research_loops WHERE id=? AND status='active'",
+        [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    ).map_err(|_| stale())?;
+    let step = usize::try_from(step).map_err(|_| stale())?;
+    let every = usize::try_from(every).map_err(|_| stale())?;
+    let jobs: Vec<serde_json::Value> = serde_json::from_str(&raw_plan).map_err(|_| stale())?;
+    if step == 0 || step > jobs.len() || jobs.len() > 20 || every == 0 {
+        return Err(stale());
+    }
+    let final_step = step == jobs.len();
+    let primary = format!("{prefix}:{step}");
+    let (lane, state, detail): (String, String, Option<String>) = db
+        .query_row(
+            "SELECT lane,state,detail FROM jobs WHERE id=?",
+            [&primary],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|_| stale())?;
+    if !final_step
+        && step % every != 0
+        && detail.as_deref() != Some("manual result; billing unverified")
+    {
+        return Err(stale());
+    }
+    if lane == "Local evidence" && suffix == "1" {
+        return dismiss_local_checkpoint(db, job_id, approved);
+    }
+    let (reviewer, evidence_pending): (bool, bool) = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM research_reviewers WHERE loop_id=?1), EXISTS(SELECT 1 FROM research_evaluations WHERE loop_id=?1 AND verdict IS NULL)",
+        [id], |r| Ok((r.get(0)?, r.get(1)?)),
+    ).map_err(|e| e.to_string())?;
+    let expected = if final_step && reviewer {
+        format!("{prefix}:review")
+    } else {
+        primary
+    };
+    if job_id != expected || state != "done" {
+        return Err(stale());
+    }
+    let done: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=? AND state='done')",
+            [job_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !done || (approved && final_step && evidence_pending) {
+        return Err(stale());
+    }
+    if !approved || final_step {
+        db.execute(
+            "UPDATE research_loops SET status=? WHERE id=?",
+            rusqlite::params![if approved { "done" } else { "stopped" }, id],
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let next: ResearchStep = serde_json::from_value(jobs[step].clone()).map_err(|_| stale())?;
+    if !next.is_valid() {
+        return Err(stale());
+    }
+    let (lane, model, effort) = next.fields();
+    let next_step = step + 1;
+    let prompt = format!("Public synthetic experiment, step {next_step} of {}. Do not use tools or read local files. Work on this public target and report a bounded result: {target}", jobs.len());
+    db.execute(
+        "INSERT INTO jobs(id,lane,prompt,model,effort) VALUES (?,?,?,?,?)",
+        rusqlite::params![format!("{prefix}:{next_step}"), lane, prompt, model, effort],
+    )
+    .map_err(|e| e.to_string())?;
+    db.execute(
+        "UPDATE research_loops SET step=? WHERE id=?",
+        rusqlite::params![u32::try_from(next_step).map_err(|_| stale())?, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -783,53 +903,74 @@ fn insert_loop(
 
 #[tauri::command]
 pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let db = connect()?;
-        let mut stmt = db
-            .prepare(
-                "SELECT j.id,j.lane,j.state,j.attempts,j.detail,substr(j.result,1,16384),j.usage_json,j.due,j.model,j.effort,
-                        substr(l.target,1,160), l.status='active',
-                        COALESCE(l.status='active' AND j.state='done' AND (
-                            j.id='loop:' || l.id || ':review' OR
-                            (j.id='loop:' || l.id || ':' || l.step
-                             AND (l.step % l.review_every=0 OR l.step=json_array_length(l.plan))
-                             AND (NOT EXISTS (SELECT 1 FROM research_reviewers WHERE loop_id=l.id)
-                                  OR l.step < json_array_length(l.plan))
-                             AND (l.step < json_array_length(l.plan) OR NOT EXISTS (
-                                  SELECT 1 FROM research_evaluations WHERE loop_id=l.id AND verdict IS NULL)))
-                        ), 0)
-                 FROM (SELECT rowid,* FROM jobs ORDER BY rowid DESC LIMIT 50) j
-                 LEFT JOIN research_loops l ON j.id LIKE 'loop:%'
-                     AND l.id=substr(j.id,6,instr(substr(j.id,6),':')-1)
-                 ORDER BY j.rowid DESC",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(QueueJob {
-                    id: r.get(0)?,
-                    lane: r.get(1)?,
-                    state: r.get(2)?,
-                    attempts: r.get(3)?,
-                    detail: r.get(4)?,
-                    result: r.get(5)?,
-                    usage: r
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|raw| serde_json::from_str(&raw).ok()),
-                    due: r.get(7)?,
-                    model: r.get(8)?,
-                    effort: r.get(9)?,
-                    experiment_title: r.get(10)?,
-                    experiment_active: r.get(11)?,
-                    review_pending: r.get(12)?,
-                })
-            })
-            .map_err(|e| e.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(|| list_jobs(&connect()?).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Most queue jobs the console receives per refresh.
+const LIST_CAP: i64 = 1000;
+
+/// Jobs for the console: the newest 50 jobs, plus every job of each active
+/// experiment and of the 20 most recently active experiments, so experiment
+/// reports and token totals are never built from a partial run. A plan has
+/// at most 20 steps and a review, so whole experiments fit within the cap.
+fn list_jobs(db: &Connection) -> rusqlite::Result<Vec<QueueJob>> {
+    let mut stmt = db.prepare(
+        "WITH job_loops AS (
+            SELECT rowid AS rid, substr(id,6,instr(substr(id,6),':')-1) AS loop_id
+            FROM jobs WHERE substr(id,1,5)='loop:'
+         ), loop_rank AS (
+            SELECT l.id, l.status, MAX(jl.rid) AS latest
+            FROM research_loops l LEFT JOIN job_loops jl ON jl.loop_id=l.id GROUP BY l.id
+         ), chosen AS (
+            SELECT id FROM loop_rank WHERE status='active'
+            UNION SELECT id FROM (SELECT id FROM loop_rank ORDER BY latest DESC LIMIT 20)
+         ), picked AS (
+            SELECT rid FROM (SELECT rowid AS rid FROM jobs ORDER BY rowid DESC LIMIT 50)
+            UNION SELECT rid FROM job_loops WHERE loop_id IN (SELECT id FROM chosen)
+         )
+         SELECT j.id,j.lane,j.state,j.attempts,j.detail,substr(j.result,1,16384),j.usage_json,j.due,j.model,j.effort,
+                l.target, l.status='active',
+                COALESCE(l.status='active' AND j.state='done' AND (
+                    j.id='loop:' || l.id || ':review' OR
+                    (j.id='loop:' || l.id || ':' || l.step
+                     AND (l.step % l.review_every=0 OR l.step=json_array_length(l.plan) OR j.detail='manual result; billing unverified')
+                     AND (NOT EXISTS (SELECT 1 FROM research_reviewers WHERE loop_id=l.id)
+                          OR l.step < json_array_length(l.plan))
+                     AND (l.step < json_array_length(l.plan) OR NOT EXISTS (
+                          SELECT 1 FROM research_evaluations WHERE loop_id=l.id AND verdict IS NULL)))
+                ), 0),
+                COALESCE(l.step < json_array_length(l.plan) OR EXISTS(
+                    SELECT 1 FROM research_loops successor WHERE successor.id=l.id || '-next' AND successor.status='held'
+                ), 0)
+         FROM (SELECT rowid,* FROM jobs WHERE rowid IN (SELECT rid FROM picked)
+               ORDER BY rowid DESC LIMIT ?1) j
+         LEFT JOIN research_loops l ON substr(j.id,1,5)='loop:'
+             AND l.id=substr(j.id,6,instr(substr(j.id,6),':')-1)
+         ORDER BY j.rowid DESC",
+    )?;
+    let rows = stmt.query_map([LIST_CAP], |r| {
+        Ok(QueueJob {
+            id: r.get(0)?,
+            lane: r.get(1)?,
+            state: r.get(2)?,
+            attempts: r.get(3)?,
+            detail: r.get(4)?,
+            result: r.get(5)?,
+            usage: r
+                .get::<_, Option<String>>(6)?
+                .and_then(|raw| serde_json::from_str(&raw).ok()),
+            due: r.get(7)?,
+            model: r.get(8)?,
+            effort: r.get(9)?,
+            experiment_title: r.get(10)?,
+            experiment_active: r.get(11)?,
+            review_pending: r.get(12)?,
+            review_continues: r.get(13)?,
+        })
+    })?;
+    rows.collect()
 }
 
 #[tauri::command]
@@ -854,7 +995,146 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_checkpoint_advances_once() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        insert_loop(
+            &mut db,
+            "pilot",
+            "Public target",
+            &[
+                ResearchStep::Lane("codex".into()),
+                ResearchStep::Lane("claude".into()),
+            ],
+            1,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(decide_checkpoint(&db, "loop:pilot:1", true).is_err());
+        db.execute("UPDATE jobs SET state='done' WHERE id='loop:pilot:1'", [])
+            .unwrap();
+        decide_checkpoint(&db, "loop:pilot:1", true).unwrap();
+        assert!(decide_checkpoint(&db, "loop:pilot:1", true).is_err());
+        let next: String = db
+            .query_row("SELECT lane FROM jobs WHERE id='loop:pilot:2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(next, "claude");
+        db.execute("UPDATE jobs SET state='done' WHERE id='loop:pilot:2'", [])
+            .unwrap();
+        decide_checkpoint(&db, "loop:pilot:2", false).unwrap();
+        assert!(decide_checkpoint(&db, "loop:pilot:2", true).is_err());
+    }
+
+    fn loop_with_jobs(db: &Connection, id: &str, steps: usize) {
+        let plan = serde_json::to_string(&vec!["codex"; steps]).unwrap();
+        db.execute(
+            "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,?,?, 'active', ?)",
+            rusqlite::params![id, format!("{id} target"), plan, steps as i64, steps as i64],
+        )
+        .unwrap();
+        for step in 1..=steps {
+            db.execute(
+                "INSERT INTO jobs(id,lane,state,usage_json) VALUES (?,'codex','done','{\"input\":10,\"output\":1}')",
+                [format!("loop:{id}:{step}")],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn list_keeps_whole_experiments_beyond_the_newest_fifty_jobs() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        loop_with_jobs(&db, "old_run", 10);
+        for n in 0..80 {
+            db.execute(
+                "INSERT INTO jobs(id,lane,state) VALUES (?,'codex','done')",
+                [format!("adhoc-{n}")],
+            )
+            .unwrap();
+        }
+        let jobs = list_jobs(&db).unwrap();
+        let old: Vec<_> = jobs
+            .iter()
+            .filter(|job| job.id.starts_with("loop:old_run:"))
+            .collect();
+        assert_eq!(
+            old.len(),
+            10,
+            "every step of an active experiment must be listed"
+        );
+        assert!(old.iter().all(|job| job.usage.is_some()));
+        assert_eq!(
+            jobs.iter()
+                .filter(|job| job.id.starts_with("adhoc-"))
+                .count(),
+            50
+        );
+        // The full title is returned for the UI to wrap or shorten.
+        assert_eq!(old[0].experiment_title.as_deref(), Some("old_run target"));
+    }
+
+    #[test]
+    fn list_matches_experiment_ids_exactly() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        loop_with_jobs(&db, "a_b", 1);
+        db.execute(
+            "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES ('axb','other','[\"codex\"]',1,'done',1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO jobs(id,lane,state) VALUES ('loop:axb:1','codex','done')",
+            [],
+        )
+        .unwrap();
+        let jobs = list_jobs(&db).unwrap();
+        let axb = jobs.iter().find(|job| job.id == "loop:axb:1").unwrap();
+        assert_eq!(axb.experiment_title.as_deref(), Some("other"));
+        let ab = jobs.iter().find(|job| job.id == "loop:a_b:1").unwrap();
+        assert_eq!(ab.experiment_title.as_deref(), Some("a_b target"));
+    }
+
     use super::*;
+
+    #[test]
+    fn local_checkpoint_releases_or_stops_a_held_successor() {
+        for approved in [true, false] {
+            let mut db = Connection::open_in_memory().unwrap();
+            initialise(&mut db).unwrap();
+            insert_local_benchmark(&mut db, "pilot", "Pilot", "{}".into()).unwrap();
+            db.execute("UPDATE jobs SET state='done' WHERE id='loop:pilot:1'", [])
+                .unwrap();
+            db.execute(
+                "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES ('pilot-next','Next','[\"Local evidence\"]',1,'held',1)",
+                [],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO jobs(id,lane,detail) VALUES ('loop:pilot-next:1','Local evidence','Held until pilot is approved')",
+                [],
+            )
+            .unwrap();
+            dismiss_local_checkpoint(&db, "loop:pilot:1", approved).unwrap();
+            let (status, state): (String, String) = db
+                .query_row(
+                    "SELECT l.status, j.state FROM research_loops l JOIN jobs j ON j.id='loop:pilot-next:1' WHERE l.id='pilot-next'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            if approved {
+                assert_eq!((status.as_str(), state.as_str()), ("active", "queued"));
+            } else {
+                assert_eq!((status.as_str(), state.as_str()), ("stopped", "failed"));
+            }
+        }
+    }
 
     #[test]
     fn local_checkpoint_closes_only_a_completed_primary_job() {

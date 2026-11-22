@@ -1,8 +1,11 @@
+import { ModalDialog } from "./components/ui/ModalDialog";
+import { QuitConfirmDialog, type ActiveWork } from "./components/console/QuitConfirmDialog";
+import { researchStepLabel } from "./lib/titles";
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ResearchQueue, type ResearchJob } from "./components/ResearchQueue";
+import { ResearchQueue, ResearchSelect, type ResearchJob } from "./components/ResearchQueue";
+import { type TokenUsage } from "./components/ResearchReport";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
   AlertCircle,
@@ -18,7 +21,6 @@ import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { AboutModal } from "./components/console/AboutModal";
 import { UpdateCheckModal } from "./components/console/UpdateCheckModal";
 import { Disclosure } from "./components/ui/Disclosure";
-import { BlueprintWizardModal } from "./components/console/BlueprintWizardModal";
 import { ConsoleActivityPanel } from "./components/console/ConsoleActivityPanel";
 import { ConsoleEvidencePanel } from "./components/console/ConsoleEvidencePanel";
 import { ConsoleMaintenancePanel } from "./components/console/ConsoleMaintenancePanel";
@@ -78,6 +80,14 @@ import type {
 const SCRAPER_DISCOVERY_MARKER = "[scraper_discovery]";
 const ABOUT_MENU_EVENT = "maabarium://open-about";
 const CHECK_UPDATES_MENU_EVENT = "maabarium://open-updates";
+// The workflow wizard is large and only needed once opened; it renders
+// nothing while closed and keeps its form state in App, so loading it lazily
+// does not change behaviour.
+const BlueprintWizardModal = lazy(() =>
+  import("./components/console/BlueprintWizardModal").then((module) => ({
+    default: module.BlueprintWizardModal,
+  })),
+);
 const AreaComparisonChart = lazy(() =>
   import("./components/charts/AreaComparisonChart").then((module) => ({
     default: module.AreaComparisonChart,
@@ -142,8 +152,12 @@ function ConfirmationToggle({
   );
 }
 
+/** Honour the system's Reduce motion setting for programmatic scrolling. */
+function scrollBehavior(): ScrollBehavior {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+}
+
 export default function App() {
-  const allowWindowCloseRef = useRef(false);
   const cpuInfoPopoverRef = useRef<HTMLDivElement | null>(null);
   const promotionToastStateRef = useRef<{
     initialized: boolean;
@@ -155,9 +169,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
   const [explicitWorkflowDiff, setExplicitWorkflowDiff] = useState(false);
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
+  const [selectedResearchLoop, setSelectedResearchLoop] = useState("");
   const [branchInspection, setBranchInspection] = useState<{ key: string; inventory: ExperimentBranchInventory } | null>(null);
   const experimentJobs = researchJobs.filter(job => job.id.startsWith("loop:"));
-  const currentStep = experimentJobs.find(job => job.review_pending)
+  const researchLoopId = (job: ResearchJob) => job.id.slice(0, job.id.lastIndexOf(":"));
+  const researchLoops = new Map(experimentJobs.map(job => [researchLoopId(job), job.experiment_title ?? researchLoopId(job)]));
+  const selectedJobs = experimentJobs.filter(job => researchLoopId(job) === selectedResearchLoop);
+  const currentStep = selectedJobs.find(job => job.review_pending) ?? selectedJobs[0]
+    ?? experimentJobs.find(job => job.review_pending)
     ?? experimentJobs.find(job => job.experiment_active);
   const currentLocalBenchmark = currentStep?.id.endsWith(":review")
     ? experimentJobs.find(job => job.lane === "Local evidence" && job.id === currentStep.id.replace(/:review$/, ":1"))
@@ -376,6 +395,30 @@ export default function App() {
   const activityJobs = reportingJob ? reportingJobs : experimentJobs;
   const reportingTitle = reportingJob?.experiment_title ?? "Research experiment";
   const reportingMetrics = reportingJob ? researchEvaluatorMetrics(reportingTitle, reportingJob.result) : null;
+  const reportingUsage = reportingJobs.filter(job => job.usage && Object.values(job.usage).some(value => value != null));
+  const researchRunChart = reportingMetrics && !reportingMetrics.points.length && reportingJobs.length
+    && reportingJobs.every(job => job.lane !== "Local evidence")
+    ? {
+      title: "Research run metrics",
+      subtitle: reportingTitle,
+      points: [
+        reportingJobs.filter(job => job.state === "done").length / reportingJobs.length,
+        reportingJobs.filter(job => job.state === "done" && job.attempts === 1).length / reportingJobs.length,
+        reportingUsage.length / reportingJobs.length,
+      ],
+      labels: ["Jobs completed", "Completed on first attempt", "Jobs with token counts"],
+    } : null;
+  const tokenTotals: TokenUsage = {};
+  for (const job of reportingUsage) {
+    for (const key of Object.keys(job.usage ?? {}) as (keyof TokenUsage)[]) {
+      const value = job.usage?.[key];
+      if (value != null) tokenTotals[key] = (tokenTotals[key] ?? 0) + value;
+    }
+  }
+  const tokenSummary = ([
+    ["input", "Input"], ["output", "Output"], ["cached", "Cache reads"],
+    ["cache_write", "Cache writes"], ["reasoning", "Reasoning"],
+  ] as const).filter(([key]) => tokenTotals[key] != null);
   const reportingStatus = reportingJob?.review_pending ? "Awaiting human review"
     : reportingJob && currentLocalBenchmark && currentStep?.state !== "done"
       ? (currentStep?.state === "failed" ? "Independent review blocked" : "Awaiting independent review")
@@ -865,76 +908,21 @@ export default function App() {
     };
   }, [cpuInfoOpen]);
 
+  // The native window handler closes Maabarium when idle. When a flow or
+  // workflow group is running it holds the close and sends this event, so
+  // the console can explain what would stop and let the user decide.
+  const [closeBlockedBy, setCloseBlockedBy] = useState<ActiveWork | null>(null);
   useEffect(() => {
-    let removeCloseListener: (() => void) | undefined;
-
-    void (async () => {
-      try {
-        const currentWindow = getCurrentWindow();
-        removeCloseListener = await currentWindow.onCloseRequested(
-          async (event) => {
-            if (allowWindowCloseRef.current) {
-              return;
-            }
-
-            const flowRunning =
-              Boolean(state?.engineRunning) ||
-              runStatus === "running" ||
-              runStatus === "stopping";
-
-            if (!flowRunning) {
-              return;
-            }
-
-            event.preventDefault();
-            const confirmed = window.confirm(
-              "A flow is still running. Closing the app will stop it immediately, and reopening the app will start a new run rather than resume this one. Close anyway?",
-            );
-
-            if (!confirmed) {
-              return;
-            }
-
-            if (state?.desktopSetup) {
-              await saveDesktopSetup({
-                ...state.desktopSetup,
-                interruptedRunNotice: {
-                  blueprintName:
-                    runState?.blueprintName ??
-                    state.blueprint?.blueprint.name ??
-                    "Active workflow",
-                  workspacePath:
-                    runState?.workspacePath ??
-                    state.blueprint?.domain.repo_path ??
-                    state.desktopSetup.workspacePath ??
-                    ".",
-                  interruptedAt: new Date().toISOString(),
-                  reason:
-                    runStatus === "stopping"
-                      ? "The app was closed while the flow was already unwinding."
-                      : "The app was closed while the flow was still running.",
-                },
-              });
-            }
-
-            await stopEngine();
-            allowWindowCloseRef.current = true;
-            await currentWindow.destroy();
-          },
-        );
-      } catch {
-        // Ignore unsupported window lifecycle hooks and fall back to default close behavior.
-      }
-    })();
-
-    return () => {
-      removeCloseListener?.();
-    };
-  }, [runStatus, state?.engineRunning, stopEngine]);
+    let unlisten: (() => void) | undefined;
+    void listen<ActiveWork>("maabarium://close-blocked", (event) => setCloseBlockedBy(event.payload))
+      .then((dispose) => { unlisten = dispose; })
+      .catch(() => undefined);
+    return () => unlisten?.();
+  }, []);
 
   const scrollToSection = (sectionId: string) => {
     document.getElementById(sectionId)?.scrollIntoView({
-      behavior: "smooth",
+      behavior: scrollBehavior(),
       block: "start",
     });
   };
@@ -1169,7 +1157,7 @@ export default function App() {
   const handleScrollToTop = () => {
     window.scrollTo({
       top: 0,
-      behavior: "smooth",
+      behavior: scrollBehavior(),
     });
   };
 
@@ -1217,6 +1205,10 @@ export default function App() {
 
   return (
     <div className="maabarium-app min-h-screen font-sans" data-theme={theme}>
+      {closeBlockedBy ? (
+        <QuitConfirmDialog work={closeBlockedBy} onKeepRunning={() => setCloseBlockedBy(null)}
+          onQuit={() => invoke("confirm_quit_with_active_work")} />
+      ) : null}
       <ValidationErrorModal
         title={desktopError?.title ?? "Desktop Error"}
         heading={desktopError?.heading ?? "The desktop action failed"}
@@ -1352,7 +1344,7 @@ export default function App() {
       />
 
       {workflowWorkspacePrompt ? (
-        <div className="fixed inset-0 z-[150] overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+        <ModalDialog label="Workspace follow-up" onCancel={workflowWorkspaceApplying ? undefined : () => setWorkflowWorkspacePrompt(null)}>
           <div className="mx-auto max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl">
             <div className="border-b border-white/5 bg-white/5 px-6 py-4">
               <div className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-200">
@@ -1447,7 +1439,7 @@ export default function App() {
               </div>
             </div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
 
       <div className="workspace-shell">
@@ -1534,7 +1526,7 @@ export default function App() {
         <header className="workspace-heading">
           <div className="min-w-0">
             <p>Research workspace</p>
-            <h1>{reportingJob ? reportingTitle : activeWorkflowLabel}</h1>
+            <h1 title={reportingJob?.experiment_target ?? undefined}>{reportingJob ? reportingTitle : activeWorkflowLabel}</h1>
             <span>{reportingJob ? (reportingJob.lane === "Local evidence" ? "Research experiment · Local benchmark" : "Research experiment · Provider queue")
               : activeWorkflowMeta ?? (activeBlueprintOption ? blueprintSummary : "Open or create a workflow to get started.")}</span>
             <span role="status" className="workspace-run-status" data-run-state={reportingJob?.state === "running" ? "running" : runStatus}>
@@ -1550,7 +1542,11 @@ export default function App() {
           <div className="workspace-heading-actions">
             {reportingJob ? <button type="button" className="workspace-secondary" onClick={() => scrollToSection("console-section")}>View experiment</button>
               : activeBlueprintOption ? <button type="button" className="workspace-secondary" onClick={handleJumpToActiveWorkflow}>View workflow</button> : null}
-            <button type="button" className="workspace-primary" data-run-state={runStatus}
+            <button type="button"
+              // A research experiment is the focus here; running the separate
+              // saved workflow stays available but is not the primary action.
+              className={reportingJob && runStatus === "idle" ? "workspace-secondary" : "workspace-primary"}
+              data-run-state={runStatus}
               disabled={loading || runStatus === "stopping" || runLoopStarting}
               onClick={() => void handleRunFlowClick()}>
               {runStatus === "idle" ? <Play size={14} aria-hidden="true" /> : <Square size={14} aria-hidden="true" />}
@@ -1567,8 +1563,16 @@ export default function App() {
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <ResearchQueue onJobsChange={setResearchJobs} />
           <Disclosure id="overview-section" title={reportingJob ? "Research overview and system activity" : "Workflow history and system activity"} contentClassName="space-y-4">
+          {researchLoops.size > 1 && <label className="block text-sm font-semibold">
+            Research experiment
+            <ResearchSelect value={selectedResearchLoop} onChange={event => setSelectedResearchLoop(event.target.value)}
+              className="mt-1 block font-normal">
+              <option value="">Current experiment</option>
+              {[...researchLoops].map(([id, title]) => <option key={id} value={id}>{title}</option>)}
+            </ResearchSelect>
+          </label>}
           <p className="text-sm text-[var(--muted)]">
-            {reportingJob ? "Results below are for the current experiment. CPU load is device-wide. See all runs in the "
+            {reportingJob ? `Results below are for ${selectedResearchLoop ? "the selected" : "the current"} experiment. CPU load is device-wide. See all runs in the `
               : "The scores, tokens, and run totals below are for the selected workflow. Other experiments appear in the "}
             <button type="button" onClick={() => scrollToSection("research-queue")}
               className="font-semibold text-[var(--accent)] underline">Research queue</button>.
@@ -1579,6 +1583,25 @@ export default function App() {
             {reportingMetrics ? (
               <>
                 <GlassCard><p className="text-sm text-[var(--muted)]">Experiment status</p><p className="mt-2 text-xl font-semibold">{reportingStatus}</p></GlassCard>
+                <GlassCard>
+                  <p className="text-sm font-semibold">Reported tokens</p>
+                  {reportingUsage.length ? <div className="mt-3 space-y-3">
+                    <dl className="grid grid-cols-2 gap-2">
+                      {tokenSummary.map(([key, label]) => (
+                        <div key={key} className={`min-w-0 rounded-lg border border-[var(--line)] px-3 py-2 ${key === "input" || key === "output" ? "bg-[var(--subtle)]" : "col-span-2 flex flex-wrap items-baseline justify-between gap-x-2"}`}>
+                          <dt className="text-xs font-medium text-[var(--muted)]">{label}</dt>
+                          <dd className={`font-semibold tabular-nums text-[var(--ink)] ${key === "input" || key === "output" ? "mt-1 text-lg" : "text-sm"}`}>{tokenTotals[key]?.toLocaleString()}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <div>
+                      <p className="mb-1 text-xs text-[var(--muted)]">Token data for {reportingUsage.length} of {reportingJobs.length} jobs</p>
+                      <progress aria-label="Jobs reporting token data" className="block h-1.5 w-full accent-[var(--accent)]"
+                        value={reportingUsage.length} max={reportingJobs.length} />
+                    </div>
+                  </div> : <p className="mt-2 text-sm text-[var(--muted)]">No provider token counts were reported.</p>}
+                  <p className="mt-2 text-xs text-[var(--muted)]">Cached tokens may already be included in input. Local benchmark work does not use model tokens.</p>
+                </GlassCard>
                 {reportingMetrics.labels.map((label, i) => (
                   <GlassCard key={label}><p className="text-sm text-[var(--muted)]">{label}</p>
                     <p className="mt-2 text-3xl font-mono font-semibold">{(100 * reportingMetrics.points[i]).toFixed(1)}%</p>
@@ -1760,6 +1783,19 @@ export default function App() {
               </div>
             </GlassCard>
           </section>
+          {reportingJob && <GlassCard title="Run Analytics" icon={Activity} glow collapsible
+            collapsed={collapsedPanels.analytics} onToggleCollapsed={() => toggleCollapsedPanel("analytics")}>
+            <div className="space-y-4">
+              <p className="text-sm text-[var(--muted)]">Completed jobs and reported tokens across the selected run. Missing token counts are left blank.</p>
+              <Suspense fallback={<div className="h-72 animate-pulse rounded-lg bg-[var(--subtle)]" />}>
+                <AreaComparisonChart jobs={[...reportingJobs].reverse().map((job, index, ordered) => ({
+                  label: researchStepLabel(job.id),
+                  completed: ordered.slice(0, index + 1).filter(entry => entry.state === "done").length,
+                  tokens: job.usage?.input != null && job.usage?.output != null ? job.usage.input + job.usage.output : null,
+                }))} />
+              </Suspense>
+            </div>
+          </GlassCard>}
           {!reportingJob && <>
           <section>
             <GlassCard className="border-white/10 bg-white/[0.04]">
@@ -1967,9 +2003,7 @@ export default function App() {
           >
             <div className="flex flex-col gap-6 lg:h-full">
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
-                <MetricPanelCard metricPanel={showResearch && featuredResearch
-                  ? researchEvaluatorMetrics(featuredResearch.experiment_title ?? "Research experiment", featuredResearch.result)
-                  : metricPanel} />
+                <MetricPanelCard metricPanel={researchRunChart ?? reportingMetrics ?? metricPanel} />
                 <CouncilRosterCard
                   councilEntries={showResearch && featuredResearch ? [{
                     title: featuredResearch.lane === "Local evidence" ? "Local benchmark and independent audit" : featuredResearch.lane,
@@ -2204,31 +2238,35 @@ export default function App() {
             />
           </section>
 
-          <BlueprintWizardModal
-            open={wizardOpen}
-            isCreating={wizardCreating}
-            isEngineRunning={Boolean(state?.engineRunning)}
-            mode={wizardMode}
-            form={wizardForm}
-            metricWeightTotal={wizardMetricWeightTotal}
-            modelNames={wizardModelNames}
-            localModelOptions={wizardLocalModelOptions}
-            providerOptions={wizardProviderOptions}
-            savedWorkspacePath={state?.desktopSetup.workspacePath ?? null}
-            onInspectWorkspace={inspectWorkspaceGitStatus}
-            setForm={setWizardForm}
-            addMetric={addWizardMetric}
-            updateMetric={updateWizardMetric}
-            removeMetric={removeWizardMetric}
-            addAgent={addWizardAgent}
-            updateAgent={updateWizardAgent}
-            removeAgent={removeWizardAgent}
-            addModel={addWizardModel}
-            updateModel={updateWizardModel}
-            removeModel={removeWizardModel}
-            onClose={closeBlueprintWizard}
-            onSubmit={() => void handleCreateBlueprintFromWizard()}
-          />
+          {wizardOpen ? (
+            <Suspense fallback={null}>
+              <BlueprintWizardModal
+                open={wizardOpen}
+                isCreating={wizardCreating}
+                isEngineRunning={Boolean(state?.engineRunning)}
+                mode={wizardMode}
+                form={wizardForm}
+                metricWeightTotal={wizardMetricWeightTotal}
+                modelNames={wizardModelNames}
+                localModelOptions={wizardLocalModelOptions}
+                providerOptions={wizardProviderOptions}
+                savedWorkspacePath={state?.desktopSetup.workspacePath ?? null}
+                onInspectWorkspace={inspectWorkspaceGitStatus}
+                setForm={setWizardForm}
+                addMetric={addWizardMetric}
+                updateMetric={updateWizardMetric}
+                removeMetric={removeWizardMetric}
+                addAgent={addWizardAgent}
+                updateAgent={updateWizardAgent}
+                removeAgent={removeWizardAgent}
+                addModel={addWizardModel}
+                updateModel={updateWizardModel}
+                removeModel={removeWizardModel}
+                onClose={closeBlueprintWizard}
+                onSubmit={() => void handleCreateBlueprintFromWizard()}
+              />
+            </Suspense>
+          ) : null}
         </div>
 
         <div className="mt-8 text-[11px] text-slate-500 flex flex-wrap gap-4">

@@ -53,7 +53,7 @@ use crate::setup::{
     build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
     load_desktop_setup, pull_recommended_ollama_models as pull_recommended_ollama_models_runtime,
     save_desktop_setup as persist_desktop_setup, start_ollama as start_ollama_runtime,
-    DesktopSetupState, OllamaStatus, ReadinessItem, ResearchSearchMode,
+    DesktopSetupState, InterruptedRunNotice, OllamaStatus, ReadinessItem, ResearchSearchMode,
 };
 
 const RELEASE_DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
@@ -67,6 +67,8 @@ const CHECK_UPDATES_MENU_ID: &str = "check_for_updates_menu";
 const LICENSE_MENU_ID: &str = "open_repository_license";
 const ABOUT_MENU_EVENT: &str = "maabarium://open-about";
 const CHECK_UPDATES_MENU_EVENT: &str = "maabarium://open-updates";
+/// Emitted when a close or quit is held back because work is running.
+const CLOSE_BLOCKED_EVENT: &str = "maabarium://close-blocked";
 const CONSOLE_EXPERIMENT_LIMIT: usize = 12;
 const CONSOLE_PROPOSAL_LIMIT: usize = 5;
 const RETAINED_WINNER_LIMIT: usize = 3;
@@ -531,6 +533,20 @@ fn main() {
     tauri::Builder::default()
         .menu(build_app_menu)
         .on_menu_event(handle_menu_event)
+        .on_window_event(|window, event| {
+            // Close the main window (and exit) when idle. While a flow or a
+            // workflow group is running, hold the close and let the console
+            // ask; it never swallows the click silently.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    if let Some(work) = window.try_state::<AppState>().and_then(|s| active_work(&s))
+                    {
+                        api.prevent_close();
+                        let _ = window.emit(CLOSE_BLOCKED_EVENT, work);
+                    }
+                }
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
@@ -541,7 +557,22 @@ fn main() {
             // Runs left active by a crash or quit can never finish; close them
             // so their groups can be run or deleted again.
             reconcile_group_runs(&db_path, &group_cancels);
+            #[cfg(debug_assertions)]
+            if let Some(name) = std::env::var_os("MAABARIUM_QA_SIMULATE_ACTIVE_GROUP") {
+                // Debug builds only: pretend a workflow group is running so the
+                // close confirmation can be checked without starting real work.
+                if let Ok(mut active) = group_cancels.lock() {
+                    active.insert(
+                        name.to_string_lossy().into_owned(),
+                        CancellationToken::new(),
+                    );
+                }
+            }
             start_group_scheduler(db_path, group_cancels);
+            #[cfg(target_os = "macos")]
+            if let Err(error) = install_menu_bar_item(app.handle()) {
+                warn!(%error, "Could not create the Maabarium menu bar item");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -600,9 +631,113 @@ fn main() {
             stop_group_command,
             run_due_groups_command,
             get_telegram_config_command,
+            confirm_quit_with_active_work,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Quit (Command-Q) gets the same protection as the close button.
+            // An exit the console confirmed arrives with an explicit code.
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
+                if let Some(work) = app.try_state::<AppState>().and_then(|s| active_work(&s)) {
+                    api.prevent_exit();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.emit(CLOSE_BLOCKED_EVENT, work);
+                    }
+                }
+            }
+        });
+}
+
+#[cfg(target_os = "macos")]
+fn install_menu_bar_item(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let menu = tauri::menu::MenuBuilder::new(app)
+        .text("status_open", "Open Maabarium")
+        .separator()
+        .text("status_quit", "Quit Maabarium")
+        .build()?;
+    let mut item = tauri::tray::TrayIconBuilder::with_id("maabarium-status")
+        .menu(&menu)
+        .tooltip("Maabarium");
+    if let Some(icon) = app.default_window_icon() {
+        item = item.icon(icon.clone());
+    }
+    item.build(app)?;
+    Ok(())
+}
+
+/// Work that closing the app would interrupt.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ActiveWork {
+    flow: Option<String>,
+    groups: Vec<String>,
+}
+
+fn active_work(state: &AppState) -> Option<ActiveWork> {
+    let flow = state.engine_running.load(Ordering::SeqCst).then(|| {
+        state
+            .run_state
+            .lock()
+            .ok()
+            .and_then(|run| run.blueprint_name.clone())
+            .unwrap_or_else(|| "Active workflow".to_owned())
+    });
+    let mut groups: Vec<String> = state
+        .group_cancels
+        .lock()
+        .map(|active| active.keys().cloned().collect())
+        .unwrap_or_default();
+    groups.sort();
+    (flow.is_some() || !groups.is_empty()).then_some(ActiveWork { flow, groups })
+}
+
+/// The user chose to stop running work and quit. Record the interrupted flow
+/// so the next launch explains it, cancel everything, then exit.
+#[tauri::command]
+fn confirm_quit_with_active_work(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    if state.engine_running.load(Ordering::SeqCst) {
+        let mut setup = load_desktop_setup(&state.settings_path);
+        let run = state.run_state.lock().ok().map(|run| {
+            (
+                run.blueprint_name.clone(),
+                run.workspace_path.clone(),
+                matches!(run.status, RunStatus::Stopping),
+            )
+        });
+        let (name, workspace, stopping) = run.unwrap_or((None, None, false));
+        setup.interrupted_run_notice = Some(InterruptedRunNotice {
+            blueprint_name: name.unwrap_or_else(|| "Active workflow".to_owned()),
+            workspace_path: workspace
+                .or_else(|| setup.workspace_path.clone())
+                .unwrap_or_else(|| ".".to_owned()),
+            interrupted_at: chrono::Utc::now().to_rfc3339(),
+            reason: Some(if stopping {
+                "Maabarium was closed while the flow was already stopping.".to_owned()
+            } else {
+                "Maabarium was closed while the flow was still running.".to_owned()
+            }),
+        });
+        if let Err(error) = persist_desktop_setup(&state.settings_path, &setup) {
+            warn!(%error, "Could not record the interrupted run before quitting");
+        }
+    }
+    if let Ok(mut engine_cancel) = state.engine_cancel.lock() {
+        if let Some(cancel) = engine_cancel.take() {
+            cancel.cancel();
+        }
+    }
+    if let Ok(groups) = state.group_cancels.lock() {
+        for cancel in groups.values() {
+            cancel.cancel();
+        }
+    }
+    app.exit(0);
 }
 
 #[cfg(target_os = "macos")]
@@ -686,6 +821,23 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
 
 fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
+        #[cfg(target_os = "macos")]
+        "status_open" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        "status_quit" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.close();
+            }
+        }
         ABOUT_MENU_ID => {
             let _ = app.emit(ABOUT_MENU_EVENT, ());
         }
@@ -3936,6 +4088,35 @@ mod tests {
             engine_running: Arc::new(AtomicBool::new(false)),
             run_state: Arc::new(Mutex::new(MutableRunState::default())),
         }
+    }
+
+    #[test]
+    fn idle_app_has_no_active_work_so_close_proceeds() {
+        let state = test_app_state();
+        assert_eq!(active_work(&state), None);
+    }
+
+    #[test]
+    fn running_flow_or_group_holds_close_for_confirmation() {
+        let state = test_app_state();
+        state
+            .group_cancels
+            .lock()
+            .unwrap()
+            .insert("Nightly".to_owned(), CancellationToken::new());
+        assert_eq!(
+            active_work(&state),
+            Some(ActiveWork {
+                flow: None,
+                groups: vec!["Nightly".to_owned()]
+            })
+        );
+        state.engine_running.store(true, Ordering::SeqCst);
+        state.run_state.lock().unwrap().blueprint_name = Some("Synthetic flow".to_owned());
+        assert_eq!(
+            active_work(&state).unwrap().flow.as_deref(),
+            Some("Synthetic flow")
+        );
     }
 
     #[test]

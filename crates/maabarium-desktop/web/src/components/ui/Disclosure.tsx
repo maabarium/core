@@ -14,8 +14,10 @@ export function CollapseToggle({ title, expanded, controls, onToggle }: {
   </button>;
 }
 
-export function Disclosure({ title, children, className = "", contentClassName = "", id, mountWhenExpanded = false, defaultExpanded = false }: {
+export function Disclosure({ title, context, children, className = "", contentClassName = "", id, mountWhenExpanded = false, defaultExpanded = false }: {
   title: string;
+  /** Names what the disclosure belongs to, so repeated buttons stay distinguishable. */
+  context?: string;
   children: ReactNode;
   className?: string;
   contentClassName?: string;
@@ -28,7 +30,7 @@ export function Disclosure({ title, children, className = "", contentClassName =
   return <div id={id} className={`rounded-xl border border-[var(--line)] ${className}`}>
     <div className="flex items-center justify-between gap-3 px-3 py-2">
       <span className="text-sm font-semibold">{title}</span>
-      <CollapseToggle title={title} expanded={expanded} controls={contentId} onToggle={() => setExpanded(!expanded)} />
+      <CollapseToggle title={context ? `${title} for ${context}` : title} expanded={expanded} controls={contentId} onToggle={() => setExpanded(!expanded)} />
     </div>
     <div id={contentId} hidden={!expanded} className={`border-t border-[var(--line)] p-3 ${contentClassName}`}>
       {(!mountWhenExpanded || expanded) && children}

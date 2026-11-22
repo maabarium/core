@@ -17,6 +17,7 @@ export function MetricPanelCard({
     subtitle: string;
     points: number[];
     labels: string[];
+    gateNotes?: string[];
   };
 }) {
   return (
@@ -41,6 +42,12 @@ export function MetricPanelCard({
             </div>
           )}
         </div>
+        {!!metricPanel.gateNotes?.length && (
+          <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--subtle)] px-3 py-2 text-sm text-[var(--ink)]">
+            <p className="font-semibold">Win threshold missed</p>
+            {metricPanel.gateNotes.map(note => <p key={note} className="mt-1">{note}</p>)}
+          </div>
+        )}
         <div>
           <p className="mt-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500 text-center">
             {metricPanel.subtitle}

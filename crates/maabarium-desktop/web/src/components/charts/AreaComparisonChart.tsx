@@ -6,10 +6,13 @@ import type { AnalyticsBucket } from "../../types/console";
 
 export function AreaComparisonChart({
   buckets,
+  jobs,
 }: {
-  buckets: AnalyticsBucket[];
+  buckets?: AnalyticsBucket[];
+  jobs?: { label: string; completed: number; tokens: number | null }[];
 }) {
-  if (buckets.length === 0) {
+  const rows = jobs?.map(job => ({ label: job.label, experiments: job.completed, tokenUsage: job.tokens })) ?? buckets ?? [];
+  if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-white/10 px-4 py-10 text-center text-sm text-slate-500">
         No persisted experiment or token data is available for this time window.
@@ -18,11 +21,11 @@ export function AreaComparisonChart({
   }
 
   const data: ChartData<"line"> = {
-    labels: buckets.map((bucket) => bucket.label),
+    labels: rows.map((bucket) => bucket.label),
     datasets: [
       {
-        label: "Experiments",
-        data: buckets.map((bucket) => bucket.experiments),
+        label: jobs ? "Completed jobs (cumulative)" : "Experiments",
+        data: rows.map((bucket) => bucket.experiments),
         yAxisID: "experiments",
         borderColor: "#2dd4bf",
         backgroundColor: "rgba(45, 212, 191, 0.18)",
@@ -37,7 +40,7 @@ export function AreaComparisonChart({
       },
       {
         label: "Tokens",
-        data: buckets.map((bucket) => bucket.tokenUsage),
+        data: rows.map((bucket) => bucket.tokenUsage),
         yAxisID: "tokens",
         borderColor: "#fbbf24",
         backgroundColor: "rgba(251, 191, 36, 0.12)",
@@ -53,6 +56,10 @@ export function AreaComparisonChart({
     ],
   };
 
+  // Read the active theme so axis text keeps its contrast in light and dark.
+  const themeRoot = typeof document === "undefined" ? null : document.querySelector(".maabarium-app");
+  const muted = (themeRoot && getComputedStyle(themeRoot).getPropertyValue("--muted").trim()) || "#94a3b8";
+  const countLabel = jobs ? "Completed jobs" : "Experiments";
   const options: ChartOptions<"line"> = {
     responsive: true,
     maintainAspectRatio: false,
@@ -74,15 +81,15 @@ export function AreaComparisonChart({
         position: "top",
         align: "start",
         labels: {
-          color: "#94a3b8",
+          color: muted,
           usePointStyle: true,
           pointStyle: "circle",
           boxWidth: 8,
           boxHeight: 8,
           padding: 18,
           font: {
-            size: 10,
-            weight: 700,
+            size: 12,
+            weight: 600,
           },
         },
       },
@@ -99,16 +106,16 @@ export function AreaComparisonChart({
             return items[0]?.label ?? "";
           },
           label(context: TooltipItem<"line">) {
-            const bucket = buckets[context.dataIndex];
+            const bucket = rows[context.dataIndex];
             if (!bucket) {
               return context.dataset.label ?? "";
             }
 
             if (context.dataset.yAxisID === "experiments") {
-              return `${formatCountLabel(bucket.experiments, "experiment")}`;
+              return formatCountLabel(bucket.experiments, jobs ? "completed job" : "experiment");
             }
 
-            return `${formatTokenUsage(bucket.tokenUsage)} tokens`;
+            return bucket.tokenUsage == null ? "Tokens not reported" : `${formatTokenUsage(bucket.tokenUsage)} tokens`;
           },
         },
       },
@@ -119,10 +126,10 @@ export function AreaComparisonChart({
           display: false,
         },
         ticks: {
-          color: "#94a3b8",
+          color: muted,
           maxRotation: 0,
           minRotation: 0,
-          autoSkip: false,
+          autoSkip: true,
           padding: 10,
           font: {
             size: 10,
@@ -137,8 +144,12 @@ export function AreaComparisonChart({
         position: "left",
         beginAtZero: true,
         grace: "12%",
+        title: { display: true, text: countLabel, color: muted, font: { size: 11, weight: 600 } },
         ticks: {
-          display: false,
+          color: muted,
+          precision: 0,
+          maxTicksLimit: 6,
+          font: { size: 11 },
         },
         grid: {
           color: "rgba(148, 163, 184, 0.16)",
@@ -152,8 +163,12 @@ export function AreaComparisonChart({
         position: "right",
         beginAtZero: true,
         grace: "12%",
+        title: { display: true, text: "Tokens", color: muted, font: { size: 11, weight: 600 } },
         ticks: {
-          display: false,
+          color: muted,
+          maxTicksLimit: 6,
+          font: { size: 11 },
+          callback: (value) => formatTokenUsage(Number(value)),
         },
         grid: {
           display: false,

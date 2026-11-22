@@ -357,3 +357,38 @@ html[data-theme="dark"] body {
 /* Dark: lift small muted labels and translucent text to at least 4.5:1. */
 .maabarium-app[data-theme="dark"] :is(.text-slate-500,.text-slate-600) { color: #9fb1a9; }
 .maabarium-app[data-theme="dark"] :is([class^="text-white/"],[class*=" text-white/"]) { color: var(--muted); }
+
+/* Respect the system's Reduce motion setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Evidence selector: three equal-height cards when there is room, otherwise
+   one stacked column. The column minimum is a third of the row above the
+   threshold and the full row below it, so the cards never form a 2 + 1 grid. */
+.evidence-selector {
+  display: grid;
+  gap: 0.5rem;
+  align-items: stretch;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, max(calc((100% - 1rem) / 3), calc((36rem - 100%) * 999))), 1fr)
+  );
+}
+
+/* Each card spans three shared rows (label, summary, badge), so labels,
+   summaries and badges line up across the row even when one label wraps. */
+.evidence-card {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0.25rem;
+  justify-items: start;
+}

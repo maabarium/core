@@ -1,3 +1,4 @@
+import { shortTitle } from "../lib/titles";
 import { Disclosure } from "./ui/Disclosure";
 import { ManagedBenchmark, LocalCheckpointActions } from "./ManagedBenchmark";
 import { invoke } from "@tauri-apps/api/core";
@@ -61,6 +62,13 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
     check: "Worker option: --enable-deepseek",
   },
 };
+/** Keep the full target and give every view a readable, shortened title. */
+export function withShortTitles(jobs: ResearchJob[]): ResearchJob[] {
+  return jobs.map(job => job.experiment_title
+    ? { ...job, experiment_target: job.experiment_title, experiment_title: shortTitle(job.experiment_title) }
+    : job);
+}
+
 export type ResearchJob = {
   id: string;
   lane: string;
@@ -73,18 +81,28 @@ export type ResearchJob = {
   model?: string | null;
   effort?: string | null;
   experiment_title?: string | null;
+  /** The full public target; `experiment_title` is shortened for display. */
+  experiment_target?: string | null;
   experiment_active?: boolean | null;
   review_pending?: boolean;
+  review_continues?: boolean;
 };
 
 const ResearchOutput = lazy(() => import("./ResearchOutput"));
 
-function QueueEntry({ job, checkpoint }: { job: ResearchJob; checkpoint?: () => Promise<void> }) {
+/** How a human decides a paused experiment that has no in-app control. */
+export type ReviewGuidance = "local";
+
+function QueueEntry({ job, checkpoint, guidance }: {
+  job: ResearchJob; checkpoint?: () => Promise<void>; guidance?: ReviewGuidance;
+}) {
   const experiment = job.id.startsWith("loop:");
   const local = job.lane === "Local evidence";
   const provider = labels[job.lane as Lane] ?? job.lane;
   const retry = job.state === "queued" && job.due && job.due > Date.now() / 1000 ? job.due : null;
+  const held = local && job.state === "queued" && Boolean(job.detail?.startsWith("Held until"));
   const status = job.review_pending ? "Awaiting human review"
+    : held ? "Held for your approval"
     : retry ? "Retry scheduled"
     : ({ queued: "Waiting to run", done: "Completed", running: "Running", failed: "Failed" } as Record<string, string>)[job.state] ?? "Unknown status";
   const title = job.experiment_title ?? (local ? job.detail?.split(": waiting for the local runner")[0] ?? "Local benchmark"
@@ -92,8 +110,10 @@ function QueueEntry({ job, checkpoint }: { job: ResearchJob; checkpoint?: () => 
   const subtitle = local ? "Runs locally. No model provider or paid API is used."
     : experiment ? (job.id.endsWith(":review") ? `AI review · ${provider}` : provider) : null;
   const finding = job.result?.match(/^(?:#{1,6}\s+)?(?:\*\*)?(?:Answer|Finding|Verdict)(?:\*\*)?\s*:(?:\*\*)?\s*(.{1,240})(?:\r?\n|$)/im)?.[1];
-  const next = local && job.state === "queued" ? "The benchmark hasn’t started."
+  const next = held ? `${job.detail}. It runs only after you approve that result, and stops if you stop it.`
+    : local && job.state === "queued" ? "The benchmark hasn’t started."
     : local && job.state === "running" ? job.detail
+    : job.review_pending && guidance === "local" ? "Read this review, then approve or stop the experiment on its local benchmark card."
     : job.review_pending ? "Read the report before deciding whether to continue."
     : retry ? `${job.detail?.includes("quota") ? "Waiting for the provider’s quota to reset. " : ""}Next attempt: ${new Date(retry * 1000).toLocaleString()}`
     : job.state === "failed" ? job.detail ?? "See technical details for more information."
@@ -109,11 +129,11 @@ function QueueEntry({ job, checkpoint }: { job: ResearchJob; checkpoint?: () => 
     {finding && <div className="mt-2"><Suspense fallback={<p className="text-sm">Formatting finding…</p>}>
       <ResearchOutput text={finding} />
     </Suspense></div>}
-    {job.result && <Disclosure title="Report" className="mt-3" mountWhenExpanded>
+    {job.result && <Disclosure title="Report" context={title} className="mt-3" mountWhenExpanded>
       <Suspense fallback={<p className="text-sm">Formatting report…</p>}><ResearchOutput text={job.result} /></Suspense>
     </Disclosure>}
-    {checkpoint && <LocalCheckpointActions jobId={job.id} onChanged={checkpoint} />}
-    <Disclosure title="Technical details" className="mt-3" mountWhenExpanded>
+    {checkpoint && <LocalCheckpointActions jobId={job.id} continues={job.review_continues} onChanged={checkpoint} />}
+    <Disclosure title="Technical details" context={title} className="mt-3" mountWhenExpanded>
       <dl className="space-y-1 text-sm">
         <div><dt className="inline font-semibold">Job ID: </dt><dd className="inline break-all font-mono">{job.id}</dd></div>
         <div><dt className="inline font-semibold">Attempts: </dt><dd className="inline">{job.attempts}</dd></div>
@@ -135,7 +155,7 @@ export function ResearchRunHistory({ jobs }: { jobs: ResearchJob[] }) {
   </ul>;
 }
 
-function ResearchSelect({ className = "", children, ...props }: ComponentProps<"select">) {
+export function ResearchSelect({ className = "", children, ...props }: ComponentProps<"select">) {
   return <span className={`relative inline-flex max-w-full align-middle ${className}`}>
     <select {...props} className="h-10 w-full appearance-none rounded-md border bg-transparent pl-3 pr-9 disabled:opacity-60">
       {children}
@@ -171,7 +191,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
       if (loading || document.visibilityState === "hidden") return;
       loading = true;
       try {
-        const latest = await invoke<ResearchJob[]>("research_queue_list");
+        const latest = withShortTitles(await invoke<ResearchJob[]>("research_queue_list"));
         if (mounted) { setJobs(latest); onJobsChange(latest); }
       } catch { /* The explicit Refresh action reports errors. */ }
       finally { loading = false; }
@@ -182,7 +202,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
   }, [onJobsChange]);
 
   async function readJobs() {
-    const latest = await invoke<ResearchJob[]>("research_queue_list");
+    const latest = withShortTitles(await invoke<ResearchJob[]>("research_queue_list"));
     setJobs(latest);
     onJobsChange?.(latest);
   }
@@ -269,6 +289,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
             {Array.from({ length: Math.max(1, plan.length) }, (_, index) =>
               <option key={index} value={index + 1}>{index === 0 ? "Every step" : `Every ${index + 1} steps`}</option>)}
           </ResearchSelect>
+          <p className="text-sm text-[var(--muted)]">Choose more than one step to continue automatically between checkpoints. The final review still requires a person.</p>
           <ol className="list-decimal space-y-1 pl-5" aria-label="Experiment steps">
             {plan.map((step, index) => <li key={index} className="rounded border p-2">
               <span className="font-medium">{labels[step.lane]}</span>
@@ -370,7 +391,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
               disabled={busy || !reviewerValid || (hasPaid && !allowPaid) || !target.trim() || new TextEncoder().encode(target.trim()).length > 4096 || !plan.length}>Start experiment</button>
           </div>
         </form>
-        {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Use the command-line tool to review the result and continue.</p>}
+        {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Review, continue, or stop in the queue below.</p>}
       </Disclosure>
       <EvidenceCheck experimentId={loopId} />
       <ManagedBenchmark onQueued={readJobs} />
@@ -388,9 +409,12 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
               ? jobs.find(candidate => candidate.id === job.id.replace(/:1$/, ":review"))
               : undefined;
             const reviewPending = job.review_pending || Boolean(reviewer?.review_pending);
-            const actionable = job.lane === "Local evidence" && reviewPending;
+            const localReview = job.id.endsWith(":review") && jobs.some(candidate =>
+              candidate.id === job.id.replace(/:review$/, ":1") && candidate.lane === "Local evidence");
+            const actionable = reviewPending && !localReview;
             return <QueueEntry key={job.id} job={reviewPending ? { ...job, review_pending: true } : job}
-              checkpoint={actionable ? readJobs : undefined} />;
+              checkpoint={actionable ? readJobs : undefined}
+              guidance={reviewPending && localReview ? "local" : undefined} />;
           })}
         </ul>
       </div>)}

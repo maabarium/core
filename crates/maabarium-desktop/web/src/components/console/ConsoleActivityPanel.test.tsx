@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { PersistedProposal } from "../../types/console";
@@ -188,5 +188,24 @@ describe("ConsoleActivityPanel", () => {
 
     screen.getByText(/Selected Retained Winner #5/i);
     screen.getByText(/Earlier retained winner/i);
+  });
+
+  it("exposes History, Diff View and Logs as keyboard-operable tabs", () => {
+    const onChangeTab = vi.fn();
+    render(<ConsoleActivityPanel activeTab="history" history={[]} latestProposal={null}
+      winnerProposal={null} selectedWinnerProposal={null} logs={[]} logPath="test.log"
+      onChangeTab={onChangeTab} onOpenLogFile={() => undefined} />);
+    expect(screen.getByRole("tablist", { name: "Console activity" })).toBeTruthy();
+    const history = screen.getByRole("tab", { name: "History" });
+    expect(history.getAttribute("aria-selected")).toBe("true");
+    expect(history.tabIndex).toBe(0);
+    expect(screen.getByRole("tab", { name: "Logs" }).tabIndex).toBe(-1);
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("console-tab-history");
+    fireEvent.keyDown(history, { key: "ArrowRight" });
+    expect(onChangeTab).toHaveBeenLastCalledWith("diff");
+    fireEvent.keyDown(history, { key: "ArrowLeft" });
+    expect(onChangeTab).toHaveBeenLastCalledWith("logs");
+    fireEvent.keyDown(history, { key: "End" });
+    expect(onChangeTab).toHaveBeenLastCalledWith("logs");
   });
 });

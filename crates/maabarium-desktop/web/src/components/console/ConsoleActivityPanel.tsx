@@ -1,3 +1,4 @@
+import { researchStepLabel } from "../../lib/titles";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Activity, History, Terminal } from "lucide-react";
 import { buildPatchPreview } from "../../lib/analytics";
@@ -22,6 +23,12 @@ const historyBadge: Record<
   unknown: { color: "blue", label: "Legacy" },
   failed: { color: "rose", label: "Failed" },
 };
+
+const ACTIVITY_TABS = [
+  { id: "history" as const, label: "History", icon: History },
+  { id: "diff" as const, label: "Diff View", icon: Terminal },
+  { id: "logs" as const, label: "Logs", icon: Activity },
+];
 
 export function ConsoleActivityPanel({
   activeTab,
@@ -140,16 +147,28 @@ export function ConsoleActivityPanel({
 
   return (
     <div id="console-activity" className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
-      <div className="flex overflow-x-auto border-b border-slate-800">
-        {[
-          { id: "history" as const, label: "History", icon: History },
-          { id: "diff" as const, label: "Diff View", icon: Terminal },
-          { id: "logs" as const, label: "Logs", icon: Activity },
-        ].map(({ id, label, icon: Icon }) => (
+      <div className="flex overflow-x-auto border-b border-slate-800" role="tablist" aria-label="Console activity">
+        {ACTIVITY_TABS.map(({ id, label, icon: Icon }, index) => (
           <button
             key={id}
+            id={`console-tab-${id}`}
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls="console-activity-content"
+            tabIndex={activeTab === id ? 0 : -1}
             onClick={() => onChangeTab(id)}
-            aria-pressed={activeTab === id}
+            onKeyDown={(event) => {
+              // Arrow keys, Home and End move between tabs (WAI-ARIA tabs pattern).
+              const last = ACTIVITY_TABS.length - 1;
+              const target = event.key === "ArrowRight" ? (index === last ? 0 : index + 1)
+                : event.key === "ArrowLeft" ? (index === 0 ? last : index - 1)
+                : event.key === "Home" ? 0 : event.key === "End" ? last : null;
+              if (target === null) return;
+              event.preventDefault();
+              const next = ACTIVITY_TABS[target].id;
+              onChangeTab(next);
+              document.getElementById(`console-tab-${next}`)?.focus();
+            }}
             className={`flex shrink-0 items-center gap-2 px-3 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all sm:px-6 ${activeTab === id ? "text-teal-300 bg-white/5 border-b border-amber-400" : "text-slate-500 hover:text-slate-300"}`}
             type="button"
           >
@@ -158,7 +177,8 @@ export function ConsoleActivityPanel({
           </button>
         ))}
       </div>
-      <div className="p-4" data-testid="console-activity-content">
+      <div className="p-4" id="console-activity-content" data-testid="console-activity-content"
+        role="tabpanel" aria-labelledby={`console-tab-${activeTab}`} tabIndex={0}>
         {activeTab === "history" ? (
           <div className="space-y-5">
           {researchJobs.length > 0 && <section aria-label="Research history">
@@ -336,8 +356,20 @@ export function ConsoleActivityPanel({
           <div className="space-y-2">
             <h3 className="font-semibold">{reportingJob.experiment_title ?? "Current experiment"}</h3>
             <p className="text-sm text-[var(--muted)]">Only activity recorded for this research run is shown here.</p>
-            {researchJobs.map(job => job.detail && <p key={job.id} className="break-words text-sm">{job.detail}</p>)}
-            {!researchJobs.some(job => job.detail) && <p className="text-sm">No research log details were recorded.</p>}
+            {researchJobs.length ? <ol className="divide-y divide-[var(--line)]">
+              {[...researchJobs].reverse().map((job) => {
+                const step = job.id.endsWith(":review") ? "AI review"
+                  : job.lane === "Local evidence" ? "Local benchmark and audit" : researchStepLabel(job.id);
+                const status = ({ done: "Completed", failed: "Failed", running: "Running", queued: "Waiting to run" } as Record<string, string>)[job.state] ?? job.state;
+                const provider = job.lane === "codex" ? "Codex" : job.lane;
+                return <li key={job.id} className="py-2 text-sm">
+                  <p className="font-semibold">{step} · {status}</p>
+                  <p className="text-[var(--muted)]">{provider} · {job.attempts} {job.attempts === 1 ? "attempt" : "attempts"}</p>
+                  {job.detail && (job.state !== "done" || job.lane === "Local evidence") &&
+                    <p className="break-words text-sm">{job.detail}</p>}
+                </li>;
+              })}
+            </ol> : <p className="text-sm">No research activity was recorded.</p>}
           </div>
         ) : (
           <div className="space-y-4">

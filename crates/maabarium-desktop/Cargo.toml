@@ -35,3 +35,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }

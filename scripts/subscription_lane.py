@@ -39,8 +39,34 @@ try:
 except subprocess.TimeoutExpired:
     os.killpg(os.getpgrp(), signal.SIGKILL)
 """
-LOCAL_GUARD = "import resource\nresource.setrlimit(resource.RLIMIT_FSIZE,(1048576,1048576))\n" + GUARD
+# Limits for trusted local benchmark programs: output files up to 1 MiB, CPU
+# time bounded by the wall-clock limit, and (where the OS enforces it) 2 GiB
+# of data memory. They are inherited by the program the guard starts.
+LOCAL_GUARD = """import resource, sys
+resource.setrlimit(resource.RLIMIT_FSIZE, (1048576, 1048576))
+cpu = int(sys.argv[1]) + 5
+resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+try:
+    resource.setrlimit(resource.RLIMIT_DATA, (2 << 30, 2 << 30))
+except (ValueError, OSError):
+    pass
+""" + GUARD
 LOCAL_LANE = "Local evidence"
+HELD_PREFIX = "Held until"
+
+
+def release_successor(db, loop_id, approved):
+    """Start or stop the held adaptive successor of a reviewed experiment."""
+    successor = loop_id + "-next"
+    if approved:
+        if db.execute("UPDATE research_loops SET status='active' WHERE id=? AND status='held'",
+                      (successor,)).rowcount:
+            db.execute("UPDATE jobs SET detail='Approved; waiting for the managed benchmark worker' WHERE id=?",
+                       (f"loop:{successor}:1",))
+    elif db.execute("UPDATE research_loops SET status='stopped' WHERE id=? AND status='held'",
+                    (successor,)).rowcount:
+        db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail='loop stopped' "
+                   "WHERE id=? AND state='queued'", (f"loop:{successor}:1",))
 
 
 def file_hash(path):
@@ -59,6 +85,27 @@ def frozen_executable(path, digest):
             or not os.access(path, os.X_OK) or file_hash(path) != digest):
         raise ValueError("trusted executable identity does not match")
     return str(path)
+
+
+def adaptive_branches(manifest):
+    if not isinstance(manifest, dict) or set(manifest) != {"pass", "fail"}:
+        raise ValueError("provide exactly one approved successor for pass and fail")
+    branches = {}
+    for outcome, branch in manifest.items():
+        if not isinstance(branch, dict) or set(branch) != {
+            "title", "runner", "runner_sha256", "auditor", "auditor_sha256",
+        }:
+            raise ValueError("invalid successor specification")
+        if not isinstance(branch["title"], str) or not 0 < len(branch["title"].strip().encode()) <= 256:
+            raise ValueError("provide a short successor title")
+        runner = frozen_executable(Path(branch["runner"]), branch["runner_sha256"])
+        auditor = frozen_executable(Path(branch["auditor"]), branch["auditor_sha256"])
+        if runner == auditor or branch["runner_sha256"] == branch["auditor_sha256"]:
+            raise ValueError("use distinct successor runner and auditor")
+        branches[outcome] = {**branch, "runner": runner, "auditor": auditor}
+    if branches["pass"]["runner_sha256"] == branches["fail"]["runner_sha256"]:
+        raise ValueError("pass and fail must select different successors")
+    return branches
 
 
 def process_local_benchmark(db, lock_fd, state):
@@ -147,6 +194,26 @@ def process_local_benchmark(db, lock_fd, state):
                    ("Local check complete; waiting for AI evaluation" if reviewer_lane
                     else "Local check complete; waiting for human review",
                     f"Finding: **Local gate {report['outcome']}**\n\n" + report["report"].strip(), job))
+        if "adaptive" in spec:
+            branch = spec["adaptive"][report["outcome"]].copy()
+            successor = loop_id + "-next"
+            title = branch.pop("title")
+            successor_spec = {**branch, "reviewer": reviewer_lane,
+                              "public_brief": spec["public_brief"], "timeout": spec["timeout"]}
+            # The pre-approved successor is selected now but held: it runs only
+            # after a human approves this result, and is stopped with it.
+            db.execute(
+                "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,'[\"Local evidence\"]',1,'held',1)",
+                (successor, title),
+            )
+            db.execute("INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)",
+                       (successor, json.dumps(successor_spec)))
+            db.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,?,?)",
+                       (f"loop:{successor}:1", LOCAL_LANE, f"{HELD_PREFIX} {loop_id} is approved"))
+            db.execute("UPDATE jobs SET detail=? WHERE id=?",
+                       (f"Local gate {report['outcome']}; successor {successor} waits for your approval", job))
+            db.commit()
+            return True
         if reviewer_lane is None:
             db.commit()
             return True
@@ -161,7 +228,7 @@ def process_local_benchmark(db, lock_fd, state):
             "or stopping. Do not override the local gate. This is advice for a human checkpoint.\n" + brief,
         ))
         db.commit()
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.IntegrityError):
         if db.in_transaction:
             db.rollback()
         db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail=? WHERE id=?",
@@ -193,6 +260,7 @@ def advance_completed_loops(db):
         JOIN jobs j ON j.id = 'loop:' || l.id || ':' || l.step
         WHERE l.status='active' AND l.review_every > 1
           AND l.step % l.review_every != 0 AND j.state='done'
+          AND COALESCE(j.detail,'') <> 'manual result; billing unverified'
           AND l.step < json_array_length(l.plan)
         ORDER BY l.rowid LIMIT 20
     """).fetchall()
@@ -628,6 +696,7 @@ def main():
     parser.add_argument("--runner-sha256")
     parser.add_argument("--auditor", type=Path)
     parser.add_argument("--auditor-sha256")
+    parser.add_argument("--adaptive-branches", type=Path, help="Local JSON with pinned pass/fail successors")
     parser.add_argument("--reviewer", choices=("codex", "claude", "antigravity"))
     parser.add_argument("--benchmark-timeout", type=int, default=60)
     parser.add_argument("--lane", choices=LANES, default="codex")
@@ -746,6 +815,20 @@ def main():
                         spec = dict(runner=runner, runner_sha256=args.runner_sha256,
                                     auditor=auditor, auditor_sha256=args.auditor_sha256,
                                     reviewer=args.reviewer, public_brief=public, timeout=args.benchmark_timeout)
+                        if args.adaptive_branches:
+                            if len(args.id) > 59:
+                                parser.error("adaptive experiment ID must leave room for -next")
+                            try:
+                                with args.adaptive_branches.open("rb") as manifest:
+                                    content = manifest.read(16385)
+                                if len(content) > 16384:
+                                    raise ValueError("successor manifest is too large")
+                                spec["adaptive"] = adaptive_branches(json.loads(content))
+                                if any(branch["runner_sha256"] == args.runner_sha256
+                                       for branch in spec["adaptive"].values()):
+                                    raise ValueError("successors may not reuse the initial runner")
+                            except (OSError, ValueError, TypeError) as error:
+                                parser.error(str(error))
                         db.execute("INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)", (args.id, json.dumps(spec)))
                     db.execute(
                         "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,?,1,'active',1)",
@@ -840,6 +923,7 @@ def main():
                 if args.decision == "stop" or step == len(lanes):
                     db.execute("UPDATE research_loops SET status=? WHERE id=?",
                                ("stopped" if args.decision == "stop" else "done", args.id))
+                    release_successor(db, args.id, args.decision == "accept")
                     if args.decision == "stop":
                         db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail='loop stopped' WHERE id=? AND state IN ('queued','running')",
                                    (f"loop:{args.id}:{step}",))
@@ -878,6 +962,7 @@ def main():
                                WHEN j.state='done' AND r.state IN ('queued','running') THEN 'awaiting_independent_review'
                                WHEN j.state = 'done' AND (
                                    l.step % l.review_every = 0 OR l.step = json_array_length(l.plan)
+                                   OR j.detail='manual result; billing unverified'
                                ) THEN 'awaiting_review'
                                WHEN j.state = 'done' THEN 'ready_to_advance'
                                ELSE 'awaiting_job'

@@ -149,6 +149,29 @@ describe("ConsoleEvidencePanel", () => {
     expect(window.localStorage.getItem("maabarium.console.evidenceTab")).toBe("retained");
   });
 
+  it("keeps selector cards aligned with a two-line research summary and the full title in the detail panel", () => {
+    const fullTitle = "Public synthetic research: exact subset-existence under edits. Given four sets of bit masks, a query is true iff each set contains a row that is a subset of the query mask, and edits arrive in bursts.";
+    const job = { id: "loop:long:3", lane: "codex", state: "done", attempts: 1, detail: null,
+      result: "Finding: ok", experiment_title: `${fullTitle.slice(0, 96)}…`, experiment_target: fullTitle,
+      review_pending: true };
+    render(<ConsoleEvidencePanel winnerHistory={[]} selectedExperimentId={null} onSelectExperimentId={vi.fn()}
+      onExportFiles={vi.fn()} latestResearchExperiment={null} latestLoraExperiment={null} currentResearchJob={job} />);
+
+    const summary = screen.getByTestId("evidence-summary-research");
+    expect(summary.className).toContain("line-clamp-2");
+    expect(summary.className).toContain("min-h-[2lh]");
+    expect(summary.getAttribute("title")).toBe(fullTitle);
+    for (const tab of ["retained", "lora"]) {
+      expect(screen.getByTestId(`evidence-summary-${tab}`).className).toContain("line-clamp-2");
+    }
+    const cards = screen.getAllByRole("button", { pressed: false }).concat(screen.getAllByRole("button", { pressed: true }))
+      .filter(button => button.closest(".evidence-selector"));
+    expect(cards).toHaveLength(3);
+    expect(cards.every(card => card.className.includes("evidence-card"))).toBe(true);
+    expect(screen.getByText("Awaiting review").parentElement?.className).toContain("shrink-0");
+    expect(screen.getByTestId("evidence-panel-research").textContent).toContain(fullTitle);
+  });
+
   it("defaults to the retained tab when a retained winner exists", () => {
     const winnerHistory: RetainedWinnerEntry[] = [
       {
