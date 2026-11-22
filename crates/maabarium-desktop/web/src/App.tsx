@@ -1409,8 +1409,9 @@ export default function App() {
         </div>
       ) : null}
 
-      <nav aria-label="Research workspace" className="sticky top-0 left-0 right-0 z-[100] border-b border-white/10 bg-[#10151e]/95 py-3 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-8">
+      <div className="workspace-shell">
+      <nav aria-label="Research workspace" className="workspace-rail">
+        <div className="workspace-rail-content">
           <div className="flex items-center gap-3 cursor-default group">
             <img
               src={appLogo}
@@ -1422,12 +1423,12 @@ export default function App() {
                 Maabarium
               </span>
               <span className="text-xs text-slate-400">
-                Research workspace
+              Research console
               </span>
             </div>
           </div>
 
-          <div className="console-navigation flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
+          <div className="console-navigation" aria-label="Workspace sections">
             <button
               onClick={handleScrollToTop}
               className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
@@ -1465,25 +1466,10 @@ export default function App() {
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleJumpToActiveWorkflow}
-            className="order-4 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left shadow-[0_0_24px_rgba(8,15,27,0.25)] transition hover:border-teal-300/30 hover:bg-white/[0.07] md:order-3 md:w-auto md:min-w-[14rem] md:max-w-[18rem]"
-          >
-            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-teal-200">
-              Active Workflow
-            </div>
-            <div className="mt-0.5 truncate text-sm font-black tracking-[0.02em] text-white">
-              {activeWorkflowLabel}
-            </div>
-            <div className="mt-0.5 truncate text-[10px] text-slate-400">
-              {activeWorkflowMeta ?? blueprintSummary}
-            </div>
-          </button>
-
-          <div className="order-3 flex shrink-0 items-center justify-end gap-2 md:order-4">
+          <div className="workspace-actions">
             <button
               onClick={() => void handleRunFlowClick()}
+              data-run-state={runStatus}
               className={`relative overflow-hidden rounded-lg px-4 py-2 transition-all duration-300 group flex items-center justify-center gap-2 font-black uppercase tracking-[0.16em] border text-xs whitespace-nowrap ${runStatus === "idle" ? "bg-gradient-to-r from-teal-500 to-amber-400 border-teal-300/20 text-slate-950 shadow-[0_0_30px_rgba(45,212,191,0.18)]" : "bg-slate-900 border-rose-500/50 text-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.2)]"}`}
               type="button"
               disabled={loading || runStatus === "stopping" || runLoopStarting}
@@ -1521,7 +1507,15 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-8 pt-10 pb-12">
+      <main className="workspace-main">
+        <header className="workspace-heading">
+          <p>Research workspace / Active workflow</p>
+          <h1>{activeWorkflowLabel}</h1>
+          <span>{activeWorkflowMeta ?? blueprintSummary}</span>
+          <button type="button" onClick={handleJumpToActiveWorkflow}>
+            View workflow
+          </button>
+        </header>
         {actionError ? (
           <div className="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
             {actionError}
@@ -1529,9 +1523,10 @@ export default function App() {
         ) : null}
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+          <details id="overview-section" className="workspace-metrics">
+            <summary>Run metrics and hardware telemetry</summary>
           <section
-            id="overview-section"
-            className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5"
+            className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
             {[
               {
@@ -1708,6 +1703,7 @@ export default function App() {
               </div>
             </GlassCard>
           </section>
+          </details>
 
           <section>
             <GlassCard className="border-white/10 bg-white/[0.04]">
@@ -2137,6 +2133,7 @@ export default function App() {
           <span>Logs: {state?.logPath ?? "loading"}</span>
         </div>
       </main>
+      </div>
 
       {showScrollToTop ? (
         <button
