@@ -3030,8 +3030,14 @@ where
 }
 
 #[tauri::command]
-fn get_console_state(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
-    Ok(build_console_state(&state))
+async fn get_console_state(app: tauri::AppHandle) -> Result<ConsoleState, String> {
+    // Readiness probes can wait for Keychain interaction. Keep the UI responsive.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        build_console_state(&state)
+    })
+    .await
+    .map_err(|error| format!("Could not load console state: {error}"))
 }
 
 #[tauri::command]
