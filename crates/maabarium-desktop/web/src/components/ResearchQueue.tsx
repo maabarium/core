@@ -52,6 +52,19 @@ export function ResearchQueue() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [checks, setChecks] = useState<Partial<Record<Lane, string>>>({});
+  async function checkSubscription() {
+    setChecking(true);
+    try {
+      const result = await invoke<string>("research_subscription_check", { lane });
+      setChecks((previous) => ({ ...previous, [lane]: result }));
+    } catch (error) {
+      setChecks((previous) => ({ ...previous, [lane]: String(error) }));
+    } finally {
+      setChecking(false);
+    }
+  }
   async function update(enqueue: boolean) {
     setBusy(true);
     setMessage("");
@@ -87,6 +100,11 @@ export function ResearchQueue() {
           {setup[lane].steps.map((step) => <li key={step}>{step}</li>)}
         </ol>
         <code className="break-all text-sm">{setup[lane].check}</code>
+        <div className="mt-3">
+          <button type="button" disabled={checking} className="rounded border px-3 py-2"
+            onClick={() => void checkSubscription()}>{checking ? "Checking…" : "Check setup"}</button>
+        </div>
+        <p role="status" className="mt-2 text-sm">{checks[lane]}</p>
       </details>
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
       {jobs.length > 0 && (

@@ -24,16 +24,34 @@ PROMPT = (
 )
 MAX_ATTEMPTS = 4
 LANES = ("codex", "claude", "antigravity", "muse")
+GUARD = """import os, signal, subprocess, sys
+try:
+    child = subprocess.Popen(sys.argv[2:])
+    sys.exit(child.wait(timeout=int(sys.argv[1])))
+except subprocess.TimeoutExpired:
+    os.killpg(os.getpgrp(), signal.SIGKILL)
+"""
+
+
+def queue_loop_step(db, loop_id, step, lanes, target):
+    lane = lanes[step - 1]
+    db.execute(
+        "INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
+        (f"loop:{loop_id}:{step}", lane, None if lane == "codex" else "awaiting manual handoff",
+         f"Public synthetic experiment, step {step} of {len(lanes)}. "
+         "Do not use tools or read local files. Work on this public target and report a bounded result: "
+         + target),
+    )
 
 
 def worker(db, codex, lock_fd):
     job = db.execute(
-        "SELECT id,attempts FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane='codex' ORDER BY due,id LIMIT 1",
+        "SELECT id,attempts,prompt FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane='codex' ORDER BY due,id LIMIT 1",
         (int(time.time()),),
     ).fetchone()
     if not job:
         return
-    job_id, attempts = job
+    job_id, attempts, prompt = job
     if attempts >= MAX_ATTEMPTS:
         db.execute("UPDATE jobs SET state='failed', detail='attempt limit' WHERE id=?", (job_id,))
         return
@@ -60,10 +78,13 @@ def worker(db, codex, lock_fd):
                "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", str(output), "-"]
         process = None
         try:
-            process = subprocess.Popen(cmd, cwd=scratch, env=env, stdin=subprocess.PIPE,
+            # The guardian, not the vendor process, holds the lock and enforces
+            # the deadline even if the queue worker is killed.
+            process = subprocess.Popen([sys.executable, "-I", "-c", GUARD, "120", *cmd],
+                                       cwd=scratch, env=env, stdin=subprocess.PIPE,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                        text=True, start_new_session=True, pass_fds=(lock_fd,))
-            process.communicate(PROMPT, timeout=120)
+            process.communicate(prompt or PROMPT, timeout=125)
             if process.returncode or not output.is_file() or output.stat().st_size > 16384:
                 raise ValueError("no bounded reply")
             result = output.read_text(encoding="utf-8").strip()
@@ -88,9 +109,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, default=Path.home() / ".maabarium" / "subscription-lane")
     parser.add_argument("--codex", default="codex", help="trusted local Codex CLI")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status"])
     parser.add_argument("--lane", choices=LANES, default="codex")
     parser.add_argument("--result-file", type=Path)
+    parser.add_argument("--public-target", help="Public synthetic target; sent to the selected providers")
+    parser.add_argument("--plan", nargs="+", choices=LANES, help="Ordered provider lanes (1–20)")
+    parser.add_argument("--step", type=int, help="Exact completed step being reviewed")
+    parser.add_argument("--decision", choices=("accept", "stop"))
     parser.add_argument("--id", default="directed-teaching-v1")
     parser.add_argument("--label", default="org.maabarium.subscription-lane")
     args = parser.parse_args()
@@ -115,10 +140,12 @@ def main():
         sys.stdout.buffer.write(plistlib.dumps(job))
         return
     with (state / "worker.lock").open("a") as lock:
-        if args.action == "tick":
+        if args.action in ("tick", "loop-review"):
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                if args.action == "loop-review":
+                    parser.error("the worker is active; try reviewing again after this attempt")
                 return
         with sqlite3.connect(state / "queue.db", isolation_level=None) as db:
             db.execute("BEGIN IMMEDIATE")
@@ -126,21 +153,29 @@ def main():
                 id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'queued',
                 attempts INTEGER NOT NULL DEFAULT 0, due INTEGER NOT NULL DEFAULT 0,
                 detail TEXT, result TEXT, lane TEXT NOT NULL DEFAULT 'codex')""")
-            if "lane" not in {row[1] for row in db.execute("PRAGMA table_info(jobs)")}:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+            if "lane" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'codex'")
+            if "prompt" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN prompt TEXT")
+            db.execute("""CREATE TABLE IF NOT EXISTS research_loops (
+                id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
+                step INTEGER NOT NULL, status TEXT NOT NULL)""")
             db.commit()
             if args.action == "enqueue":
+                if args.id.startswith("loop:"):
+                    parser.error("job IDs starting with loop: are reserved")
                 detail = None if args.lane == "codex" else "awaiting manual handoff"
                 db.execute("INSERT OR IGNORE INTO jobs(id,lane,detail) VALUES (?,?,?)",
                            (args.id, args.lane, detail))
                 if db.execute("SELECT lane FROM jobs WHERE id=?", (args.id,)).fetchone()[0] != args.lane:
                     parser.error("job ID already belongs to another lane")
             elif args.action in ("export-task", "import-result"):
-                row = db.execute("SELECT lane,state FROM jobs WHERE id=?", (args.id,)).fetchone()
+                row = db.execute("SELECT lane,state,prompt FROM jobs WHERE id=?", (args.id,)).fetchone()
                 if not row or row[0] == "codex" or row[1] != "queued":
                     parser.error("expected a queued external-lane job")
                 if args.action == "export-task":
-                    print(json.dumps({"id": args.id, "lane": row[0], "prompt": PROMPT}))
+                    print(json.dumps({"id": args.id, "lane": row[0], "prompt": row[2] or PROMPT}))
                 else:
                     if not args.result_file or not args.result_file.is_file():
                         parser.error("a regular --result-file is required")
@@ -158,11 +193,54 @@ def main():
                     ).rowcount
                     if written != 1:
                         parser.error("job already completed")
+            elif args.action == "loop-start":
+                target = (args.public_target or "").strip()
+                if not target or len(target.encode()) > 4096 or not args.plan or len(args.plan) > 20:
+                    parser.error("provide a public target up to 4096 bytes and 1–20 provider steps")
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    db.execute("INSERT INTO research_loops VALUES (?,?,?,1,'active')",
+                               (args.id, target, json.dumps(args.plan)))
+                    queue_loop_step(db, args.id, 1, args.plan, target)
+                except sqlite3.IntegrityError:
+                    parser.error("loop ID already exists")
+                db.commit()
+            elif args.action == "loop-review":
+                if not args.step or not args.decision:
+                    parser.error("provide --step and --decision")
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT target,plan,step,status FROM research_loops WHERE id=?",
+                                 (args.id,)).fetchone()
+                if not row or row[2:] != (args.step, "active"):
+                    parser.error("no active loop at that step; refresh status")
+                target, plan, step, _ = row
+                lanes = json.loads(plan)
+                if args.decision == "accept":
+                    done = db.execute("SELECT state FROM jobs WHERE id=?",
+                                      (f"loop:{args.id}:{step}",)).fetchone()
+                    if done != ("done",):
+                        parser.error("only a completed step can be accepted")
+                if args.decision == "stop" or step == len(lanes):
+                    db.execute("UPDATE research_loops SET status=? WHERE id=?",
+                               ("stopped" if args.decision == "stop" else "done", args.id))
+                    if args.decision == "stop":
+                        db.execute("UPDATE jobs SET state='failed',detail='loop stopped' WHERE id=? AND state IN ('queued','running')",
+                                   (f"loop:{args.id}:{step}",))
+                else:
+                    queue_loop_step(db, args.id, step + 1, lanes, target)
+                    db.execute("UPDATE research_loops SET step=step+1 WHERE id=?", (args.id,))
+                db.commit()
             elif args.action == "tick":
                 codex = shutil.which(args.codex)
                 if not codex:
                     parser.error("Codex CLI not found")
                 worker(db, os.path.abspath(codex), lock.fileno())
+            elif args.action == "loop-status":
+                db.row_factory = sqlite3.Row
+                row = db.execute("SELECT * FROM research_loops WHERE id=?", (args.id,)).fetchone()
+                if not row:
+                    parser.error("loop not found")
+                print(json.dumps(dict(row)))
             else:
                 db.row_factory = sqlite3.Row
                 print(json.dumps([dict(row) for row in db.execute("SELECT * FROM jobs ORDER BY id")]))

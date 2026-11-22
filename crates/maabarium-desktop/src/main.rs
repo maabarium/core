@@ -538,6 +538,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             research_queue::research_queue_list,
             research_queue::research_queue_enqueue,
+            research_queue::research_subscription_check,
             get_console_state,
             save_desktop_setup,
             set_provider_api_key,

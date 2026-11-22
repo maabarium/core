@@ -1,10 +1,12 @@
 import json
+import fcntl
 import os
 from pathlib import Path
 import signal
 import sqlite3
 import subprocess
 import sys
+import runpy
 import tempfile
 import time
 import unittest
@@ -14,6 +16,50 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_guardian_releases_lock_when_provider_hangs(self):
+        guard = runpy.run_path(str(SCRIPT))["GUARD"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "worker.lock"
+            with path.open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                guardian = subprocess.Popen(
+                    [sys.executable, "-I", "-c", guard, "1", sys.executable, "-c", "import time; time.sleep(30)"],
+                    pass_fds=(lock.fileno(),), start_new_session=True,
+                )
+            with guardian, path.open("a") as next_worker:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(next_worker, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(guardian.wait(timeout=4), -signal.SIGKILL)
+                fcntl.flock(next_worker, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_loop_review_is_durable_and_cannot_skip_a_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            command = [sys.executable, str(SCRIPT), "--state", tmp]
+
+            def run(*args, check=True):
+                return subprocess.run([*command, *args], check=check, capture_output=True, text=True, timeout=5)
+
+            run("loop-start", "--id", "sample", "--public-target", "Compare two public rules",
+                "--plan", "muse", "antigravity", "claude", "codex")
+            self.assertNotEqual(run("loop-review", "--id", "sample", "--step", "1",
+                                    "--decision", "accept", check=False).returncode, 0)
+            answer = Path(tmp) / "answer"
+            answer.write_text("Synthetic answer")
+            for step, lane in enumerate(("muse", "antigravity", "claude"), 1):
+                task = f"loop:sample:{step}"
+                payload = json.loads(run("export-task", "--id", task).stdout)
+                self.assertEqual(payload["lane"], lane)
+                self.assertIn("Compare two public rules", payload["prompt"])
+                run("import-result", "--id", task, "--result-file", str(answer))
+                run("loop-review", "--id", "sample", "--step", str(step), "--decision", "accept")
+                self.assertNotEqual(run("loop-review", "--id", "sample", "--step", str(step),
+                                        "--decision", "accept", check=False).returncode, 0)
+            run("loop-review", "--id", "sample", "--step", "4", "--decision", "stop")
+            self.assertEqual(json.loads(run("loop-status", "--id", "sample").stdout)["status"], "stopped")
+            jobs = json.loads(run("status").stdout)
+            self.assertEqual([(job["lane"], job["state"]) for job in jobs],
+                             [("muse", "done"), ("antigravity", "done"), ("claude", "done"), ("codex", "failed")])
+
     def test_migrates_and_keeps_external_jobs_out_of_the_worker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

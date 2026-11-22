@@ -3,6 +3,70 @@ use serde::Serialize;
 #[cfg(target_os = "macos")]
 use std::path::Path;
 
+#[tauri::command]
+pub(crate) async fn research_subscription_check(lane: String) -> Result<String, String> {
+    let cli = match lane.as_str() {
+        "codex" => "codex",
+        "claude" => "claude",
+        "antigravity" => "agy",
+        "muse" => "muse",
+        _ => return Err("Unknown subscription lane".into()),
+    };
+    let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
+    let home = std::path::PathBuf::from(home);
+    let installed = [
+        home.join(".local/bin").join(cli),
+        std::path::PathBuf::from("/opt/homebrew/bin").join(cli),
+        std::path::PathBuf::from("/usr/local/bin").join(cli),
+        std::path::PathBuf::from("/usr/bin").join(cli),
+        std::path::PathBuf::from(
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS",
+        )
+        .join(cli),
+    ]
+    .into_iter()
+    .find(|p| p.is_file());
+    let Some(binary) = installed else {
+        return Ok(format!("{cli} was not found in standard locations. Install the official client or follow the manual setup below."));
+    };
+    let (args, positive) = match lane.as_str() {
+        "codex" => (&["-c", "forced_login_method=\"chatgpt\"", "-c", "model_provider=\"openai\"", "login", "status"][..], "ChatGPT login verified. Launch-agent status is not checked."),
+        "claude" => (&["auth", "status"][..], "Claude CLI reports account login. Unattended billing is not verified; this lane stays manual."),
+        _ => return Ok(format!("{cli} found. Subscription-only billing is not verified; this lane stays manual.")),
+    };
+    let mut command = tokio::process::Command::new(binary);
+    command
+        .args(args)
+        .current_dir("/")
+        .env_clear()
+        .env("HOME", home)
+        .kill_on_drop(true);
+    if cli == "codex" {
+        if let Some(config) = std::env::var_os("CODEX_HOME") {
+            command.env("CODEX_HOME", config);
+        }
+    }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(8), command.output())
+        .await
+        .map_err(|_| "The local sign-in check timed out")?
+        .map_err(|_| "The local sign-in check could not start")?;
+    let matched = if cli == "codex" {
+        [&output.stdout, &output.stderr].into_iter().any(|out| {
+            String::from_utf8_lossy(out)
+                .lines()
+                .any(|line| line.trim() == "Logged in using ChatGPT")
+        })
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .is_ok_and(|auth| auth["loggedIn"] == true && auth["authMethod"] == "claude.ai")
+    };
+    Ok(if output.status.success() && matched {
+        positive.into()
+    } else {
+        format!("{cli} did not confirm subscription login. Follow the official sign-in steps below, then check again.")
+    })
+}
+
 #[derive(Serialize)]
 pub(crate) struct QueueJob {
     id: String,

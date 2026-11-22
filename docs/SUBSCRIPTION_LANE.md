@@ -17,13 +17,28 @@ provider-specific job never falls back to another route. These are local
 CLI handoff controls, not native workflow history. The macOS desktop
 Research queue lets you choose a lane, enqueue the fixed public task, and
 refresh status and results. The provider setup disclosure explains the
-official sign-in and verification steps; it does not access credentials
-or claim to detect login. Custom `--state` paths are CLI-only.
+official sign-in and verification steps. **Check setup** checks for local
+clients at standard paths and queries the Codex and Claude sign-in status
+without returning credential data. It does not start a model or prove
+paid overages are off. Custom `--state` paths are CLI-only.
 
 The proposed continuous research loop also needs a configurable experiment
 target, per-lane capability and billing checks, review and promotion gates,
-and a durable controller that can queue the next step based on verified
-results. The queue does not implement those policies.
+and independent result validation. A bounded CLI controller now queues one
+step at a time and only advances after explicit operator acceptance:
+
+```sh
+python3 scripts/subscription_lane.py loop-start --id public-example \
+  --public-target 'Compare exact and greedy inference on public synthetic rules' \
+  --plan codex muse claude antigravity
+python3 scripts/subscription_lane.py loop-status --id public-example
+python3 scripts/subscription_lane.py loop-review --id public-example --step 1 --decision accept
+```
+
+Use only material safe to disclose to the chosen providers. Each step uses
+the same target, not previous model output. Use `--decision stop` to stop
+the current loop. Other providers remain manual; this is not a scientific
+evaluator, promotion gate, or unattended four-provider pipeline.
 
 For Muse, Lascoria's account coordinator provides a useful boundary:
 it removes `META_API_KEY`, isolates account configuration, and requires the
@@ -62,7 +77,9 @@ A tick claims one item and exits. Enqueue with a different `--id` for
 another independent run of the same fixed prompt. The SQLite queue
 lives in a private per-user directory; do not commit it or its replies.
 
-The queue is at-least-once across a crash before durable completion.
+The queue is at-least-once across a crash before durable completion. A
+separate process holds the worker lock and enforces the model attempt
+deadline if the queue worker is killed.
 A retry may use subscription quota again, but cannot create a second
 completed row. This is appropriate for synthetic research, not a
 one-look held-out evidence transaction. The lane stops retrying after
