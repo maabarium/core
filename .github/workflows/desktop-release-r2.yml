@@ -4,6 +4,12 @@ run-name: desktop-release-r2
 on:
   workflow_dispatch:
     inputs:
+      verified_run:
+        description: Successful verification run to promote without rebuilding (stable only; requires release_tag and verified_sha256).
+        type: string
+      verified_sha256:
+        description: SHA-256 of the updater archive actually installed during verification.
+        type: string
       verify_only:
         description: Build and notarise without publishing to GitHub Releases or R2.
         required: false
@@ -31,6 +37,7 @@ permissions:
 
 jobs:
   macos-r2-release:
+    if: ${{ !inputs.verified_run }}
     runs-on: macos-latest
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -325,3 +332,61 @@ jobs:
             aws s3 cp "$DESKTOP_DIR/release/${{ steps.release-context.outputs.channel }}/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"
           fi
           aws s3 cp "$DESKTOP_DIR/release/install.sh" "s3://$R2_BUCKET/install.sh" --endpoint-url "$R2_ENDPOINT" --content-type "text/x-shellscript; charset=utf-8"
+
+  promote-verified:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verified_run && !inputs.verify_only && inputs.release_channel == 'stable' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    concurrency: desktop-stable-promotion
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.verified_run }}
+      TAG: ${{ inputs.release_tag }}
+      DIGEST: ${{ inputs.verified_sha256 }}
+      R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+      R2_ENDPOINT: ${{ vars.CLOUDFLARE_R2_ENDPOINT }}
+      BASE: ${{ vars.MAABARIUM_UPDATE_BASE_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      AWS_EC2_METADATA_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify and promote the tested archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ && "$TAG" =~ ^desktop-v[0-9]+\.[0-9]+\.[0-9]+$ && "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          version="${TAG#desktop-v}"
+          source_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/desktop-release-r2.yml/runs?event=workflow_dispatch&status=success&per_page=100" --paginate --jq ".workflow_runs[] | select(.id == $RUN_ID) | .head_sha")"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$TAG" origin/master
+          git diff --exit-code "$source_sha" "$TAG"
+          stage="$(mktemp -d)"
+          gh run download "$RUN_ID" -n desktop-release-r2-macos -D "$stage"
+          manifest="$stage/stable/latest.json"
+          bundle="$stage/staging/darwin-aarch64/Maabarium-Console.app.tar.gz"
+          prefix="artifacts/stable/$DIGEST"
+          public="${BASE%/}/$prefix/darwin-aarch64"
+          [[ "$(sha256sum "$bundle" | cut -d' ' -f1)" == "$DIGEST" ]]
+          jq -e --arg version "$version" --arg url "$public/${bundle##*/}" --rawfile sig "$bundle.sig" \
+            '.version == $version and (.platforms | keys == ["darwin-aarch64"]) and
+             (.platforms["darwin-aarch64"] | .url == $url and .signature == ($sig | rtrimstr("\n") | rtrimstr("\r")))' "$manifest"
+          git show "$TAG:CHANGELOG.md" | awk -v heading="## [$version]" '
+            index($0, heading) == 1 {active=1; next}
+            /^## / && active {exit}
+            active {print}
+          ' > "$stage/notes.md"
+          grep -q '[^[:space:]]' "$stage/notes.md"
+          gh release create "$TAG" --verify-tag --draft --title "Maabarium Desktop v$version" --notes-file "$stage/notes.md" \
+            "$manifest" "$stage/install.sh" "$bundle" "$bundle.sig" "$stage/staging/darwin-aarch64/maabarium-darwin-aarch64.tar.gz"
+          aws s3 sync "$stage/staging/" "s3://$R2_BUCKET/$prefix/" --endpoint-url "$R2_ENDPOINT"
+          [[ "$(curl -fsS --retry 3 "$public/${bundle##*/}" | sha256sum | cut -d' ' -f1)" == "$DIGEST" ]]
+          aws s3 cp "$stage/install.sh" "s3://$R2_BUCKET/install.sh" --endpoint-url "$R2_ENDPOINT" --content-type "text/x-shellscript; charset=utf-8"
+          for key in stable/latest.json latest.json; do
+            aws s3 cp "$manifest" "s3://$R2_BUCKET/$key" --endpoint-url "$R2_ENDPOINT" --content-type application/json --cache-control no-cache
+          done
+          gh release edit "$TAG" --draft=false --latest
