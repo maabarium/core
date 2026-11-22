@@ -539,6 +539,7 @@ fn main() {
             research_queue::research_queue_list,
             research_queue::research_queue_enqueue,
             research_queue::research_subscription_check,
+            research_queue::research_loop_start,
             get_console_state,
             save_desktop_setup,
             set_provider_api_key,

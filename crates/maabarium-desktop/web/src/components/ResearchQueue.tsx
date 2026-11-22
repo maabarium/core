@@ -7,7 +7,7 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
   codex: {
     status: "Local worker · ChatGPT login required",
     steps: [
-      "Install the official Codex CLI and sign in with ChatGPT, not an API key.",
+      "In Terminal, run codex login and choose ChatGPT, not an API key.",
       "Run the status check below. It should say “Logged in using ChatGPT”.",
       "Install the Maabarium launch agent using the local queue guide, then queue a test task.",
     ],
@@ -16,7 +16,7 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
   claude: {
     status: "Manual handoff · unattended billing not verified",
     steps: [
-      "Use the sign-in flow in Claude Desktop or Claude Code. Desktop and CLI sessions can differ.",
+      "In Terminal, run claude auth login and choose your Claude account. Desktop and CLI sessions can differ.",
       "Check the CLI login separately. Maabarium does not read or store Claude tokens.",
     ],
     check: "claude auth status",
@@ -32,8 +32,8 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
   muse: {
     status: "Manual handoff · unattended billing not verified",
     steps: [
-      "Sign in through Muse’s official browser flow. Do not configure an API key for this lane.",
-      "Check the subscription allowance below. A missing allowance does not verify subscription billing.",
+      "In Terminal, run muse login and approve the device code in your browser. Do not configure an API key for this lane.",
+      "Use Check setup to ask Muse directly whether its browser account is signed in. The allowance check below is separate.",
     ],
     check: "muse usage",
   },
@@ -54,6 +54,23 @@ export function ResearchQueue() {
   const [message, setMessage] = useState("");
   const [checking, setChecking] = useState(false);
   const [checks, setChecks] = useState<Partial<Record<Lane, string>>>({});
+  const [target, setTarget] = useState("");
+  const [plan, setPlan] = useState<Lane[]>([]);
+  const [loopId, setLoopId] = useState("");
+  async function startLoop() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const id = await invoke<string>("research_loop_start", { target, plan });
+      setLoopId(id);
+      setMessage("Experiment saved and its first step queued.");
+      setJobs(await invoke<Job[]>("research_queue_list"));
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function checkSubscription() {
     setChecking(true);
     try {
@@ -105,6 +122,31 @@ export function ResearchQueue() {
             onClick={() => void checkSubscription()}>{checking ? "Checking…" : "Check setup"}</button>
         </div>
         <p role="status" className="mt-2 text-sm">{checks[lane]}</p>
+      </details>
+      <details className="mt-4 rounded border p-3">
+        <summary className="cursor-pointer font-medium">Configure an experiment</summary>
+        <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); void startLoop(); }}>
+          <label className="block" htmlFor="research-target">Public research target</label>
+          <textarea id="research-target" className="w-full rounded border bg-transparent p-2"
+            maxLength={4096} value={target} disabled={busy}
+            onChange={(event) => setTarget(event.target.value)} />
+          <p className="text-sm">Only enter material you can send to every selected provider. Each step requires review before the next begins.</p>
+          <ol className="list-decimal space-y-1 pl-5" aria-label="Experiment steps">
+            {plan.map((provider, index) => <li key={index}>
+              {labels[provider]}
+              <button type="button" className="ml-2 rounded border px-2"
+                aria-label={`Remove step ${index + 1}`} disabled={busy}
+                onClick={() => setPlan((previous) => previous.filter((_, i) => i !== index))}>Remove</button>
+            </li>)}
+          </ol>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="rounded border px-3 py-2" disabled={busy || plan.length >= 20}
+              onClick={() => setPlan((previous) => [...previous, lane])}>Add {labels[lane]} step</button>
+            <button type="submit" className="rounded border px-3 py-2"
+              disabled={busy || !target.trim() || new TextEncoder().encode(target.trim()).length > 4096 || !plan.length}>Start experiment</button>
+          </div>
+        </form>
+        {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Use the CLI to review and advance it.</p>}
       </details>
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
       {jobs.length > 0 && (

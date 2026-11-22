@@ -18,14 +18,17 @@ CLI handoff controls, not native workflow history. The macOS desktop
 Research queue lets you choose a lane, enqueue the fixed public task, and
 refresh status and results. The provider setup disclosure explains the
 official sign-in and verification steps. **Check setup** checks for local
-clients at standard paths and queries the Codex and Claude sign-in status
+clients at standard paths and queries Codex, Claude, and Muse sign-in status
 without returning credential data. It does not start a model or prove
 paid overages are off. Custom `--state` paths are CLI-only.
 
 The proposed continuous research loop also needs a configurable experiment
 target, per-lane capability and billing checks, review and promotion gates,
 and independent result validation. A bounded CLI controller now queues one
-step at a time and only advances after explicit operator acceptance:
+step at a time and only advances after explicit operator acceptance.
+Start an experiment from the desktop's Research queue or from the CLI.
+Desktop start queues exactly the first job and shows the experiment ID.
+Review and stop are currently CLI controls:
 
 ```sh
 python3 scripts/subscription_lane.py loop-start --id public-example \
@@ -43,6 +46,9 @@ evaluator, promotion gate, or unattended four-provider pipeline.
 For Muse, Lascoria's account coordinator provides a useful boundary:
 it removes `META_API_KEY`, isolates account configuration, and requires the
 native host to confirm account login before starting a subscription session.
+Maabarium uses the native experimental `account/read` handshake with a
+clean environment to distinguish browser-account login from other states.
+It doesn't copy Lascoria's credentials or use Lascoria's process as a proxy.
 An installed Muse binary and a missing allowance response are not equivalent
 to that contract. Do not copy Lascoria's credential store or enable its
 separate API-key path in this queue.

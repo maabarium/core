@@ -29,6 +29,9 @@ pub(crate) async fn research_subscription_check(lane: String) -> Result<String, 
     let Some(binary) = installed else {
         return Ok(format!("{cli} was not found in standard locations. Install the official client or follow the manual setup below."));
     };
+    if cli == "muse" {
+        return muse_account_status(&binary, &home).await;
+    }
     let (args, positive) = match lane.as_str() {
         "codex" => (&["-c", "forced_login_method=\"chatgpt\"", "-c", "model_provider=\"openai\"", "login", "status"][..], "ChatGPT login verified. Launch-agent status is not checked."),
         "claude" => (&["auth", "status"][..], "Claude CLI reports account login. Unattended billing is not verified; this lane stays manual."),
@@ -65,6 +68,59 @@ pub(crate) async fn research_subscription_check(lane: String) -> Result<String, 
     } else {
         format!("{cli} did not confirm subscription login. Follow the official sign-in steps below, then check again.")
     })
+}
+
+async fn muse_account_status(
+    binary: &std::path::Path,
+    home: &std::path::Path,
+) -> Result<String, String> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let mut child = tokio::process::Command::new(binary)
+            .args(["serve", "--provider", "meta", "--no-session-log", "--disable-shell", "--disable-write"])
+            .current_dir("/")
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin")
+            .env("MUSE_NO_AUTO_UPDATE", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn().ok()?;
+        let mut input = child.stdin.take()?;
+        let mut output = BufReader::new(child.stdout.take()?).take(65536);
+        async fn response(
+            output: &mut (impl AsyncBufReadExt + Unpin),
+            id: u64,
+        ) -> Option<serde_json::Value> {
+            loop {
+                let mut line = Vec::new();
+                if output.read_until(b'\n', &mut line).await.ok()? == 0 {
+                    return None;
+                }
+                let value: serde_json::Value = serde_json::from_slice(&line).ok()?;
+                if value["jsonrpc"] == "2.0" && value["id"] == id {
+                    return value.get("result").cloned();
+                }
+            }
+        }
+        input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"maabarium_account\",\"version\":\"0.1.0\"},\"capabilities\":{\"experimentalApi\":true}}}\n").await.ok()?;
+        let handshake = response(&mut output, 1).await?;
+        if handshake["experimentalApi"] != true || !handshake["schema"]["fingerprint"].is_string() {
+            return None;
+        }
+        input.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/read\",\"params\":{}}\n").await.ok()?;
+        let state = response(&mut output, 2).await?;
+        Some(state["state"] == "accountLogin")
+    }).await;
+    Ok(match result {
+        Ok(Some(true)) => "Muse confirms browser-account login with API-key environment variables removed. Unattended billing is not verified; this lane stays manual.",
+        Ok(Some(false)) => "Muse did not confirm browser-account login. Run the official sign-in command, then check again.",
+        _ => "The installed Muse client did not return a compatible account status. This lane stays manual.",
+    }.into())
 }
 
 #[derive(Serialize)]
@@ -137,6 +193,76 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
     if !has_lane {
         tx.execute_batch("ALTER TABLE jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'codex'")?;
     }
+    let has_prompt: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='prompt')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_prompt {
+        tx.execute_batch("ALTER TABLE jobs ADD COLUMN prompt TEXT")?;
+    }
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_loops (
+        id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
+        step INTEGER NOT NULL, status TEXT NOT NULL)",
+    )?;
+    tx.commit()
+}
+
+#[tauri::command]
+pub(crate) async fn research_loop_start(
+    target: String,
+    plan: Vec<String>,
+) -> Result<String, String> {
+    if target.trim().is_empty()
+        || target.len() > 4096
+        || plan.is_empty()
+        || plan.len() > 20
+        || plan
+            .iter()
+            .any(|lane| !matches!(lane.as_str(), "codex" | "claude" | "antigravity" | "muse"))
+    {
+        return Err("Enter a public target up to 4096 bytes and 1–20 valid provider steps.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut db = connect()?;
+        let id = uuid::Uuid::new_v4().to_string();
+        insert_loop(&mut db, &id, target.trim(), &plan).map_err(|e| e.to_string())?;
+        Ok(id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn insert_loop(
+    db: &mut Connection,
+    id: &str,
+    target: &str,
+    plan: &[String],
+) -> rusqlite::Result<()> {
+    let [lane, ..] = plan else {
+        return Err(rusqlite::Error::InvalidQuery);
+    };
+    let plan_json = serde_json::to_string(plan)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let prompt = format!(
+        "Public synthetic experiment, step 1 of {}. Do not use tools or read local files. Work on this public target and report a bounded result: {target}",
+        plan.len()
+    );
+    let tx = db.transaction()?;
+    tx.execute(
+        "INSERT INTO research_loops VALUES (?,?,?,1,'active')",
+        rusqlite::params![id, target, plan_json],
+    )?;
+    tx.execute(
+        "INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
+        rusqlite::params![
+            format!("loop:{id}:1"),
+            lane,
+            (lane != "codex").then_some("awaiting manual handoff"),
+            prompt,
+        ],
+    )?;
     tx.commit()
 }
 
@@ -210,5 +336,26 @@ mod tests {
             })
             .unwrap();
         assert_eq!(row, ("codex".into(), "answer".into()));
+    }
+
+    #[test]
+    fn loop_creates_only_the_first_job_and_rolls_back_on_collision() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        let plan = ["muse".into(), "codex".into()];
+        insert_loop(&mut db, "first", "public target", &plan).unwrap();
+        let row: (String, String) = db
+            .query_row("SELECT id,lane FROM jobs", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(row, ("loop:first:1".into(), "muse".into()));
+        db.execute("INSERT INTO jobs(id) VALUES ('loop:second:1')", [])
+            .unwrap();
+        assert!(insert_loop(&mut db, "second", "public target", &plan).is_err());
+        let count: u32 = db
+            .query_row("SELECT COUNT(*) FROM research_loops", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
