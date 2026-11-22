@@ -27,6 +27,7 @@ export function ConsoleActivityPanel({
   activeTab,
   history,
   researchJobs = [],
+  reportingJob,
   currentResearchJob,
   latestProposal,
   winnerProposal,
@@ -39,6 +40,7 @@ export function ConsoleActivityPanel({
   activeTab: ConsoleTab;
   history: HistoryRow[];
   researchJobs?: ResearchJob[];
+  reportingJob?: ResearchJob;
   currentResearchJob?: ResearchJob;
   latestProposal: PersistedProposal | null;
   winnerProposal: PersistedProposal | null;
@@ -159,11 +161,11 @@ export function ConsoleActivityPanel({
       <div className="p-4" data-testid="console-activity-content">
         {activeTab === "history" ? (
           <div className="space-y-5">
-          <section aria-label="Research history">
+          {researchJobs.length > 0 && <section aria-label="Research history">
             <h3 className="mb-2 font-semibold">Research queue experiments</h3>
             <ResearchRunHistory jobs={researchJobs} />
-          </section>
-          <section aria-label="Workflow history">
+          </section>}
+          {!reportingJob && <section aria-label="Workflow history">
             <h3 className="mb-2 font-semibold">Workflow engine runs</h3>
           {history.length > 0 ? (
             <table className="w-full text-left text-xs">
@@ -216,7 +218,7 @@ export function ConsoleActivityPanel({
               history rows.
             </div>
           )}
-          </section>
+          </section>}
           </div>
         ) : activeTab === "diff" ? (
           currentResearchJob ? (
@@ -330,6 +332,13 @@ export function ConsoleActivityPanel({
               Waiting for persisted proposal patch data in SQLite.
             </div>
           )
+        ) : reportingJob ? (
+          <div className="space-y-2">
+            <h3 className="font-semibold">{reportingJob.experiment_title ?? "Current experiment"}</h3>
+            <p className="text-sm text-[var(--muted)]">Only activity recorded for this research run is shown here.</p>
+            {researchJobs.map(job => job.detail && <p key={job.id} className="break-words text-sm">{job.detail}</p>)}
+            {!researchJobs.some(job => job.detail) && <p className="text-sm">No research log details were recorded.</p>}
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="flex items-center gap-3">

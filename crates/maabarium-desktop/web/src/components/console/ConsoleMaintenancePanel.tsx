@@ -153,7 +153,7 @@ export function ConsoleMaintenancePanel({
     {
       id: "stack",
       label: "Persisted Stack",
-      detail: `${experimentCount} experiments`,
+      detail: `${experimentCount} workflow experiments`,
       ready: experimentCount > 0 || proposalCount > 0 || logCount > 0,
       icon: Layers,
     },

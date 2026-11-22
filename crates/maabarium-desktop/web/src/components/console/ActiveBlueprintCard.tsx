@@ -5,6 +5,7 @@ import { Badge } from "../ui/Badge";
 import { GlassCard } from "../ui/GlassCard";
 
 export function ActiveBlueprintCard({
+  title = "Current workflow",
   blueprintSummary,
   activeBlueprintOption,
   engineRunning,
@@ -16,6 +17,7 @@ export function ActiveBlueprintCard({
   collapsed = false,
   onToggleCollapsed,
 }: {
+  title?: string;
   blueprintSummary: string;
   activeBlueprintOption: AvailableBlueprint | null;
   engineRunning: boolean;
@@ -29,7 +31,7 @@ export function ActiveBlueprintCard({
 }) {
   return (
     <GlassCard
-      title="Current workflow"
+      title={title}
       icon={FileText}
       collapsible
       collapsed={collapsed}

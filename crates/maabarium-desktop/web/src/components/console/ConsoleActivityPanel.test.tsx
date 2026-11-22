@@ -34,6 +34,25 @@ function buildProposal(
 }
 
 describe("ConsoleActivityPanel", () => {
+  it("keeps current research history and logs separate from an older workflow", () => {
+    const job = { id: "loop:coda:1", lane: "Local evidence", state: "done", attempts: 0,
+      detail: "Audited report saved", result: "Both comparisons passed", experiment_title: "SF27-F1", review_pending: true };
+    const props = {
+      history: [],
+      researchJobs: [job],
+      reportingJob: job,
+      latestProposal: null, winnerProposal: null, selectedWinnerProposal: null,
+      logs: ["An unrelated workflow log"], logPath: "test.log",
+      onChangeTab: () => undefined, onOpenLogFile: () => undefined,
+    };
+    const view = render(<ConsoleActivityPanel {...props} activeTab="history" />);
+    expect(screen.getByRole("heading", { name: "SF27-F1" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Workflow engine runs" })).toBeNull();
+    view.rerender(<ConsoleActivityPanel {...props} activeTab="logs" />);
+    expect(screen.getByText("Audited report saved")).toBeTruthy();
+    expect(screen.queryByText("An unrelated workflow log")).toBeNull();
+  });
+
   it("uses the current research report in Diff View without a nested vertical scroll box", async () => {
     render(<ConsoleActivityPanel activeTab="diff" history={[]}
       currentResearchJob={{ id: "loop:pilot:1", lane: "Local evidence", state: "done", attempts: 0,

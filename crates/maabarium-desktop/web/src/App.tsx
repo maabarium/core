@@ -157,8 +157,8 @@ export default function App() {
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
   const [branchInspection, setBranchInspection] = useState<{ key: string; inventory: ExperimentBranchInventory } | null>(null);
   const experimentJobs = researchJobs.filter(job => job.id.startsWith("loop:"));
-  const featuredResearch = experimentJobs.find(job => job.review_pending) ?? experimentJobs[0];
-  const showResearch = Boolean(featuredResearch?.review_pending || featuredResearch?.experiment_active);
+  const featuredResearch = experimentJobs.find(job => job.review_pending)
+    ?? experimentJobs.find(job => job.experiment_active);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
@@ -361,6 +361,19 @@ export default function App() {
 
   const runState = state?.runState ?? null;
   const runStatus = runState?.status ?? "idle";
+  const showResearch = Boolean(featuredResearch) && runStatus === "idle" && !runLoopStarting;
+  const reportingJob = showResearch ? featuredResearch : undefined;
+  const reportingLoop = reportingJob?.id.slice(0, reportingJob.id.lastIndexOf(":"));
+  const reportingJobs = reportingLoop
+    ? experimentJobs.filter(job => job.id.slice(0, job.id.lastIndexOf(":")) === reportingLoop)
+    : [];
+  const activityJobs = reportingJob ? reportingJobs : experimentJobs;
+  const reportingTitle = reportingJob?.experiment_title ?? "Research experiment";
+  const reportingMetrics = reportingJob ? researchEvaluatorMetrics(reportingTitle, reportingJob.result) : null;
+  const reportingStatus = reportingJob?.review_pending ? "Awaiting human review"
+    : reportingJob?.state === "running" ? "Running"
+    : reportingJob?.state === "queued" ? "Waiting to run"
+    : reportingJob?.state === "failed" ? "Failed" : "Report available";
   const runPhaseLabel = runState?.phase
     ? runState.phase.replace(/_/g, " ")
     : runStatus;
@@ -1513,10 +1526,11 @@ export default function App() {
         <header className="workspace-heading">
           <div className="min-w-0">
             <p>Research workspace</p>
-            <h1>{activeWorkflowLabel}</h1>
-            <span>{activeWorkflowMeta ?? (activeBlueprintOption ? blueprintSummary : "Open or create a workflow to get started.")}</span>
-            <span role="status" className="workspace-run-status" data-run-state={runStatus}>
-              {runStatus === "running"
+            <h1>{reportingJob ? reportingTitle : activeWorkflowLabel}</h1>
+            <span>{reportingJob ? (reportingJob.lane === "Local evidence" ? "Research experiment · Local benchmark" : "Research experiment · Provider queue")
+              : activeWorkflowMeta ?? (activeBlueprintOption ? blueprintSummary : "Open or create a workflow to get started.")}</span>
+            <span role="status" className="workspace-run-status" data-run-state={reportingJob?.state === "running" ? "running" : runStatus}>
+              {reportingJob ? reportingStatus : runStatus === "running"
                 ? `Running${runState?.currentIteration ? ` · iteration ${runState.currentIteration}` : ""}`
                 : runStatus === "stopping"
                   ? "Stopping"
@@ -1526,12 +1540,13 @@ export default function App() {
             </span>
           </div>
           <div className="workspace-heading-actions">
-            {activeBlueprintOption ? <button type="button" className="workspace-secondary" onClick={handleJumpToActiveWorkflow}>View workflow</button> : null}
+            {reportingJob ? <button type="button" className="workspace-secondary" onClick={() => scrollToSection("console-section")}>View experiment</button>
+              : activeBlueprintOption ? <button type="button" className="workspace-secondary" onClick={handleJumpToActiveWorkflow}>View workflow</button> : null}
             <button type="button" className="workspace-primary" data-run-state={runStatus}
               disabled={loading || runStatus === "stopping" || runLoopStarting}
               onClick={() => void handleRunFlowClick()}>
               {runStatus === "idle" ? <Play size={14} aria-hidden="true" /> : <Square size={14} aria-hidden="true" />}
-              {runStatus === "idle" ? (runLoopStarting ? "Starting…" : "Run workflow") : runStatus === "stopping" ? "Stopping…" : "Stop run"}
+              {runStatus === "idle" ? (runLoopStarting ? "Starting…" : reportingJob ? "Run saved workflow" : "Run workflow") : runStatus === "stopping" ? "Stopping…" : "Stop run"}
             </button>
           </div>
         </header>
@@ -1543,17 +1558,26 @@ export default function App() {
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <ResearchQueue onJobsChange={setResearchJobs} />
-          <Disclosure id="overview-section" title="Workflow history and system activity" contentClassName="space-y-4">
+          <Disclosure id="overview-section" title={reportingJob ? "Research overview and system activity" : "Workflow history and system activity"} contentClassName="space-y-4">
           <p className="text-sm text-[var(--muted)]">
-            The scores, tokens, and run totals below are for the workflow engine. Local benchmarks
-            appear in Console History as well as the{" "}
+            {reportingJob ? "Results below are for the current experiment. CPU load is device-wide. See all runs in the "
+              : "The scores, tokens, and run totals below are for the selected workflow. Other experiments appear in the "}
             <button type="button" onClick={() => scrollToSection("research-queue")}
               className="font-semibold text-[var(--accent)] underline">Research queue</button>.
           </p>
           <section
             className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
-            {[
+            {reportingMetrics ? (
+              <>
+                <GlassCard><p className="text-sm text-[var(--muted)]">Experiment status</p><p className="mt-2 text-xl font-semibold">{reportingStatus}</p></GlassCard>
+                {reportingMetrics.labels.map((label, i) => (
+                  <GlassCard key={label}><p className="text-sm text-[var(--muted)]">{label}</p>
+                    <p className="mt-2 text-3xl font-mono font-semibold">{(100 * reportingMetrics.points[i]).toFixed(1)}%</p>
+                  </GlassCard>
+                ))}
+              </>
+            ) : [
               {
                 label: dashboard.currentScoreLabel,
                 val: dashboard.currentScore,
@@ -1728,6 +1752,7 @@ export default function App() {
               </div>
             </GlassCard>
           </section>
+          {!reportingJob && <>
           <section>
             <GlassCard className="border-white/10 bg-white/[0.04]">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -1905,10 +1930,12 @@ export default function App() {
             </GlassCard>
           </section>
 
+          </>}
           </Disclosure>
 
           <section id="active-workflow-card" className="pt-2">
             <ActiveBlueprintCard
+              title={reportingJob ? "Saved workflow" : "Current workflow"}
               blueprintSummary={blueprintSummary}
               activeBlueprintOption={activeBlueprintOption}
               engineRunning={Boolean(state?.engineRunning)}
@@ -1948,16 +1975,16 @@ export default function App() {
                 />
               </div>
 
-              {researchJobs.some(job => job.id.startsWith("loop:")) && (
-                <GlassCard title="Research experiment activity" icon={Activity}>
+              {activityJobs.length > 0 && (
+                <GlassCard title={reportingJob ? "Current experiment activity" : "Research queue activity"} icon={Activity}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
-                      <span>{researchJobs.filter(job => job.id.startsWith("loop:") && job.state === "running").length} running</span>
-                      <span>{researchJobs.filter(job => job.id.startsWith("loop:") && job.state === "queued").length} waiting</span>
-                      <span>{researchJobs.filter(job => job.id.startsWith("loop:") && job.review_pending).length} awaiting review</span>
+                      <span>{activityJobs.filter(job => job.state === "running").length} running</span>
+                      <span>{activityJobs.filter(job => job.state === "queued").length} waiting</span>
+                      <span>{activityJobs.filter(job => job.review_pending).length} awaiting review</span>
                     </div>
                     <button type="button" className="font-semibold text-[var(--accent)] underline"
-                      onClick={() => { setActiveTab("history"); document.getElementById("console-activity")?.scrollIntoView({ block: "start" }); }}>
+                      onClick={() => { if (reportingJob) { setActiveTab("history"); scrollToSection("console-activity"); } else { scrollToSection("research-queue"); } }}>
                       View research history
                     </button>
                   </div>
@@ -1967,7 +1994,8 @@ export default function App() {
               <ConsoleActivityPanel
                 activeTab={activeTab}
                 history={history}
-                researchJobs={experimentJobs}
+                researchJobs={reportingJob ? reportingJobs : []}
+                reportingJob={reportingJob}
                 currentResearchJob={showResearch && !explicitWorkflowDiff ? featuredResearch : undefined}
                 latestProposal={latestProposal}
                 winnerProposal={winnerProposal}

@@ -86,7 +86,7 @@ export function ConsoleEvidencePanel({
   const tabSummary = useMemo(
     () => ({
       retained: {
-        label: "Retained",
+        label: currentResearchJob ? "Retained workflow winners" : "Retained",
         detail:
           winnerHistory.length > 0
             ? `${winnerHistory.length} winner${winnerHistory.length === 1 ? "" : "s"}`
