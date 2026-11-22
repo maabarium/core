@@ -63,8 +63,10 @@ const BLUEPRINTS_DIR_NAME: &str = "blueprints";
 const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
 const APP_DISPLAY_NAME: &str = "Maabarium";
 const ABOUT_MENU_ID: &str = "about_maabarium";
+const CHECK_UPDATES_MENU_ID: &str = "check_for_updates_menu";
 const LICENSE_MENU_ID: &str = "open_repository_license";
 const ABOUT_MENU_EVENT: &str = "maabarium://open-about";
+const CHECK_UPDATES_MENU_EVENT: &str = "maabarium://open-updates";
 const CONSOLE_EXPERIMENT_LIMIT: usize = 12;
 const CONSOLE_PROPOSAL_LIMIT: usize = 5;
 const RETAINED_WINNER_LIMIT: usize = 3;
@@ -603,6 +605,7 @@ fn main() {
 fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let app_menu = SubmenuBuilder::new(app, APP_DISPLAY_NAME)
         .text(ABOUT_MENU_ID, "About Maabarium")
+        .text(CHECK_UPDATES_MENU_ID, "Check for Updates…")
         .separator()
         .services()
         .separator()
@@ -681,6 +684,9 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
     match event.id().as_ref() {
         ABOUT_MENU_ID => {
             let _ = app.emit(ABOUT_MENU_EVENT, ());
+        }
+        CHECK_UPDATES_MENU_ID => {
+            let _ = app.emit(CHECK_UPDATES_MENU_EVENT, ());
         }
         LICENSE_MENU_ID => {
             let _ = open_repository_license_path(app);
@@ -3205,6 +3211,7 @@ async fn check_for_updates(
 async fn install_available_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    expected_version: Option<String>,
 ) -> Result<InstallUpdateResult, String> {
     let setup = hydrated_desktop_setup(&state);
     let (updater, _) = configured_updater(&app, &setup)?;
@@ -3222,6 +3229,14 @@ async fn install_available_update(
     };
 
     let version = update.version.clone();
+    if expected_version
+        .as_ref()
+        .is_some_and(|expected| expected != &version)
+    {
+        return Err(
+            "The available version changed. Check for updates again before installing.".into(),
+        );
+    }
     update
         .download_and_install(|_, _| {}, || {})
         .await

@@ -1,7 +1,7 @@
 import { Disclosure } from "./ui/Disclosure";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { ResearchReport, TokenDetails, type TokenUsage } from "./ResearchReport";
 import { EvaluationRuleFields, EvidenceCheck, type EvaluationSetup } from "./ResearchEvaluation";
 
@@ -73,6 +73,15 @@ type Job = {
   effort?: string | null;
 };
 
+function ResearchSelect({ className = "", children, ...props }: ComponentProps<"select">) {
+  return <span className={`relative inline-flex max-w-full align-middle ${className}`}>
+    <select {...props} className="h-10 w-full appearance-none rounded-md border bg-transparent pl-3 pr-9 disabled:opacity-60">
+      {children}
+    </select>
+    <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+  </span>;
+}
+
 export function ResearchQueue() {
   const [lane, setLane] = useState<Lane>("codex");
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -137,18 +146,15 @@ export function ResearchQueue() {
   }
 
   return (
-    <section className="workspace-card rounded-xl border p-5" aria-labelledby="research-queue-title">
+    <section id="research-queue" className="workspace-card rounded-xl border p-5" aria-labelledby="research-queue-title">
       <h2 id="research-queue-title" className="text-lg font-semibold">Research queue</h2>
       <p className="mt-1 text-sm">Queue a test task using public information. Providers you’ve set up can run in the background. For the others, run the task yourself and import the result.</p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label htmlFor="research-lane">Provider</label>
-        <span className="relative inline-flex">
-          <select className="h-10 appearance-none rounded-md border bg-transparent pl-3 pr-9" id="research-lane" value={lane}
+        <ResearchSelect id="research-lane" value={lane}
             disabled={busy} onChange={(event) => setLane(event.target.value as Lane)}>
             {Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-          </select>
-          <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
-        </span>
+          </ResearchSelect>
         <button type="button" className="h-10 rounded-md border px-3" disabled={busy || lane === "deepseek"} onClick={() => void update(true)}>Queue task</button>
         <button type="button" className="h-10 rounded-md border px-3" disabled={busy} onClick={() => void update(false)}>Refresh queue</button>
       </div>
@@ -172,12 +178,12 @@ export function ResearchQueue() {
             onChange={(event) => setTarget(event.target.value)} />
           <p className="text-sm">Only enter material you can send to every selected provider. The worker pauses at each checkpoint and after the final step. Failed jobs do not advance.</p>
           <label className="block" htmlFor="research-checkpoint">Pause for review after</label>
-          <select id="research-checkpoint" className="rounded border bg-transparent p-2"
+          <ResearchSelect id="research-checkpoint"
             value={reviewEvery} disabled={busy}
             onChange={(event) => setReviewEvery(Number(event.target.value))}>
             {Array.from({ length: Math.max(1, plan.length) }, (_, index) =>
               <option key={index} value={index + 1}>{index === 0 ? "Every step" : `Every ${index + 1} steps`}</option>)}
-          </select>
+          </ResearchSelect>
           <ol className="list-decimal space-y-1 pl-5" aria-label="Experiment steps">
             {plan.map((step, index) => <li key={index} className="rounded border p-2">
               <span className="font-medium">{labels[step.lane]}</span>
@@ -201,7 +207,7 @@ export function ResearchQueue() {
                     }} />
                 </label>
                 <label className="text-sm">Thinking effort
-                  <select className="ml-2 rounded border bg-transparent p-1" aria-label={`Thinking effort for step ${index + 1}`}
+                  <ResearchSelect className="ml-2" aria-label={`Thinking effort for step ${index + 1}`}
                     disabled={busy || (step.lane === "antigravity" && /orchestrator/i.test(step.model ?? ""))}
                     value={step.effort ?? ""} onChange={(event) => {
                       const effort = event.target.value || null;
@@ -211,7 +217,7 @@ export function ResearchQueue() {
                     {effortOptions[step.lane].map((effort) => <option key={effort} value={effort}>
                       {effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}
                     </option>)}
-                  </select>
+                  </ResearchSelect>
                 </label>
               </div>
             </li>)}
@@ -219,7 +225,7 @@ export function ResearchQueue() {
           <fieldset disabled={busy} className="space-y-2 rounded-xl border p-3">
             <legend className="px-1 font-medium">Evaluation</legend>
             <label className="block text-sm">How should we review this experiment?
-              <select className="ml-2 rounded border bg-transparent p-2" value={evaluationMode}
+              <ResearchSelect className="ml-2" value={evaluationMode}
                 onChange={(event) => {
                   const mode = event.target.value;
                   setEvaluationMode(mode);
@@ -230,13 +236,13 @@ export function ResearchQueue() {
                 <option value="local">Local checks</option>
                 <option value="ai">AI reviewer</option>
                 <option value="both">Both: local checks and AI review</option>
-              </select>
+              </ResearchSelect>
             </label>
             {evaluation && <EvaluationRuleFields setup={evaluation} onChange={setEvaluation} disabled={busy} />}
             {useReviewer && <>
               <p className="text-sm">The selected provider receives the public target, an excerpt of the final step, and local verdict totals if available. Keep private information out of the target and steps. The reviewer cannot change a verdict or start another experiment.</p>
               <label className="block text-sm">Reviewer provider
-                <select className="ml-2 rounded border bg-transparent p-2" required value={reviewer?.lane ?? ""}
+                <ResearchSelect className="ml-2" required value={reviewer?.lane ?? ""}
                   onChange={(event) => {
                     const selected = event.target.value as Lane | "";
                     setReviewer(selected ? { lane: selected, model: null, effort: null } : null);
@@ -244,7 +250,7 @@ export function ResearchQueue() {
                   <option value="">Choose a provider</option>
                   {(Object.keys(labels) as Lane[]).map((provider) => <option key={provider} value={provider}
                     disabled={provider === finalLane}>{labels[provider]}</option>)}
-                </select>
+                </ResearchSelect>
               </label>
               {reviewer && <>
                 <label className="block text-sm">Reviewer model
@@ -256,12 +262,12 @@ export function ResearchQueue() {
                     }} />
                 </label>
                 <label className="block text-sm">Reviewer thinking effort
-                  <select className="ml-2 rounded border bg-transparent p-2" value={reviewer.effort ?? ""}
+                  <ResearchSelect className="ml-2" value={reviewer.effort ?? ""}
                     disabled={reviewer.lane === "antigravity" && /orchestrator/i.test(reviewer.model ?? "")}
                     onChange={(event) => setReviewer({ ...reviewer, effort: event.target.value || null })}>
                     <option value="">{reviewer.lane === "deepseek" ? "Off" : "Provider default"}</option>
                     {effortOptions[reviewer.lane].map((effort) => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
-                  </select>
+                  </ResearchSelect>
                 </label>
               </>}
               {!reviewerValid && reviewer && <p role="alert" className="text-sm">Choose a different reviewer provider from the last research step.</p>}

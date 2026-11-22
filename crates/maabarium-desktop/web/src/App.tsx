@@ -15,6 +15,7 @@ import appLogo from "../../icons/specimen-tile.svg";
 import { MiniSparkline } from "./components/charts/MiniSparkline";
 import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { AboutModal } from "./components/console/AboutModal";
+import { UpdateCheckModal } from "./components/console/UpdateCheckModal";
 import { Disclosure } from "./components/ui/Disclosure";
 import { BlueprintWizardModal } from "./components/console/BlueprintWizardModal";
 import { ConsoleActivityPanel } from "./components/console/ConsoleActivityPanel";
@@ -73,6 +74,7 @@ import type {
 
 const SCRAPER_DISCOVERY_MARKER = "[scraper_discovery]";
 const ABOUT_MENU_EVENT = "maabarium://open-about";
+const CHECK_UPDATES_MENU_EVENT = "maabarium://open-updates";
 const AreaComparisonChart = lazy(() =>
   import("./components/charts/AreaComparisonChart").then((module) => ({
     default: module.AreaComparisonChart,
@@ -170,6 +172,7 @@ export default function App() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupSaving, setSetupSaving] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
   const [runLoopModalOpen, setRunLoopModalOpen] = useState(false);
   const [runLoopStarting, setRunLoopStarting] = useState(false);
   const [updatePreferencesSaving, setUpdatePreferencesSaving] = useState(false);
@@ -314,6 +317,16 @@ export default function App() {
         unlisten();
       }
     };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen(CHECK_UPDATES_MENU_EVENT, () => setUpdatesOpen(true)).then(
+      (cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; },
+      () => { /* Native menu events are unavailable in browser preview. */ },
+    );
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   const wizardProviderOptions = useMemo(
@@ -1193,6 +1206,7 @@ export default function App() {
         onClose={() => setAboutOpen(false)}
         onOpenLicense={() => void openRepositoryLicense()}
       />
+      {updatesOpen && <UpdateCheckModal onClose={() => setUpdatesOpen(false)} />}
 
       {successToast ? (
         <div className="fixed right-6 top-6 z-[180] max-w-sm rounded-2xl border border-emerald-400/25 bg-slate-950/95 px-4 py-3 shadow-2xl shadow-emerald-950/40 backdrop-blur-xl">
@@ -1427,6 +1441,10 @@ export default function App() {
               type="button"
             >
               Overview
+            </button>
+            <button type="button" onClick={() => scrollToSection("research-queue")}
+              className="px-5 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em]">
+              Research queue
             </button>
             <button
               onClick={() => scrollToSection("console-section")}
