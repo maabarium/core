@@ -21,6 +21,9 @@ import type {
   UpdateCheckResult,
   WorkspaceAnalysis,
   WorkspaceGitStatus,
+  RunGroup,
+  GroupRunWithExperiments,
+  TelegramConfig,
 } from "../types/console";
 
 declare global {
@@ -1155,6 +1158,184 @@ export function useDesktopConsole({
     }
   };
 
+  // --- Group Management Methods ---
+
+  const getRunGroups = async (): Promise<RunGroup[]> => {
+    try {
+      return await invoke<RunGroup[]>("get_run_groups");
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not load run groups",
+        "The desktop app could not load your workflow run groups from the database.",
+        error,
+      );
+      return [];
+    }
+  };
+
+  const getGroupRuns = async (
+    groupName: string,
+  ): Promise<GroupRunWithExperiments[]> => {
+    try {
+      return await invoke<GroupRunWithExperiments[]>("get_group_runs", {
+        groupName,
+      });
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not load group runs",
+        "The desktop app could not load the run history for this group.",
+        error,
+      );
+      return [];
+    }
+  };
+
+  const createRunGroup = async (
+    name: string,
+    description: string,
+  ): Promise<boolean> => {
+    try {
+      await invoke("create_run_group_command", { name, description });
+      await refresh();
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not create run group",
+        "The desktop app could not create the workflow run group. Check the name is unique.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const addBlueprintToGroup = async (
+    groupName: string,
+    blueprintName: string,
+    blueprintPath: string,
+  ): Promise<boolean> => {
+    try {
+      await invoke("add_blueprint_to_group_command", {
+        groupName,
+        blueprintName,
+        blueprintPath,
+      });
+      await refresh();
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not add blueprint to group",
+        "The desktop app could not add this blueprint. Check the group name and blueprint path.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const deleteRunGroup = async (name: string): Promise<boolean> => {
+    try {
+      await invoke("delete_run_group_command", { name });
+      await refresh();
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not delete run group",
+        "The desktop app could not delete the workflow run group.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const runGroup = async (
+    groupName: string,
+    mode?: string | null,
+  ): Promise<boolean> => {
+    try {
+      await invoke("run_group_command", {
+        groupName,
+        mode: mode ?? null,
+      });
+      await refresh();
+      window.setTimeout(() => {
+        void refresh();
+      }, 1500);
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not run group",
+        "The desktop app could not start the group execution. Check the group configuration.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const stopGroup = async (groupName: string): Promise<boolean> => {
+    try {
+      await invoke("stop_group_command", { groupName });
+      await refresh();
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not stop group",
+        "The desktop app could not stop the workflow run group.",
+        error,
+      );
+      return false;
+    }
+  };
+
+  const runDueGroups = async (): Promise<string[]> => {
+    try {
+      const started = await invoke<string[]>("run_due_groups_command");
+      if (started.length > 0) {
+        await refresh();
+      }
+      return started;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not run scheduled groups",
+        "The desktop app could not start one or more scheduled workflow run groups.",
+        error,
+      );
+      return [];
+    }
+  };
+
+  const setRunGroupSchedule = async (
+    groupName: string,
+    scheduleType: "none" | "cron" | "one_shot",
+    value: string | null,
+    enabled: boolean,
+  ): Promise<boolean> => {
+    try {
+      await invoke("set_run_group_schedule_command", {
+        groupName,
+        scheduleType,
+        value,
+        enabled,
+      });
+      await refresh();
+      return true;
+    } catch (error) {
+      presentDesktopError(
+        "Group Error",
+        "Could not update schedule",
+        "The desktop app could not save the workflow run group schedule.",
+        error,
+      );
+      return false;
+    }
+  };
+
   return {
     state,
     loading,
@@ -1200,5 +1381,14 @@ export function useDesktopConsole({
     getRecommendedProfile,
     applyProfile,
     applyFixes,
+    getRunGroups,
+    getGroupRuns,
+    createRunGroup,
+    addBlueprintToGroup,
+    deleteRunGroup,
+    setRunGroupSchedule,
+    runGroup,
+    stopGroup,
+    runDueGroups,
   };
 }

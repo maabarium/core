@@ -133,7 +133,11 @@ Use the native-tuned command only for local benchmarking or personal builds. Dis
 cargo run -p maabarium-cli -- run blueprints/example.toml --db data/maabarium.db
 ```
 
+For the experimental ChatGPT-backed local queue, see
+[Unattended subscription research lane](docs/SUBSCRIPTION_LANE.md).
+
 ### Inspect Recent Experiment History
+
 
 ```bash
 cargo run -p maabarium-cli -- status --db data/maabarium.db

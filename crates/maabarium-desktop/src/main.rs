@@ -10,7 +10,13 @@ use maabarium_core::blueprint::{
 };
 use maabarium_core::error::EngineError;
 use maabarium_core::git_manager::GitManager;
+use maabarium_core::group_runner::GroupRunner;
 use maabarium_core::persistence::PersistedExperiment;
+use maabarium_core::run_groups::{
+    ExecutionMode, GroupBlueprintEntry, GroupRun, GroupRunExperiment, RunGroup, ScheduleKind,
+    ScheduledRun,
+};
+use maabarium_core::telegram::TelegramConfig;
 use maabarium_core::{
     default_db_path, ensure_git_dependency, git_dependency_status, read_recent_log_lines_from_path,
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EnginePhase, EngineProgressUpdate,
@@ -19,7 +25,7 @@ use maabarium_core::{
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,6 +76,7 @@ struct AppState {
     log_path: PathBuf,
     cli_path: PathBuf,
     engine_cancel: Mutex<Option<CancellationToken>>,
+    group_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
     engine_running: Arc<AtomicBool>,
     run_state: Arc<Mutex<MutableRunState>>,
 }
@@ -294,6 +301,14 @@ struct DesktopRuntimePaths {
     cli_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupRunWithExperiments {
+    #[serde(flatten)]
+    group_run: GroupRun,
+    experiments: Vec<GroupRunExperiment>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConsoleState {
@@ -319,6 +334,9 @@ struct ConsoleState {
     experiments: Vec<PersistedExperiment>,
     proposals: Vec<PersistedProposal>,
     logs: Vec<String>,
+    run_groups: Vec<RunGroup>,
+    group_runs: Vec<GroupRunWithExperiments>,
+    telegram_config: Option<TelegramConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -549,6 +567,16 @@ fn main() {
             get_recommended_profile_command,
             apply_profile_command,
             apply_fixes_command,
+            get_run_groups,
+            get_group_runs,
+            create_run_group_command,
+            add_blueprint_to_group_command,
+            delete_run_group_command,
+            set_run_group_schedule_command,
+            run_group_command,
+            stop_group_command,
+            run_due_groups_command,
+            get_telegram_config_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -666,6 +694,7 @@ fn initialize_app_state(
         log_path: runtime_paths.log_path.clone(),
         cli_path: runtime_paths.cli_path.clone(),
         engine_cancel: Mutex::new(None),
+        group_cancels: Arc::new(Mutex::new(HashMap::new())),
         engine_running: Arc::new(AtomicBool::new(false)),
         run_state: Arc::new(Mutex::new(MutableRunState::default())),
     })
@@ -1600,6 +1629,41 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         }
     });
 
+    // Load run groups, group runs, and telegram config for the console
+    let persistence_handle = Persistence::open(&state.db_path.display().to_string()).ok();
+    let run_groups: Vec<RunGroup> = persistence_handle
+        .as_ref()
+        .and_then(|p| p.list_groups().ok())
+        .unwrap_or_default();
+    let group_runs: Vec<GroupRunWithExperiments> = persistence_handle
+        .as_ref()
+        .map(|p| {
+            run_groups
+                .iter()
+                .flat_map(|g| {
+                    p.list_group_runs(&g.name, 5)
+                        .ok()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(move |run| {
+                            let experiments = p
+                                .list_group_run_experiments(&run.id)
+                                .ok()
+                                .unwrap_or_default();
+                            GroupRunWithExperiments {
+                                group_run: run,
+                                experiments,
+                            }
+                        })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let telegram_config: Option<TelegramConfig> = persistence_handle
+        .as_ref()
+        .and_then(|p| p.telegram_get_config().ok())
+        .flatten();
+
     match blueprint_result {
         Ok(blueprint) => ConsoleState {
             engine_running: state.engine_running.load(Ordering::SeqCst),
@@ -1624,6 +1688,9 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             experiments,
             proposals,
             logs,
+            run_groups: run_groups.clone(),
+            group_runs: group_runs.clone(),
+            telegram_config: telegram_config.clone(),
         },
         Err(error) => ConsoleState {
             engine_running: state.engine_running.load(Ordering::SeqCst),
@@ -1648,6 +1715,9 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             experiments,
             proposals,
             logs,
+            run_groups,
+            group_runs,
+            telegram_config,
         },
     }
 }
@@ -1946,6 +2016,275 @@ fn empty_run_analytics() -> RunAnalytics {
         weekly: Vec::new(),
         monthly: Vec::new(),
     }
+}
+
+// ============== Group Management Tauri Commands ==============
+
+#[tauri::command]
+fn get_run_groups(state: tauri::State<'_, AppState>) -> Result<Vec<RunGroup>, String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .list_groups()
+        .map_err(|e| format!("List groups error: {e}"))
+}
+
+#[tauri::command]
+fn get_group_runs(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+) -> Result<Vec<GroupRunWithExperiments>, String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    let runs = persistence
+        .list_group_runs(&group_name, 10)
+        .map_err(|e| format!("List runs error: {e}"))?;
+    let with_experiments: Vec<GroupRunWithExperiments> = runs
+        .into_iter()
+        .map(|run| {
+            let experiments = persistence
+                .list_group_run_experiments(&run.id)
+                .unwrap_or_default();
+            GroupRunWithExperiments {
+                group_run: run,
+                experiments,
+            }
+        })
+        .collect();
+    Ok(with_experiments)
+}
+
+#[tauri::command]
+fn create_run_group_command(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    description: String,
+) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    let group = RunGroup {
+        name,
+        description,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        blueprints: vec![],
+        execution_mode: ExecutionMode::Sequential,
+        schedule: None,
+        telegram_enabled: true,
+    };
+    persistence
+        .create_group(&group)
+        .map_err(|e| format!("Create group error: {e}"))
+}
+
+#[tauri::command]
+fn add_blueprint_to_group_command(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+    blueprint_name: String,
+    blueprint_path: String,
+) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    let group = persistence
+        .get_group(&group_name)
+        .map_err(|e| format!("Get group error: {e}"))?
+        .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+    let entry = GroupBlueprintEntry {
+        blueprint_name,
+        blueprint_path,
+        sort_order: group.blueprints.len() as u32,
+        notifications_enabled: true,
+    };
+    persistence
+        .add_blueprint_to_group(&group_name, &entry)
+        .map_err(|e| format!("Add blueprint error: {e}"))
+}
+
+#[tauri::command]
+fn delete_run_group_command(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .delete_group(&name)
+        .map_err(|e| format!("Delete group error: {e}"))
+}
+
+#[tauri::command]
+fn set_run_group_schedule_command(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+    schedule_type: String,
+    value: Option<String>,
+    enabled: bool,
+) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .get_group(&group_name)
+        .map_err(|e| format!("Get group error: {e}"))?
+        .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+
+    let mut next_run_at = None;
+    let kind = match schedule_type.as_str() {
+        "none" => ScheduleKind::None,
+        "cron" => {
+            let expression = value.unwrap_or_default().trim().to_owned();
+            if expression.split_whitespace().count() != 5 {
+                return Err("Cron schedules must use a 5-field expression.".to_owned());
+            }
+            ScheduleKind::Cron { expression }
+        }
+        "one_shot" => {
+            let datetime = value.unwrap_or_default().trim().to_owned();
+            chrono::DateTime::parse_from_rfc3339(&datetime)
+                .map_err(|e| format!("One-shot schedule must be an RFC 3339 datetime: {e}"))?;
+            next_run_at = Some(datetime.clone());
+            ScheduleKind::OneShot { datetime }
+        }
+        other => return Err(format!("Unsupported schedule type '{other}'")),
+    };
+
+    let schedule = ScheduledRun {
+        enabled: enabled && !matches!(kind, ScheduleKind::None),
+        kind,
+        last_run_at: None,
+        next_run_at,
+    };
+    persistence
+        .update_group_schedule(&group_name, &schedule)
+        .map_err(|e| format!("Update schedule error: {e}"))
+}
+
+fn spawn_group_run(
+    db_path: String,
+    group_name: String,
+    mode: Option<String>,
+    group_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+) -> Result<(), String> {
+    {
+        let persistence = Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
+        let group = persistence
+            .get_group(&group_name)
+            .map_err(|e| format!("Get group error: {e}"))?
+            .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+        if group.blueprints.is_empty() {
+            return Err(format!("Group '{group_name}' has no blueprints to run"));
+        }
+    }
+    let cancel = CancellationToken::new();
+    {
+        let mut active = group_cancels
+            .lock()
+            .map_err(|_| "Group run tracker is unavailable".to_owned())?;
+        if active.contains_key(&group_name) {
+            return Err(format!("Group '{group_name}' is already running"));
+        }
+        active.insert(group_name.clone(), cancel.clone());
+    }
+
+    let tracker = group_cancels.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let persistence =
+                Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
+            let persistence = Arc::new(persistence);
+            let group = persistence
+                .get_group(&group_name)
+                .map_err(|e| format!("Get group error: {e}"))?
+                .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+
+            let force_mode = mode.and_then(|m| ExecutionMode::from_str(&m));
+            let runner = GroupRunner::new(persistence, db_path, cancel);
+            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("Runtime error: {e}"))?;
+            rt.block_on(async { runner.run_group(&group, force_mode).await })?;
+            Ok(())
+        })();
+
+        if let Ok(mut active) = tracker.lock() {
+            active.remove(&group_name);
+        }
+        if let Err(error) = result {
+            error!(%group_name, %error, "Workflow run group failed");
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn run_group_command(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+    mode: Option<String>,
+) -> Result<(), String> {
+    spawn_group_run(
+        state.db_path.display().to_string(),
+        group_name,
+        mode,
+        state.group_cancels.clone(),
+    )
+}
+
+#[tauri::command]
+fn stop_group_command(state: tauri::State<'_, AppState>, group_name: String) -> Result<(), String> {
+    let active = state
+        .group_cancels
+        .lock()
+        .map_err(|_| "Group run tracker is unavailable".to_owned())?;
+    let cancel = active
+        .get(&group_name)
+        .ok_or_else(|| format!("Group '{group_name}' is not running"))?;
+    cancel.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+fn run_due_groups_command(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    let db_path = state.db_path.display().to_string();
+    let persistence = Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
+    let now = chrono::Utc::now();
+    let groups = persistence
+        .list_groups()
+        .map_err(|e| format!("List groups error: {e}"))?;
+    let active = state
+        .group_cancels
+        .lock()
+        .map_err(|_| "Group run tracker is unavailable".to_owned())?
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    drop(persistence);
+
+    let mut started = Vec::new();
+    for group in groups {
+        if active.contains(&group.name) || group.blueprints.is_empty() {
+            continue;
+        }
+        let Some(schedule) = group.schedule.as_ref() else {
+            continue;
+        };
+        if !schedule.enabled || !schedule.kind.is_due(schedule.last_run_at.as_deref(), &now) {
+            continue;
+        }
+        spawn_group_run(
+            db_path.clone(),
+            group.name.clone(),
+            None,
+            state.group_cancels.clone(),
+        )?;
+        started.push(group.name);
+    }
+    Ok(started)
+}
+
+#[tauri::command]
+fn get_telegram_config_command(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<TelegramConfig>, String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .telegram_get_config()
+        .map_err(|e| format!("Get telegram config error: {e}"))
 }
 
 fn build_run_analytics(experiments: &[PersistedExperiment], log_path: &Path) -> RunAnalytics {
@@ -3499,6 +3838,7 @@ mod tests {
             log_path: PathBuf::from("data/maabarium.log"),
             cli_path: PathBuf::from("data/bin/maabarium"),
             engine_cancel: Mutex::new(None),
+            group_cancels: Arc::new(Mutex::new(HashMap::new())),
             engine_running: Arc::new(AtomicBool::new(false)),
             run_state: Arc::new(Mutex::new(MutableRunState::default())),
         }

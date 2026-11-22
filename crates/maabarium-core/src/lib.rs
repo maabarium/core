@@ -9,13 +9,16 @@ pub mod engine;
 pub mod error;
 pub mod evaluator;
 pub mod git_manager;
+pub mod group_runner;
 pub mod llm;
 pub mod logging;
 pub mod metrics;
 pub mod persistence;
+pub mod run_groups;
 pub mod runtime_dependencies;
 pub mod secrets;
 pub mod setup_wizard;
+pub mod telegram;
 pub mod updater;
 
 pub use blueprint::{

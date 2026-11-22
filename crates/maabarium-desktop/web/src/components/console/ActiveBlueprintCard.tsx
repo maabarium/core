@@ -13,6 +13,8 @@ export function ActiveBlueprintCard({
   onSelectBlueprint,
   onOpenBlueprintFile,
   onOpenBlueprintDirectory,
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   blueprintSummary: string;
   activeBlueprintOption: AvailableBlueprint | null;
@@ -22,9 +24,17 @@ export function ActiveBlueprintCard({
   onSelectBlueprint: () => void;
   onOpenBlueprintFile: () => void;
   onOpenBlueprintDirectory: () => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
   return (
-    <GlassCard title="Active Blueprint" icon={FileText}>
+    <GlassCard
+      title="Active Blueprint"
+      icon={FileText}
+      collapsible
+      collapsed={collapsed}
+      onToggleCollapsed={onToggleCollapsed}
+    >
       <div className="bg-slate-950/80 p-4 rounded-lg border border-white/5 border-l border-l-amber-400/35 font-mono text-[10px] text-slate-400 mb-4 leading-relaxed relative overflow-hidden whitespace-pre-wrap">
         <div className="absolute top-0 right-0 p-2 opacity-10">
           <Terminal size={40} />

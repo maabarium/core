@@ -8,11 +8,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- Workflow groups with sequential or parallel runs, schedules, history, and optional Telegram notifications.
+- An experimental local ChatGPT subscription lane with a durable queue and a macOS launch agent configuration.
 
 ### Changed
 
-- None.
+- Refreshed console typography and navigation, with safer inline group deletion.
+- Updated compatible Rust and desktop web dependencies.
+- Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin.
 
 ### Fixed
 

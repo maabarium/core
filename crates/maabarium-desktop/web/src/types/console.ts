@@ -435,6 +435,84 @@ export type AnalyticsRange = "daily" | "weekly" | "monthly";
 
 export type ConsoleTab = "history" | "diff" | "logs";
 
+export type ExecutionMode = "sequential" | "parallel";
+
+export type GroupRunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export type RunExperimentStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export type ScheduleKind =
+  | { type: "none" }
+  | { type: "cron"; expression: string }
+  | { type: "one_shot"; datetime: string };
+
+export type GroupBlueprintEntry = {
+  blueprintName: string;
+  blueprintPath: string;
+  sortOrder: number;
+  notificationsEnabled: boolean;
+};
+
+export type ScheduledRun = {
+  kind: ScheduleKind;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+};
+
+export type RunGroup = {
+  name: string;
+  description: string;
+  createdAt: string;
+  blueprints: GroupBlueprintEntry[];
+  executionMode: ExecutionMode;
+  schedule: ScheduledRun | null;
+  telegramEnabled: boolean;
+};
+
+export type GroupRun = {
+  id: string;
+  groupName: string;
+  executionMode: ExecutionMode;
+  startedAt: string | null;
+  completedAt: string | null;
+  status: GroupRunStatus;
+  summary: string | null;
+};
+
+export type GroupRunExperiment = {
+  id: number;
+  groupRunId: string;
+  experimentId: number | null;
+  blueprintName: string;
+  blueprintPath: string;
+  sortOrder: number;
+  status: RunExperimentStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+};
+
+export type GroupRunWithExperiments = GroupRun & {
+  experiments: GroupRunExperiment[];
+};
+
+export type TelegramConfig = {
+  botToken: string;
+  chatId: string;
+  enabled: boolean;
+  notifyOnStart: boolean;
+  notifyOnComplete: boolean;
+  notifyOnError: boolean;
+  notifyOnPromotion: boolean;
+  updatedAt: string;
+};
+
 export type HardwareSensorStatus = "live" | "partial" | "unavailable";
 
 export type HardwareSensor = {
@@ -558,6 +636,9 @@ export type ConsoleState = {
   experiments: PersistedExperiment[];
   proposals: PersistedProposal[];
   logs: string[];
+  runGroups: RunGroup[];
+  groupRuns: GroupRunWithExperiments[];
+  telegramConfig: TelegramConfig | null;
 };
 
 export type StartEngineRequest = {

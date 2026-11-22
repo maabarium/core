@@ -20,6 +20,7 @@ import { ConsoleEvidencePanel } from "./components/console/ConsoleEvidencePanel"
 import { ConsoleMaintenancePanel } from "./components/console/ConsoleMaintenancePanel";
 import { CouncilRosterCard } from "./components/console/CouncilRosterCard";
 import { DesktopSetupModal } from "./components/console/DesktopSetupModal";
+import { GroupRunPanel } from "./components/console/GroupRunPanel";
 import { MetricPanelCard } from "./components/console/MetricPanelCard";
 import { RunLoopModal } from "./components/console/RunLoopModal";
 import { WorkflowLibraryCard } from "./components/console/WorkflowLibraryCard";
@@ -210,6 +211,13 @@ export default function App() {
     getRecommendedProfile,
     applyProfile,
     applyFixes,
+    createRunGroup,
+    addBlueprintToGroup,
+    deleteRunGroup,
+    setRunGroupSchedule,
+    runGroup,
+    stopGroup,
+    runDueGroups,
   } = useDesktopConsole();
   const {
     blueprintQuery,
@@ -621,6 +629,7 @@ export default function App() {
       ) ?? null,
     [state],
   );
+
   const hardwareTelemetry = state?.hardwareTelemetry ?? null;
   const cpuSensor = hardwareTelemetry?.cpu ?? null;
   const activeBlueprintOption = useMemo(
@@ -720,6 +729,27 @@ export default function App() {
       return;
     }
 
+    void runDueGroups().then((started) => {
+      if (started.length > 0) {
+        setSuccessToast(`Started scheduled group: ${started.join(", ")}`);
+      }
+    });
+    const interval = window.setInterval(() => {
+      void runDueGroups().then((started) => {
+        if (started.length > 0) {
+          setSuccessToast(`Started scheduled group: ${started.join(", ")}`);
+        }
+      });
+    }, 30_000);
+
+    return () => window.clearInterval(interval);
+  }, [loading]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
     const latestPromotedExperiment = promotedSuccessfulExperiments[0] ?? null;
     if (!promotionToastStateRef.current.initialized) {
       promotionToastStateRef.current = {
@@ -807,25 +837,12 @@ export default function App() {
               return;
             }
 
-            const closeWindow = async () => {
-              event.preventDefault();
-              allowWindowCloseRef.current = true;
-
-              try {
-                await currentWindow.close();
-              } catch {
-                allowWindowCloseRef.current = false;
-                throw new Error("The desktop window could not be closed.");
-              }
-            };
-
             const flowRunning =
               Boolean(state?.engineRunning) ||
               runStatus === "running" ||
               runStatus === "stopping";
 
             if (!flowRunning) {
-              await closeWindow();
               return;
             }
 
@@ -861,7 +878,8 @@ export default function App() {
             }
 
             await stopEngine();
-            await closeWindow();
+            allowWindowCloseRef.current = true;
+            await currentWindow.destroy();
           },
         );
       } catch {
@@ -1105,7 +1123,7 @@ export default function App() {
   };
 
   const handleJumpToActiveWorkflow = () => {
-    scrollToSection("active-workflow-card");
+    scrollToSection("console-section");
   };
 
   const handleScrollToTop = () => {
@@ -1391,25 +1409,25 @@ export default function App() {
         </div>
       ) : null}
 
-      <nav className="sticky top-0 left-0 right-0 z-[100] border-b border-white/5 bg-[#0b1220]/88 py-4 backdrop-blur-2xl">
+      <nav aria-label="Research workspace" className="sticky top-0 left-0 right-0 z-[100] border-b border-white/10 bg-[#10151e]/95 py-3 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-8">
           <div className="flex items-center gap-3 cursor-default group">
             <img
               src={appLogo}
-              alt="Maabarium logo"
-              className="w-11 h-11 rounded-xl shadow-[0_0_20px_rgba(12,74,110,0.35)]"
+              alt=""
+              className="h-9 w-9 rounded-lg border border-white/10"
             />
             <div>
-              <span className="text-xl font-black tracking-tighter block leading-none">
-                MAABARIUM
+              <span className="block text-base font-semibold leading-tight tracking-tight">
+                Maabarium
               </span>
-              <span className="text-[10px] font-black text-slate-500 tracking-[0.28em] uppercase">
-                Research Lab
+              <span className="text-xs text-slate-400">
+                Research workspace
               </span>
             </div>
           </div>
 
-          <div className="hidden items-center gap-2 rounded-xl border border-white/5 bg-white/5 p-1 shadow-inner md:flex">
+          <div className="console-navigation flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
             <button
               onClick={handleScrollToTop}
               className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
@@ -1419,21 +1437,28 @@ export default function App() {
             </button>
             <button
               onClick={() => scrollToSection("console-section")}
-              className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] bg-gradient-to-r from-teal-500 to-amber-400 text-slate-950 shadow-[0_0_24px_rgba(45,212,191,0.22)]"
+              className="rounded-lg text-slate-300 transition hover:bg-white/10 hover:text-white"
               type="button"
             >
               Console
             </button>
             <button
+              onClick={() => scrollToSection("run-groups-section")}
+              className="px-5 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
+              type="button"
+            >
+              Groups
+            </button>
+            <button
               onClick={() => scrollToSection("blueprint-section")}
-              className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
+              className="px-5 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
               type="button"
             >
               Blueprints
             </button>
             <button
               onClick={() => scrollToSection("maintenance-section")}
-              className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
+              className="px-5 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
               type="button"
             >
               Maintenance
@@ -1443,19 +1468,16 @@ export default function App() {
           <button
             type="button"
             onClick={handleJumpToActiveWorkflow}
-            className="order-4 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left shadow-[0_0_24px_rgba(8,15,27,0.25)] transition hover:border-teal-300/30 hover:bg-white/[0.07] md:order-3 md:w-auto md:min-w-[18rem] md:max-w-[24rem]"
+            className="order-4 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left shadow-[0_0_24px_rgba(8,15,27,0.25)] transition hover:border-teal-300/30 hover:bg-white/[0.07] md:order-3 md:w-auto md:min-w-[14rem] md:max-w-[18rem]"
           >
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-teal-200">
+            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-teal-200">
               Active Workflow
             </div>
-            <div className="mt-1 truncate text-sm font-black tracking-[0.02em] text-white md:text-base">
+            <div className="mt-0.5 truncate text-sm font-black tracking-[0.02em] text-white">
               {activeWorkflowLabel}
             </div>
-            <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
+            <div className="mt-0.5 truncate text-[10px] text-slate-400">
               {activeWorkflowMeta ?? blueprintSummary}
-            </div>
-            <div className="mt-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
-              Jump to active workflow
             </div>
           </button>
 
@@ -1864,11 +1886,30 @@ export default function App() {
             </GlassCard>
           </section>
 
+          <section id="active-workflow-card" className="pt-2">
+            <ActiveBlueprintCard
+              blueprintSummary={blueprintSummary}
+              activeBlueprintOption={activeBlueprintOption}
+              engineRunning={Boolean(state?.engineRunning)}
+              collapsed={collapsedPanels.activeBlueprint}
+              onToggleCollapsed={() => toggleCollapsedPanel("activeBlueprint")}
+              onOpenBlueprintWizard={openBlueprintWizard}
+              onEditBlueprintWizard={() => {
+                if (activeBlueprintOption) {
+                  void handleEditBlueprintInWizard(activeBlueprintOption.path);
+                }
+              }}
+              onSelectBlueprint={() => void selectBlueprint()}
+              onOpenBlueprintFile={() => void openBlueprintFile()}
+              onOpenBlueprintDirectory={() => void openBlueprintDirectory()}
+            />
+          </section>
+
           <section
             id="console-section"
-            className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+            className="grid grid-cols-1 gap-6"
           >
-            <div className="lg:col-span-9 flex flex-col gap-6 lg:h-full">
+            <div className="flex flex-col gap-6 lg:h-full">
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
                 <MetricPanelCard metricPanel={metricPanel} />
                 <CouncilRosterCard
@@ -1918,27 +1959,69 @@ export default function App() {
                 latestLoraExperiment={latestLoraExperiment}
               />
             </div>
+          </section>
 
-            <div className="lg:col-span-3 space-y-6 self-start pb-2">
-              <div id="active-workflow-card">
-                <ActiveBlueprintCard
-                  blueprintSummary={blueprintSummary}
-                  activeBlueprintOption={activeBlueprintOption}
-                  engineRunning={Boolean(state?.engineRunning)}
-                  onOpenBlueprintWizard={openBlueprintWizard}
-                  onEditBlueprintWizard={() => {
-                    if (activeBlueprintOption) {
-                      void handleEditBlueprintInWizard(
-                        activeBlueprintOption.path,
-                      );
-                    }
-                  }}
-                  onSelectBlueprint={() => void selectBlueprint()}
-                  onOpenBlueprintFile={() => void openBlueprintFile()}
-                  onOpenBlueprintDirectory={() => void openBlueprintDirectory()}
-                />
-              </div>
-            </div>
+          <section id="run-groups-section" className="pt-2">
+            <GroupRunPanel
+              groups={state?.runGroups ?? []}
+              groupRuns={state?.groupRuns ?? []}
+              experiments={state?.experiments ?? []}
+              telegramConfig={state?.telegramConfig ?? null}
+              availableBlueprints={state?.availableBlueprints ?? []}
+              defaultBlueprintName={
+                activeBlueprintOption?.displayName ??
+                state?.blueprint?.blueprint.name ??
+                ""
+              }
+              defaultBlueprintPath={
+                activeBlueprintOption?.path ?? state?.blueprintPath ?? ""
+              }
+              collapsed={collapsedPanels.runGroups}
+              onToggleCollapsed={() => toggleCollapsedPanel("runGroups")}
+              onCreateGroup={(name, description) =>
+                void createRunGroup(name, description)
+              }
+              onAddBlueprint={(groupName, blueprintName, blueprintPath) =>
+                void addBlueprintToGroup(
+                  groupName,
+                  blueprintName,
+                  blueprintPath,
+                )
+              }
+              onRunGroup={(groupName, mode) => {
+                void (async () => {
+                  const started = await runGroup(groupName, mode);
+                  if (started) {
+                    setSuccessToast(`Started workflow run group: ${groupName}`);
+                  }
+                })();
+              }}
+              onStopGroup={(groupName) => {
+                void (async () => {
+                  const stopped = await stopGroup(groupName);
+                  if (stopped) {
+                    setSuccessToast(`Stopping workflow run group: ${groupName}`);
+                  }
+                })();
+              }}
+              onDeleteGroup={(groupName) => {
+                if (
+                  window.confirm(
+                    `Delete workflow run group "${groupName}"?`,
+                  )
+                ) {
+                  void deleteRunGroup(groupName);
+                }
+              }}
+              onSetSchedule={(groupName, scheduleType, value, enabled) =>
+                void setRunGroupSchedule(
+                  groupName,
+                  scheduleType,
+                  value,
+                  enabled,
+                )
+              }
+            />
           </section>
 
           <section id="blueprint-section" className="pt-2">

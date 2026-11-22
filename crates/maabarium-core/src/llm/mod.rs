@@ -213,6 +213,7 @@ pub fn provider_from_model(model: &ModelDef) -> Result<Arc<dyn LLMProvider>, Sec
             let api_key =
                 secret_store.resolve_api_key(&provider_name, model.api_key_env.as_deref())?;
             Ok(Arc::new(OpenAICompatProvider::new(
+                provider_name,
                 model.endpoint.clone(),
                 model.name.clone(),
                 api_key,
@@ -497,7 +498,7 @@ mod tests {
         with_test_provider_key(|| {
             let provider = provider_from_model(&test_model("xai")).expect("xai should resolve");
 
-            assert_eq!(provider.provider_name(), "openai-compat");
+            assert_eq!(provider.provider_name(), "xai");
             assert_eq!(provider.model_name(), "test-model");
         });
     }

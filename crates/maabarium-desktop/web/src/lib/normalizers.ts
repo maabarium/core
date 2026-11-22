@@ -13,6 +13,35 @@ import type {
   ResearchArtifacts,
 } from "../types/console";
 
+type LooseRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): LooseRecord {
+  return value && typeof value === "object" ? (value as LooseRecord) : {};
+}
+
+function stringField(record: LooseRecord, camel: string, snake = camel): string {
+  const value = record[camel] ?? record[snake];
+  return typeof value === "string" ? value : "";
+}
+
+function nullableStringField(
+  record: LooseRecord,
+  camel: string,
+  snake = camel,
+): string | null {
+  const value = record[camel] ?? record[snake];
+  return typeof value === "string" ? value : null;
+}
+
+function numberField(record: LooseRecord, camel: string, snake = camel): number {
+  const value = record[camel] ?? record[snake];
+  return typeof value === "number" ? value : 0;
+}
+
+function booleanField(record: LooseRecord, camel: string, snake = camel): boolean {
+  return Boolean(record[camel] ?? record[snake]);
+}
+
 function normalizeBlueprintFile(
   blueprint: BlueprintFile | null | undefined,
 ): BlueprintFile | null {
@@ -531,6 +560,142 @@ function normalizeOllamaStatus(
   };
 }
 
+function normalizeScheduleKind(
+  kind: unknown,
+): NonNullable<ConsoleState["runGroups"][number]["schedule"]>["kind"] {
+  const record = asRecord(kind);
+  if (!kind || kind === "none" || record.type === "none") {
+    return { type: "none" };
+  }
+  if (record.type === "cron") {
+    return { type: "cron", expression: stringField(record, "expression") };
+  }
+  if (record.type === "one_shot") {
+    return { type: "one_shot", datetime: stringField(record, "datetime") };
+  }
+  const cron = asRecord(record.cron);
+  if (record.cron) {
+    return { type: "cron", expression: stringField(cron, "expression") };
+  }
+  const oneShot = asRecord(record.one_shot ?? record.oneShot);
+  if (record.one_shot || record.oneShot) {
+    return { type: "one_shot", datetime: stringField(oneShot, "datetime") };
+  }
+  return { type: "none" };
+}
+
+function normalizeRunGroups(
+  groups: ConsoleState["runGroups"],
+): ConsoleState["runGroups"] {
+  return Array.isArray(groups)
+    ? groups.map((group) => {
+        const g = asRecord(group);
+        const schedule = asRecord(g.schedule);
+        return {
+        name: stringField(g, "name"),
+        description: stringField(g, "description"),
+        createdAt: stringField(g, "createdAt", "created_at"),
+        blueprints: Array.isArray(g.blueprints)
+          ? g.blueprints.map((blueprint) => {
+              const bp = asRecord(blueprint);
+              return {
+              blueprintName: stringField(bp, "blueprintName", "blueprint_name"),
+              blueprintPath: stringField(bp, "blueprintPath", "blueprint_path"),
+              sortOrder: numberField(bp, "sortOrder", "sort_order"),
+              notificationsEnabled: booleanField(
+                bp,
+                "notificationsEnabled",
+                "notifications_enabled",
+              ),
+            };
+            })
+          : [],
+        executionMode:
+          (g.executionMode ?? g.execution_mode) === "parallel" ? "parallel" : "sequential",
+        schedule: g.schedule
+          ? {
+              kind: normalizeScheduleKind(schedule.kind),
+              enabled: booleanField(schedule, "enabled"),
+              lastRunAt: nullableStringField(schedule, "lastRunAt", "last_run_at"),
+              nextRunAt: nullableStringField(schedule, "nextRunAt", "next_run_at"),
+            }
+          : null,
+        telegramEnabled: booleanField(g, "telegramEnabled", "telegram_enabled"),
+      };
+      })
+    : [];
+}
+
+function normalizeGroupRuns(
+  runs: ConsoleState["groupRuns"],
+): ConsoleState["groupRuns"] {
+  return Array.isArray(runs)
+    ? runs.map((run) => {
+      const r = asRecord(run);
+      return {
+        id: stringField(r, "id"),
+        groupName: stringField(r, "groupName", "group_name"),
+        executionMode:
+          (r.executionMode ?? r.execution_mode) === "parallel" ? "parallel" : "sequential",
+        startedAt: nullableStringField(r, "startedAt", "started_at"),
+        completedAt: nullableStringField(r, "completedAt", "completed_at"),
+        status:
+          r.status === "pending" ||
+          r.status === "running" ||
+          r.status === "completed" ||
+          r.status === "failed" ||
+          r.status === "cancelled"
+            ? r.status
+            : "pending",
+        summary: nullableStringField(r, "summary"),
+        experiments: Array.isArray(r.experiments)
+          ? r.experiments.map((experiment) => {
+              const exp = asRecord(experiment);
+              const experimentId = exp.experimentId ?? exp.experiment_id;
+              return {
+              id: numberField(exp, "id"),
+              groupRunId: stringField(exp, "groupRunId", "group_run_id"),
+              experimentId: typeof experimentId === "number" ? experimentId : null,
+              blueprintName: stringField(exp, "blueprintName", "blueprint_name"),
+              blueprintPath: stringField(exp, "blueprintPath", "blueprint_path"),
+              sortOrder: numberField(exp, "sortOrder", "sort_order"),
+              status:
+                exp.status === "pending" ||
+                exp.status === "running" ||
+                exp.status === "completed" ||
+                exp.status === "failed" ||
+                exp.status === "skipped"
+                  ? exp.status
+                  : "pending",
+              startedAt: nullableStringField(exp, "startedAt", "started_at"),
+              completedAt: nullableStringField(exp, "completedAt", "completed_at"),
+              error: nullableStringField(exp, "error"),
+            };
+            })
+          : [],
+      };
+      })
+    : [];
+}
+
+function normalizeTelegramConfig(
+  config: ConsoleState["telegramConfig"],
+): ConsoleState["telegramConfig"] {
+  if (!config) {
+    return null;
+  }
+  return {
+    botToken: config.botToken ?? "",
+    chatId: config.chatId ?? "",
+    enabled: Boolean(config.enabled),
+    notifyOnStart: Boolean(config.notifyOnStart),
+    notifyOnComplete: Boolean(config.notifyOnComplete),
+    notifyOnError: Boolean(config.notifyOnError),
+    notifyOnPromotion: Boolean(config.notifyOnPromotion),
+    updatedAt: config.updatedAt ?? "",
+  };
+}
+
 function normalizePromotionOutcome(
   outcome: string | null | undefined,
 ): "unknown" | "promoted" | "rejected" | "cancelled" | "promotion_failed" {
@@ -661,5 +826,8 @@ export function normalizeConsoleState(snapshot: ConsoleState): ConsoleState {
       : [],
     proposals: Array.isArray(snapshot.proposals) ? snapshot.proposals : [],
     logs: Array.isArray(snapshot.logs) ? snapshot.logs : [],
+    runGroups: normalizeRunGroups(snapshot.runGroups),
+    groupRuns: normalizeGroupRuns(snapshot.groupRuns),
+    telegramConfig: normalizeTelegramConfig(snapshot.telegramConfig),
   };
 }

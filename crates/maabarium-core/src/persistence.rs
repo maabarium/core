@@ -11,6 +11,11 @@ use crate::evaluator::{
     ResearchQueryTrace, ResearchSource,
 };
 use crate::git_manager::FilePatch;
+use crate::run_groups::{
+    ExecutionMode, GroupBlueprintEntry, GroupRun, GroupRunExperiment, GroupRunStatus,
+    RunExperimentStatus, RunGroup,
+};
+use crate::telegram::TelegramConfig;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -166,6 +171,73 @@ impl Persistence {
                 metadata_json TEXT NOT NULL,
                 FOREIGN KEY (experiment_id) REFERENCES experiments(id)
             );
+            CREATE TABLE IF NOT EXISTS run_groups (
+                name TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                execution_mode TEXT NOT NULL DEFAULT 'sequential',
+                schedule_type TEXT NOT NULL DEFAULT 'none',
+                schedule_cron TEXT,
+                schedule_datetime TEXT,
+                schedule_enabled INTEGER NOT NULL DEFAULT 0,
+                schedule_last_run_at TEXT,
+                schedule_next_run_at TEXT,
+                telegram_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS group_blueprints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name TEXT NOT NULL,
+                blueprint_name TEXT NOT NULL,
+                blueprint_path TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                notifications_enabled INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (group_name) REFERENCES run_groups(name) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS group_runs (
+                id TEXT PRIMARY KEY,
+                group_name TEXT NOT NULL,
+                execution_mode TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                summary TEXT,
+                FOREIGN KEY (group_name) REFERENCES run_groups(name)
+            );
+            CREATE TABLE IF NOT EXISTS group_run_experiments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_run_id TEXT NOT NULL,
+                experiment_id INTEGER,
+                blueprint_name TEXT NOT NULL,
+                blueprint_path TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT,
+                completed_at TEXT,
+                error TEXT,
+                FOREIGN KEY (group_run_id) REFERENCES group_runs(id),
+                FOREIGN KEY (experiment_id) REFERENCES experiments(id)
+            );
+            CREATE TABLE IF NOT EXISTS telegram_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                bot_token TEXT NOT NULL DEFAULT '',
+                chat_id TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                notify_on_start INTEGER NOT NULL DEFAULT 1,
+                notify_on_complete INTEGER NOT NULL DEFAULT 1,
+                notify_on_error INTEGER NOT NULL DEFAULT 1,
+                notify_on_promotion INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS telegram_notification_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                target TEXT NOT NULL,
+                experiment_id INTEGER,
+                group_run_id TEXT,
+                message TEXT NOT NULL,
+                sent_at TEXT NOT NULL,
+                success INTEGER NOT NULL DEFAULT 1
+            );
             CREATE INDEX IF NOT EXISTS idx_experiments_blueprint_success_score
                 ON experiments (blueprint_name, weighted_total DESC)
                 WHERE error IS NULL;
@@ -200,6 +272,14 @@ impl Persistence {
         );
         let _ = conn.execute(
             "ALTER TABLE experiments ADD COLUMN promoted_target_branch_name TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_groups ADD COLUMN schedule_last_run_at TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_groups ADD COLUMN schedule_next_run_at TEXT",
             [],
         );
         Ok(Self { conn })
@@ -976,6 +1056,598 @@ impl Persistence {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(error) => Err(PersistError::Sqlite(error)),
         }
+    }
+
+    // ============== Run Group CRUD ==============
+
+    /// Create a new run group.
+    pub fn create_group(&self, group: &RunGroup) -> Result<(), PersistError> {
+        let schedule_type = group
+            .schedule
+            .as_ref()
+            .map(|s| s.kind.as_db_type())
+            .unwrap_or("none");
+        let (schedule_cron, schedule_datetime) = match group.schedule.as_ref().map(|s| &s.kind) {
+            Some(crate::run_groups::ScheduleKind::Cron { expression }) => {
+                (Some(expression.as_str()), None)
+            }
+            Some(crate::run_groups::ScheduleKind::OneShot { datetime }) => {
+                (None, Some(datetime.as_str()))
+            }
+            _ => (None, None),
+        };
+        let schedule_enabled = group
+            .schedule
+            .as_ref()
+            .map(|s| if s.enabled { 1_i64 } else { 0_i64 })
+            .unwrap_or(0);
+        let execution_mode = group.execution_mode.as_str();
+        let telegram_enabled = if group.telegram_enabled { 1_i64 } else { 0_i64 };
+        self.conn.execute(
+            "INSERT INTO run_groups (name, description, execution_mode, schedule_type, schedule_cron, schedule_datetime, schedule_enabled, telegram_enabled, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                group.name,
+                group.description,
+                execution_mode,
+                schedule_type,
+                schedule_cron,
+                schedule_datetime,
+                schedule_enabled,
+                telegram_enabled,
+                group.created_at,
+            ],
+        )?;
+        for blueprint in &group.blueprints {
+            self.add_blueprint_to_group(&group.name, blueprint)?;
+        }
+        Ok(())
+    }
+
+    /// Add a blueprint to an existing group.
+    pub fn add_blueprint_to_group(
+        &self,
+        group_name: &str,
+        entry: &GroupBlueprintEntry,
+    ) -> Result<(), PersistError> {
+        let notifications = if entry.notifications_enabled {
+            1_i64
+        } else {
+            0_i64
+        };
+        self.conn.execute(
+            "INSERT INTO group_blueprints (group_name, blueprint_name, blueprint_path, sort_order, notifications_enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                group_name,
+                entry.blueprint_name,
+                entry.blueprint_path,
+                entry.sort_order as i64,
+                notifications,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// List all run groups.
+    pub fn list_groups(&self) -> Result<Vec<RunGroup>, PersistError> {
+        use crate::run_groups::ScheduleKind;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT name, description, execution_mode, schedule_type, schedule_cron, schedule_datetime, schedule_enabled, telegram_enabled, created_at, schedule_last_run_at, schedule_next_run_at
+             FROM run_groups
+             ORDER BY name ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+            ))
+        })?;
+
+        let mut groups = Vec::new();
+        for row in rows {
+            let (
+                name,
+                description,
+                exec_mode_str,
+                sched_type,
+                cron,
+                datetime,
+                sched_enabled,
+                telegram,
+                created_at,
+                last_run_at,
+                next_run_at,
+            ) = row?;
+            let execution_mode =
+                ExecutionMode::from_str(&exec_mode_str).unwrap_or(ExecutionMode::Sequential);
+            let kind = match sched_type.as_str() {
+                "cron" => {
+                    let expr = cron.unwrap_or_default();
+                    ScheduleKind::Cron { expression: expr }
+                }
+                "one_shot" => {
+                    let dt = datetime.unwrap_or_default();
+                    ScheduleKind::OneShot { datetime: dt }
+                }
+                _ => ScheduleKind::None,
+            };
+            let schedule = if !matches!(kind, ScheduleKind::None) {
+                Some(crate::run_groups::ScheduledRun {
+                    kind,
+                    enabled: sched_enabled != 0,
+                    last_run_at,
+                    next_run_at,
+                })
+            } else {
+                None
+            };
+            let blueprints = self.list_group_blueprints(&name)?;
+            groups.push(RunGroup {
+                name,
+                description,
+                execution_mode,
+                blueprints,
+                schedule,
+                telegram_enabled: telegram != 0,
+                created_at,
+            });
+        }
+        Ok(groups)
+    }
+
+    /// Get a single group by name.
+    pub fn get_group(&self, name: &str) -> Result<Option<RunGroup>, PersistError> {
+        use crate::run_groups::ScheduleKind;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT name, description, execution_mode, schedule_type, schedule_cron, schedule_datetime, schedule_enabled, telegram_enabled, created_at, schedule_last_run_at, schedule_next_run_at
+             FROM run_groups
+             WHERE name = ?1",
+        )?;
+        let mut rows = stmt.query(params![name])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let name: String = row.get(0)?;
+        let description: String = row.get(1)?;
+        let exec_mode_str: String = row.get(2)?;
+        let sched_type: String = row.get(3)?;
+        let cron: Option<String> = row.get(4)?;
+        let datetime: Option<String> = row.get(5)?;
+        let sched_enabled: i64 = row.get(6)?;
+        let telegram: i64 = row.get(7)?;
+        let created_at: String = row.get(8)?;
+        let last_run_at: Option<String> = row.get(9)?;
+        let next_run_at: Option<String> = row.get(10)?;
+
+        let execution_mode =
+            ExecutionMode::from_str(&exec_mode_str).unwrap_or(ExecutionMode::Sequential);
+        let kind = match sched_type.as_str() {
+            "cron" => {
+                let expr = cron.unwrap_or_default();
+                ScheduleKind::Cron { expression: expr }
+            }
+            "one_shot" => {
+                let dt = datetime.unwrap_or_default();
+                ScheduleKind::OneShot { datetime: dt }
+            }
+            _ => ScheduleKind::None,
+        };
+        let schedule = if !matches!(kind, ScheduleKind::None) {
+            Some(crate::run_groups::ScheduledRun {
+                kind,
+                enabled: sched_enabled != 0,
+                last_run_at,
+                next_run_at,
+            })
+        } else {
+            None
+        };
+        let blueprints = self.list_group_blueprints(&name)?;
+        Ok(Some(RunGroup {
+            name,
+            description,
+            execution_mode,
+            blueprints,
+            schedule,
+            telegram_enabled: telegram != 0,
+            created_at,
+        }))
+    }
+
+    /// List blueprints for a group.
+    fn list_group_blueprints(
+        &self,
+        group_name: &str,
+    ) -> Result<Vec<GroupBlueprintEntry>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT blueprint_name, blueprint_path, sort_order, notifications_enabled
+             FROM group_blueprints
+             WHERE group_name = ?1
+             ORDER BY sort_order ASC",
+        )?;
+        let rows = stmt.query_map(params![group_name], |row| {
+            Ok(GroupBlueprintEntry {
+                blueprint_name: row.get(0)?,
+                blueprint_path: row.get(1)?,
+                sort_order: row.get::<_, i64>(2)? as u32,
+                notifications_enabled: row.get::<_, i64>(3)? != 0,
+            })
+        })?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
+    /// Remove a blueprint from a group.
+    pub fn remove_blueprint_from_group(
+        &self,
+        group_name: &str,
+        blueprint_name: &str,
+    ) -> Result<(), PersistError> {
+        self.conn.execute(
+            "DELETE FROM group_blueprints WHERE group_name = ?1 AND blueprint_name = ?2",
+            params![group_name, blueprint_name],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a group entirely.
+    pub fn delete_group(&self, name: &str) -> Result<(), PersistError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let active: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM group_runs WHERE group_name = ?1 AND status IN ('pending', 'running'))",
+            params![name],
+            |row| row.get(0),
+        )?;
+        if active {
+            return Err(PersistError::GroupActive);
+        }
+        tx.execute(
+            "DELETE FROM group_run_experiments WHERE group_run_id IN (SELECT id FROM group_runs WHERE group_name = ?1)",
+            params![name],
+        )?;
+        tx.execute(
+            "DELETE FROM group_runs WHERE group_name = ?1",
+            params![name],
+        )?;
+        tx.execute(
+            "DELETE FROM group_blueprints WHERE group_name = ?1",
+            params![name],
+        )?;
+        tx.execute("DELETE FROM run_groups WHERE name = ?1", params![name])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Update group execution mode.
+    pub fn update_group_execution_mode(
+        &self,
+        name: &str,
+        mode: ExecutionMode,
+    ) -> Result<(), PersistError> {
+        self.conn.execute(
+            "UPDATE run_groups SET execution_mode = ?1 WHERE name = ?2",
+            params![mode.as_str(), name],
+        )?;
+        Ok(())
+    }
+
+    /// Update group schedule.
+    pub fn update_group_schedule(
+        &self,
+        name: &str,
+        schedule: &crate::run_groups::ScheduledRun,
+    ) -> Result<(), PersistError> {
+        use crate::run_groups::ScheduleKind;
+
+        let schedule_type = schedule.kind.as_db_type();
+        let (schedule_cron, schedule_datetime) = match &schedule.kind {
+            ScheduleKind::Cron { expression } => (Some(expression.as_str()), None::<&str>),
+            ScheduleKind::OneShot { datetime } => (None, Some(datetime.as_str())),
+            ScheduleKind::None => (None, None),
+        };
+        let enabled_int = if schedule.enabled { 1_i64 } else { 0_i64 };
+        self.conn.execute(
+            "UPDATE run_groups SET schedule_type = ?1, schedule_cron = ?2, schedule_datetime = ?3, schedule_enabled = ?4, schedule_last_run_at = ?5, schedule_next_run_at = ?6 WHERE name = ?7",
+            params![
+                schedule_type,
+                schedule_cron,
+                schedule_datetime,
+                enabled_int,
+                schedule.last_run_at,
+                schedule.next_run_at,
+                name
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_group_schedule_run(
+        &self,
+        name: &str,
+        last_run_at: &str,
+        next_run_at: Option<&str>,
+    ) -> Result<(), PersistError> {
+        self.conn.execute(
+            "UPDATE run_groups SET schedule_last_run_at = ?1, schedule_next_run_at = ?2 WHERE name = ?3",
+            params![last_run_at, next_run_at, name],
+        )?;
+        Ok(())
+    }
+
+    // ============== Group Run CRUD ==============
+
+    /// Create a new group run record.
+    pub fn create_group_run(&self, group_run: &GroupRun) -> Result<(), PersistError> {
+        let mode = group_run.execution_mode.as_str();
+        let status = group_run.status.as_str();
+        self.conn.execute(
+            "INSERT INTO group_runs (id, group_name, execution_mode, started_at, completed_at, status, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                group_run.id,
+                group_run.group_name,
+                mode,
+                group_run.started_at,
+                group_run.completed_at,
+                status,
+                group_run.summary,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Update a group run's status.
+    pub fn update_group_run_status(
+        &self,
+        run_id: &str,
+        status: GroupRunStatus,
+        completed_at: Option<&str>,
+        summary: Option<&str>,
+    ) -> Result<(), PersistError> {
+        let status_str = status.as_str();
+        self.conn.execute(
+            "UPDATE group_runs SET status = ?1, completed_at = COALESCE(?2, completed_at), summary = COALESCE(?3, summary) WHERE id = ?4",
+            params![status_str, completed_at, summary, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get a group run by ID.
+    pub fn get_group_run(&self, run_id: &str) -> Result<Option<GroupRun>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, group_name, execution_mode, started_at, completed_at, status, summary
+             FROM group_runs
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![run_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(GroupRun {
+            id: row.get(0)?,
+            group_name: row.get(1)?,
+            execution_mode: ExecutionMode::from_str(&row.get::<_, String>(2)?)
+                .unwrap_or(ExecutionMode::Sequential),
+            started_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            status: GroupRunStatus::from_str(&row.get::<_, String>(5)?),
+            summary: row.get(6)?,
+        }))
+    }
+
+    /// List group runs for a group.
+    pub fn list_group_runs(
+        &self,
+        group_name: &str,
+        limit: usize,
+    ) -> Result<Vec<GroupRun>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, group_name, execution_mode, started_at, completed_at, status, summary
+             FROM group_runs
+             WHERE group_name = ?1
+             ORDER BY started_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![group_name, limit as i64], |row| {
+            Ok(GroupRun {
+                id: row.get(0)?,
+                group_name: row.get(1)?,
+                execution_mode: ExecutionMode::from_str(&row.get::<_, String>(2)?)
+                    .unwrap_or(ExecutionMode::Sequential),
+                started_at: row.get(3)?,
+                completed_at: row.get(4)?,
+                status: GroupRunStatus::from_str(&row.get::<_, String>(5)?),
+                summary: row.get(6)?,
+            })
+        })?;
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(row?);
+        }
+        Ok(runs)
+    }
+
+    /// Create a group run experiment record.
+    pub fn create_group_run_experiment(
+        &self,
+        entry: &GroupRunExperiment,
+    ) -> Result<i64, PersistError> {
+        let status = entry.status.as_str();
+        self.conn.execute(
+            "INSERT INTO group_run_experiments (group_run_id, experiment_id, blueprint_name, blueprint_path, sort_order, status, started_at, completed_at, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                entry.group_run_id,
+                entry.experiment_id,
+                entry.blueprint_name,
+                entry.blueprint_path,
+                entry.sort_order as i64,
+                status,
+                entry.started_at,
+                entry.completed_at,
+                entry.error,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Update a group run experiment's status.
+    pub fn update_group_run_experiment(
+        &self,
+        id: i64,
+        status: RunExperimentStatus,
+        experiment_id: Option<i64>,
+        completed_at: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<(), PersistError> {
+        let status_str = status.as_str();
+        self.conn.execute(
+            "UPDATE group_run_experiments SET status = ?1, experiment_id = COALESCE(?2, experiment_id), completed_at = COALESCE(?3, completed_at), error = COALESCE(?4, error) WHERE id = ?5",
+            params![status_str, experiment_id, completed_at, error, id],
+        )?;
+        Ok(())
+    }
+
+    /// List experiments for a group run.
+    pub fn list_group_run_experiments(
+        &self,
+        group_run_id: &str,
+    ) -> Result<Vec<GroupRunExperiment>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, group_run_id, experiment_id, blueprint_name, blueprint_path, sort_order, status, started_at, completed_at, error
+             FROM group_run_experiments
+             WHERE group_run_id = ?1
+             ORDER BY sort_order ASC",
+        )?;
+        let rows = stmt.query_map(params![group_run_id], |row| {
+            Ok(GroupRunExperiment {
+                id: row.get(0)?,
+                group_run_id: row.get(1)?,
+                experiment_id: row.get(2)?,
+                blueprint_name: row.get(3)?,
+                blueprint_path: row.get(4)?,
+                sort_order: row.get::<_, i64>(5)? as u32,
+                status: RunExperimentStatus::from_str(&row.get::<_, String>(6)?),
+                started_at: row.get(7)?,
+                completed_at: row.get(8)?,
+                error: row.get(9)?,
+            })
+        })?;
+        let mut experiments = Vec::new();
+        for row in rows {
+            experiments.push(row?);
+        }
+        Ok(experiments)
+    }
+
+    // ============== Telegram Config CRUD ==============
+
+    /// Get the Telegram config (singleton).
+    pub fn telegram_get_config(&self) -> Result<Option<TelegramConfig>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT chat_id, enabled, notify_on_start, notify_on_complete, notify_on_error, notify_on_promotion, updated_at
+             FROM telegram_config
+             WHERE id = 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let chat_id: String = row.get(0)?;
+        let enabled = row.get::<_, i64>(1)? != 0;
+        let bot_token = if enabled {
+            match keyring::Entry::new("org.maabarium.telegram", &chat_id)
+                .and_then(|entry| entry.get_password())
+            {
+                Ok(token) => token,
+                Err(keyring::Error::NoEntry) => String::new(),
+                Err(error) => return Err(PersistError::TelegramKeychain(error)),
+            }
+        } else {
+            String::new()
+        };
+        Ok(Some(TelegramConfig {
+            bot_token,
+            chat_id,
+            enabled,
+            notify_on_start: row.get::<_, i64>(2)? != 0,
+            notify_on_complete: row.get::<_, i64>(3)? != 0,
+            notify_on_error: row.get::<_, i64>(4)? != 0,
+            notify_on_promotion: row.get::<_, i64>(5)? != 0,
+            updated_at: row.get(6)?,
+        }))
+    }
+
+    /// Set the Telegram config (upsert).
+    pub fn telegram_set_config(&self, config: &TelegramConfig) -> Result<(), PersistError> {
+        if !config.bot_token.is_empty() {
+            keyring::Entry::new("org.maabarium.telegram", &config.chat_id)
+                .and_then(|entry| entry.set_password(&config.bot_token))
+                .map_err(PersistError::TelegramKeychain)?;
+        }
+        let enabled = if config.enabled { 1_i64 } else { 0_i64 };
+        let on_start = if config.notify_on_start { 1_i64 } else { 0_i64 };
+        let on_complete = if config.notify_on_complete {
+            1_i64
+        } else {
+            0_i64
+        };
+        let on_error = if config.notify_on_error { 1_i64 } else { 0_i64 };
+        let on_promotion = if config.notify_on_promotion {
+            1_i64
+        } else {
+            0_i64
+        };
+        self.conn.execute(
+            "INSERT OR REPLACE INTO telegram_config (id, bot_token, chat_id, enabled, notify_on_start, notify_on_complete, notify_on_error, notify_on_promotion, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "",
+                config.chat_id,
+                enabled,
+                on_start,
+                on_complete,
+                on_error,
+                on_promotion,
+                config.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Log a sent notification.
+    pub fn telegram_log_notification(
+        &self,
+        event_type: &str,
+        target: &str,
+        experiment_id: Option<i64>,
+        group_run_id: Option<&str>,
+        message: &str,
+        success: bool,
+    ) -> Result<(), PersistError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let success_int = if success { 1_i64 } else { 0_i64 };
+        self.conn.execute(
+            "INSERT INTO telegram_notification_log (event_type, target, experiment_id, group_run_id, message, sent_at, success)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![event_type, target, experiment_id, group_run_id, message, now, success_int],
+        )?;
+        Ok(())
     }
 }
 
