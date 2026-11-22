@@ -2,15 +2,19 @@
 """Bounded local queue for a ChatGPT-backed public research lane."""
 
 import argparse
+from datetime import datetime
 import fcntl
 import json
 import os
 from pathlib import Path
 import plistlib
+import re
+import select
 import shutil
 import signal
 import sqlite3
 import subprocess
+import tempfile
 import time
 import sys
 
@@ -23,149 +27,251 @@ PROMPT = (
 )
 MAX_ATTEMPTS = 4
 CHILD_TIMEOUT = 120
-# A child still running this long after its deadline lost its worker (for
-# example the worker was killed) and is stopped by the next tick.
-ORPHAN_GRACE = 30
-MAX_REPLY_BYTES = 16384
+LANES = ("codex", "claude", "antigravity", "muse")
+OPT_IN_LANES = ("claude", "antigravity", "muse")
+GUARD = """import os, signal, subprocess, sys
+try:
+    child = subprocess.Popen(sys.argv[2:])
+    sys.exit(child.wait(timeout=int(sys.argv[1])))
+except subprocess.TimeoutExpired:
+    os.killpg(os.getpgrp(), signal.SIGKILL)
+"""
 
 
-def ensure_schema(db):
-    db.execute("""CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'queued',
-        attempts INTEGER NOT NULL DEFAULT 0, due INTEGER NOT NULL DEFAULT 0,
-        detail TEXT, result TEXT)""")
-    for column in ("pid INTEGER", "started REAL"):
+def queue_loop_step(db, loop_id, step, lanes, target):
+    lane = lanes[step - 1]
+    db.execute(
+        "INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
+        (f"loop:{loop_id}:{step}", lane, None if lane == "codex" else "awaiting manual handoff",
+         f"Public synthetic experiment, step {step} of {len(lanes)}. "
+         "Do not use tools or read local files. Work on this public target and report a bounded result: "
+         + target),
+    )
+
+
+def advance_completed_loops(db):
+    db.execute("BEGIN IMMEDIATE")
+    rows = db.execute("""
+        SELECT l.id,l.target,l.plan,l.step,l.review_every
+        FROM research_loops l
+        JOIN jobs j ON j.id = 'loop:' || l.id || ':' || l.step
+        WHERE l.status='active' AND l.review_every > 1
+          AND l.step % l.review_every != 0 AND j.state='done'
+          AND l.step < json_array_length(l.plan)
+        ORDER BY l.rowid LIMIT 20
+    """).fetchall()
+    for loop_id, target, plan, step, _ in rows:
+        lanes = json.loads(plan)
+        queue_loop_step(db, loop_id, step + 1, lanes, target)
+        db.execute("UPDATE research_loops SET step=step+1 WHERE id=?", (loop_id,))
+    db.commit()
+
+
+def muse_account_ready(binary, scratch, env):
+    """Ask the vendor host how it will authenticate, without starting a model."""
+    with subprocess.Popen(
+        [binary, "serve", "--provider", "meta", "--no-session-log", "--disable-shell", "--disable-write"],
+        cwd=scratch, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    ) as host:
+        deadline = time.monotonic() + 8
+        buffer = b""
+        remaining = 65536
+
+        def send(method, **fields):
+            host.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, **fields}).encode() + b"\n")
+            host.stdin.flush()
+
+        def receive(request_id):
+            nonlocal buffer, remaining
+            while time.monotonic() < deadline:
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    frame = json.loads(line)
+                    if frame.get("jsonrpc") == "2.0" and frame.get("id") == request_id:
+                        return frame.get("result") or {}
+                if remaining <= 0 or not select.select([host.stdout], [], [], max(0, deadline - time.monotonic()))[0]:
+                    break
+                chunk = os.read(host.stdout.fileno(), min(4096, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                buffer += chunk
+            return {}
+
         try:
-            db.execute(f"ALTER TABLE jobs ADD COLUMN {column}")
-        except sqlite3.OperationalError:
-            pass
-
-
-def is_lane_child(pid, codex):
-    """True only if pid leads its own process group and runs our Codex CLI."""
-    try:
-        if os.getpgid(pid) != pid:
+            send("initialize", id=1, params={
+                "clientInfo": {"name": "maabarium_account", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True},
+            })
+            reply = receive(1)
+            if reply.get("experimentalApi") is not True or not isinstance(reply.get("schema", {}).get("fingerprint"), str):
+                return False
+            send("initialized")
+            send("account/read", id=2, params={})
+            return receive(2).get("state") == "accountLogin"
+        except (OSError, ValueError, AttributeError):
             return False
-        command = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
-                                 capture_output=True, text=True, timeout=5, check=False).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    # Interpreted CLIs show as "node /path/to/codex ..."; require our path.
-    return codex in command.split()
+        finally:
+            if host.poll() is None:
+                try:
+                    os.killpg(host.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
-def reap_orphan(db, codex, now=None):
-    """Stop a child that outlived its worker. Returns True if one was killed."""
-    now = time.time() if now is None else now
-    row = db.execute(
-        "SELECT id, pid, started FROM jobs WHERE state='running' AND pid IS NOT NULL").fetchone()
-    if not row:
-        return False
-    job_id, pid, started = row
-    if started is None or now - started < CHILD_TIMEOUT + ORPHAN_GRACE:
-        return False
-    if not is_lane_child(pid, codex):
-        return False
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return False
-    db.execute("UPDATE jobs SET pid=NULL, detail='stopped an orphaned runner' WHERE id=?", (job_id,))
-    return True
+def muse_result(raw):
+    terminals = []
+    for line in raw.splitlines():
+        frame = json.loads(line)
+        if not isinstance(frame, dict):
+            raise ValueError("invalid Muse record")
+        if frame.get("payload_type", "").startswith("run.terminal."):
+            terminals.append(frame)
+    if len(terminals) != 1 or terminals[0]["payload_type"] != "run.terminal.completed":
+        return None
+    payload = terminals[0].get("payload")
+    return payload.get("text") if isinstance(payload, dict) and payload.get("terminal") == "completed" else None
 
 
-def clean_scratch(state):
-    scratch_root = state / "scratch"
-    if scratch_root.is_dir():
-        shutil.rmtree(scratch_root, ignore_errors=True)
+def muse_quota_reset(raw):
+    for line in raw.splitlines():
+        frame = json.loads(line)
+        if not isinstance(frame, dict) or frame.get("payload_type") != "run.terminal.failed":
+            continue
+        payload = frame.get("payload")
+        reason = payload.get("reason") if isinstance(payload, dict) else None
+        if isinstance(reason, str):
+            match = re.search(r"Subscription quota exhausted\. Your usage window resets at "
+                              r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\.", reason)
+            if match:
+                return int(datetime.fromisoformat(match[1].replace("Z", "+00:00")).timestamp())
+    return None
 
 
-def worker(db, codex, lock_fd, state):
+def worker(db, runners, lock_fd, state):
+    slots = ",".join("?" for _ in runners)
     job = db.execute(
-        "SELECT id,attempts FROM jobs WHERE state IN ('queued','running') AND due<=? ORDER BY id LIMIT 1",
-        (int(time.time()),),
+        f"SELECT id,attempts,prompt,lane FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane IN ({slots}) ORDER BY due,id LIMIT 1",
+        (int(time.time()), *runners),
     ).fetchone()
     if not job:
         return
-    job_id, attempts = job
+    job_id, attempts, prompt, lane = job
+    binary = runners[lane]
     if attempts >= MAX_ATTEMPTS:
         db.execute("UPDATE jobs SET state='failed', pid=NULL, detail='attempt limit' WHERE id=?", (job_id,))
         return
     # An allowlist intentionally excludes API keys, identity federation and custom endpoints.
     env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "CODEX_HOME") if k in os.environ}
+    if lane == "muse":
+        env["MUSE_NO_AUTO_UPDATE"] = "1"
     flags = ['-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"']
-    # Scratch lives in the private state directory, and the next tick that
-    # holds the lock removes any copy a killed worker left behind.
-    scratch = state / "scratch" / "current"
-    scratch.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
-        auth = subprocess.run([codex, *flags, "login", "status"], cwd=scratch, env=env,
-                              capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        auth = None
-    if not auth or auth.returncode or not any(
-        line.strip() == "Logged in using ChatGPT"
-        for line in (auth.stdout + "\n" + auth.stderr).splitlines()
-    ):
-        db.execute("UPDATE jobs SET state='queued', due=?,detail='ChatGPT sign-in required' WHERE id=?",
-                   (int(time.time()) + 900, job_id))
-        return
-    db.execute("UPDATE jobs SET state='running', attempts=attempts+1, detail=NULL WHERE id=?", (job_id,))
-    output = scratch / "answer.txt"
-    cmd = [codex, *flags, "-a", "never", "exec", "--ignore-user-config", "--ephemeral",
-           "--disable", "shell_tool", "--disable", "hooks", "-c", 'web_search="disabled"',
-           "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", str(output), "-"]
-    process = None
-    try:
-        process = subprocess.Popen(cmd, cwd=scratch, env=env, stdin=subprocess.PIPE,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   text=True, start_new_session=True, pass_fds=(lock_fd,))
-        db.execute("UPDATE jobs SET pid=?, started=? WHERE id=?", (process.pid, time.time(), job_id))
-        process.communicate(PROMPT, timeout=CHILD_TIMEOUT)
-        if process.returncode or not output.is_file():
-            raise ValueError("no reply")
-        if output.stat().st_size > MAX_REPLY_BYTES:
-            # Retrying would spend quota again for the same oversized answer.
-            db.execute("UPDATE jobs SET state='failed', pid=NULL, detail='reply exceeded size limit' WHERE id=?",
-                       (job_id,))
-            return
-        result = output.read_text(encoding="utf-8").strip()
-        if not result:
-            raise ValueError("empty reply")
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-        if attempts + 1 >= MAX_ATTEMPTS:
-            db.execute("UPDATE jobs SET state='failed', pid=NULL, detail='attempt limit' WHERE id=?", (job_id,))
-        else:
-            db.execute(
-                "UPDATE jobs SET state='queued', pid=NULL, due=?,detail='runner unavailable; retry scheduled' WHERE id=?",
-                (int(time.time()) + min(3600, 300 * 2 ** attempts), job_id),
-            )
-        return
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
-    db.execute("UPDATE jobs SET state='done', pid=NULL, result=?, detail='ChatGPT' WHERE id=?", (result, job_id))
-
-
-def acquire_after_reap(lock, db, codex, wait=10.0):
-    """Take the worker lock, stopping an orphaned child that still holds it."""
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return True
-    except BlockingIOError:
-        pass
-    if not reap_orphan(db, codex):
-        return False
-    until = time.monotonic() + wait
-    while time.monotonic() < until:
+    scratch_root = state / "scratch"
+    scratch_root.mkdir(mode=0o700, exist_ok=True)
+    for stale in scratch_root.glob("maabarium-lane-*"):
+        if stale.is_dir() and not stale.is_symlink():
+            shutil.rmtree(stale)
+    with tempfile.TemporaryDirectory(prefix="maabarium-lane-", dir=scratch_root) as scratch:
+        check = ([binary, *flags, "login", "status"] if lane == "codex" else
+                 [binary, "auth", "status"] if lane == "claude" else [binary, "models"])
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except BlockingIOError:
-            time.sleep(0.05)
-    return False
+            auth = None if lane == "muse" else subprocess.run(check, cwd=scratch, env=env,
+                                  capture_output=True, text=True, timeout=10, check=False)
+            if lane == "muse":
+                ready = muse_account_ready(binary, scratch, env)
+            elif lane == "claude":
+                status = json.loads(auth.stdout)
+                ready = (isinstance(status, dict) and status.get("loggedIn") is True and
+                         status.get("authMethod") == "claude.ai" and status.get("apiProvider") == "firstParty" and
+                         status.get("subscriptionType") in ("pro", "max", "ultra"))
+            elif lane == "antigravity":
+                ready = any(line.startswith("gemini-4-neon-low\t") for line in auth.stdout.splitlines())
+            else:
+                ready = any(line.strip() == "Logged in using ChatGPT"
+                            for line in (auth.stdout + "\n" + auth.stderr).splitlines())
+            ready = ready and (auth is None or auth.returncode == 0)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            ready = False
+        if not ready:
+            detail = "ChatGPT sign-in required" if lane == "codex" else "subscription CLI preflight failed"
+            db.execute("UPDATE jobs SET state='queued', due=?,detail=? WHERE id=? AND state IN ('queued','running')",
+                       (int(time.time()) + 900, detail, job_id))
+            return
+        claimed = db.execute(
+            "UPDATE jobs SET state='running', attempts=attempts+1, detail=NULL WHERE id=? AND state IN ('queued','running')",
+            (job_id,),
+        ).rowcount
+        if claimed != 1:
+            return
+        output = Path(scratch) / "answer.txt"
+        cmd = [binary, *flags, "-a", "never", "exec", "--ignore-user-config", "--ephemeral",
+               "--disable", "shell_tool", "--disable", "hooks", "-c", 'web_search="disabled"',
+               "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", str(output), "-"]
+        if lane == "claude":
+            cmd = [binary, "-p", "--tools", "", "--setting-sources", "", "--strict-mcp-config",
+                   "--settings", '{"disableAllHooks":true}', "--no-session-persistence",
+                   "--output-format", "json", "--max-turns", "1"]
+        elif lane == "antigravity":
+            cmd = [binary, "--sandbox", "--settings", '{"useG1Credits":false}',
+                   "--print-timeout", "90s", "--disable-slash-commands", "--model", "gemini-4-neon-low",
+                   "--output-format", "json", "-p", prompt or PROMPT]
+        elif lane == "muse":
+            cmd = [binary, "exec", "--provider", "meta", "--preset", "empty", "--json",
+                   "--contributor-mode", "off", "--no-session-log", "--no-foreign-personal-context",
+                   "--disable-web-tools", "--disable-reminders", "--disable-request-user-input",
+                   "--disable-shell", "--disable-write", "--max-model-steps", "2",
+                   "--approval-mode", "never", "--", prompt or PROMPT]
+        process = None
+        try:
+            # The guardian, not the vendor process, holds the lock and enforces
+            # the deadline even if the queue worker is killed.
+            with (output.open("wb") if lane != "codex" else open(os.devnull, "wb")) as stdout:
+                process = subprocess.Popen([sys.executable, "-I", "-c", GUARD, str(CHILD_TIMEOUT), *cmd],
+                                           cwd=scratch, env=env, stdin=subprocess.PIPE,
+                                           stdout=stdout, stderr=subprocess.DEVNULL,
+                                           text=True, start_new_session=True, pass_fds=(lock_fd,))
+                process.communicate("" if lane in ("antigravity", "muse") else prompt or PROMPT, timeout=CHILD_TIMEOUT + 5)
+            if not output.is_file() or output.stat().st_size > 65536:
+                raise ValueError("no bounded reply")
+            result = output.read_text(encoding="utf-8").strip()
+            if process.returncode:
+                reset = muse_quota_reset(result) if lane == "muse" else None
+                if reset is not None and attempts + 1 < MAX_ATTEMPTS:
+                    db.execute(
+                        "UPDATE jobs SET state='queued',due=?,detail='Muse subscription quota exhausted; waiting for reset' WHERE id=?",
+                        (max(int(time.time()) + 60, reset + 60), job_id),
+                    )
+                    return
+                raise ValueError("provider did not complete")
+            if lane == "muse":
+                result = muse_result(result)
+            elif lane != "codex":
+                data = json.loads(result)
+                if not isinstance(data, dict):
+                    raise ValueError("invalid response")
+                if lane == "claude":
+                    result = data.get("result") if data.get("subtype") == "success" and data.get("is_error") is False else None
+                else:
+                    result = data.get("response") if data.get("status") == "SUCCESS" else None
+            if not isinstance(result, str) or not result.strip() or len(result.encode()) > 16384:
+                raise ValueError("empty reply")
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            if process is not None and process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            if attempts + 1 >= MAX_ATTEMPTS:
+                db.execute("UPDATE jobs SET state='failed', detail='attempt limit' WHERE id=?", (job_id,))
+            else:
+                db.execute(
+                    "UPDATE jobs SET state='queued', due=?,detail='runner unavailable; retry scheduled' WHERE id=?",
+                    (int(time.time()) + min(3600, 300 * 2 ** attempts), job_id),
+                )
+            return
+        detail = {"codex": "ChatGPT", "claude": "Claude account; API credentials excluded",
+                  "antigravity": "Antigravity account; AI credits disabled for run",
+                  "muse": "Muse browser account; API-key overrides excluded"}[lane]
+        db.execute("UPDATE jobs SET state='done', result=?, detail=? WHERE id=?", (result, detail, job_id))
 
 
 def main():
@@ -173,7 +279,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, default=Path.home() / ".maabarium" / "subscription-lane")
     parser.add_argument("--codex", default="codex", help="trusted local Codex CLI")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist"])
+    parser.add_argument("--claude", help="trusted Claude CLI; opt in only after confirming account Usage credits are off")
+    parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
+    parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status"])
+    parser.add_argument("--lane", choices=LANES, default="codex")
+    parser.add_argument("--result-file", type=Path)
+    parser.add_argument("--public-target", help="Public synthetic target; sent to the selected providers")
+    parser.add_argument("--plan", nargs="+", choices=LANES, help="Ordered provider lanes (1–20)")
+    parser.add_argument("--step", type=int, help="Exact completed step being reviewed")
+    parser.add_argument("--review-every", type=int, default=1, help="Pause after this many completed steps (default: 1)")
+    parser.add_argument("--decision", choices=("accept", "stop"))
     parser.add_argument("--id", default="directed-teaching-v1")
     parser.add_argument("--label", default="org.maabarium.subscription-lane")
     parser.add_argument("--child-timeout", type=int, default=CHILD_TIMEOUT, help=argparse.SUPPRESS)
@@ -198,24 +314,146 @@ def main():
             "StandardOutPath": str(state / "launchd.log"),
             "StandardErrorPath": str(state / "launchd.log"),
         }
+        for lane in OPT_IN_LANES:
+            path = getattr(args, lane)
+            if path:
+                binary = shutil.which(path)
+                if not binary:
+                    parser.error(f"{lane} CLI not found")
+                job["ProgramArguments"].extend([f"--{lane}", os.path.abspath(binary)])
         if "CODEX_HOME" in os.environ:
             job["EnvironmentVariables"] = {"CODEX_HOME": os.environ["CODEX_HOME"]}
         sys.stdout.buffer.write(plistlib.dumps(job))
         return
     with (state / "worker.lock").open("a") as lock:
+        if args.action in ("tick", "loop-review"):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if args.action == "loop-review":
+                    parser.error("the worker is active; try reviewing again after this attempt")
+                return
         with sqlite3.connect(state / "queue.db", isolation_level=None) as db:
-            ensure_schema(db)
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0, due INTEGER NOT NULL DEFAULT 0,
+                detail TEXT, result TEXT, lane TEXT NOT NULL DEFAULT 'codex')""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+            if "lane" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'codex'")
+            if "prompt" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN prompt TEXT")
+            db.execute("""CREATE TABLE IF NOT EXISTS research_loops (
+                id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
+                step INTEGER NOT NULL, status TEXT NOT NULL)""")
+            if "review_every" not in {row[1] for row in db.execute("PRAGMA table_info(research_loops)")}:
+                db.execute("ALTER TABLE research_loops ADD COLUMN review_every INTEGER NOT NULL DEFAULT 1")
+            db.commit()
             if args.action == "enqueue":
-                db.execute("INSERT OR IGNORE INTO jobs(id) VALUES (?)", (args.id,))
+                if args.id.startswith("loop:"):
+                    parser.error("job IDs starting with loop: are reserved")
+                detail = None if args.lane == "codex" else "awaiting manual handoff"
+                db.execute("INSERT OR IGNORE INTO jobs(id,lane,detail) VALUES (?,?,?)",
+                           (args.id, args.lane, detail))
+                if db.execute("SELECT lane FROM jobs WHERE id=?", (args.id,)).fetchone()[0] != args.lane:
+                    parser.error("job ID already belongs to another lane")
+            elif args.action in ("export-task", "import-result"):
+                row = db.execute("SELECT lane,state,prompt FROM jobs WHERE id=?", (args.id,)).fetchone()
+                if not row or row[0] == "codex" or row[1] != "queued":
+                    parser.error("expected a queued external-lane job")
+                if args.action == "export-task":
+                    print(json.dumps({"id": args.id, "lane": row[0], "prompt": row[2] or PROMPT}))
+                else:
+                    if not args.result_file or not args.result_file.is_file():
+                        parser.error("a regular --result-file is required")
+                    try:
+                        with args.result_file.open("rb") as result_file:
+                            data = result_file.read(16385)
+                        answer = data.decode("utf-8").strip() if len(data) <= 16384 else ""
+                    except (OSError, UnicodeError):
+                        answer = ""
+                    if not answer:
+                        parser.error("expected a non-empty UTF-8 result up to 16 KiB")
+                    written = db.execute(
+                        "UPDATE jobs SET state='done', result=?, detail='manual result; billing unverified' "
+                        "WHERE id=? AND lane=? AND state='queued'", (answer, args.id, row[0]),
+                    ).rowcount
+                    if written != 1:
+                        parser.error("job already completed")
+            elif args.action == "loop-start":
+                target = (args.public_target or "").strip()
+                if (not target or len(target.encode()) > 4096 or not args.plan or
+                        not 1 <= args.review_every <= len(args.plan) <= 20):
+                    parser.error("provide a public target up to 4096 bytes, 1–20 steps and a checkpoint within the plan")
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    db.execute("INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,?,1,'active',?)",
+                               (args.id, target, json.dumps(args.plan), args.review_every))
+                    queue_loop_step(db, args.id, 1, args.plan, target)
+                except sqlite3.IntegrityError:
+                    parser.error("loop ID already exists")
+                db.commit()
+            elif args.action == "loop-review":
+                if not args.step or not args.decision:
+                    parser.error("provide --step and --decision")
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT target,plan,step,status FROM research_loops WHERE id=?",
+                                 (args.id,)).fetchone()
+                if not row or row[2:] != (args.step, "active"):
+                    parser.error("no active loop at that step; refresh status")
+                target, plan, step, _ = row
+                lanes = json.loads(plan)
+                if args.decision == "accept":
+                    done = db.execute("SELECT state FROM jobs WHERE id=?",
+                                      (f"loop:{args.id}:{step}",)).fetchone()
+                    if done != ("done",):
+                        parser.error("only a completed step can be accepted")
+                if args.decision == "stop" or step == len(lanes):
+                    db.execute("UPDATE research_loops SET status=? WHERE id=?",
+                               ("stopped" if args.decision == "stop" else "done", args.id))
+                    if args.decision == "stop":
+                        db.execute("UPDATE jobs SET state='failed',detail='loop stopped' WHERE id=? AND state IN ('queued','running')",
+                                   (f"loop:{args.id}:{step}",))
+                else:
+                    queue_loop_step(db, args.id, step + 1, lanes, target)
+                    db.execute("UPDATE research_loops SET step=step+1 WHERE id=?", (args.id,))
+                db.commit()
             elif args.action == "tick":
                 codex = shutil.which(args.codex)
                 if not codex:
                     parser.error("Codex CLI not found")
-                codex = os.path.abspath(codex)
-                if not acquire_after_reap(lock, db, codex):
-                    return
-                clean_scratch(state)
-                worker(db, codex, lock.fileno(), state)
+                runners = {"codex": os.path.abspath(codex)}
+                for lane in OPT_IN_LANES:
+                    path = getattr(args, lane)
+                    if path:
+                        binary = shutil.which(path)
+                        if not binary:
+                            parser.error(f"{lane} CLI not found")
+                        runners[lane] = os.path.abspath(binary)
+                advance_completed_loops(db)
+                worker(db, runners, lock.fileno(), state)
+                advance_completed_loops(db)
+            elif args.action == "loop-status":
+                db.row_factory = sqlite3.Row
+                row = db.execute("""
+                    SELECT l.*, j.lane, j.state AS job_state,
+                           CASE
+                               WHEN l.status != 'active' THEN l.status
+                               WHEN j.state = 'failed' THEN 'blocked'
+                               WHEN j.state = 'done' AND (
+                                   l.step % l.review_every = 0 OR l.step = json_array_length(l.plan)
+                               ) THEN 'awaiting_review'
+                               WHEN j.state = 'done' THEN 'ready_to_advance'
+                               ELSE 'awaiting_job'
+                           END AS phase
+                    FROM research_loops l
+                    LEFT JOIN jobs j ON j.id = 'loop:' || l.id || ':' || l.step
+                    WHERE l.id=?
+                """, (args.id,)).fetchone()
+                if not row:
+                    parser.error("loop not found")
+                print(json.dumps(dict(row)))
             else:
                 db.row_factory = sqlite3.Row
                 print(json.dumps([dict(row) for row in db.execute("SELECT * FROM jobs ORDER BY id")]))

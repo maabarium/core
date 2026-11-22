@@ -6,6 +6,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+The local research queue supports ordered subscription-provider plans with
+an optional automatic run window and mandatory human review checkpoints.
+
 ### Added
 
 - Workflow groups with sequential or parallel runs, schedules, history, and optional Telegram notifications.

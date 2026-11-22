@@ -2682,6 +2682,7 @@ dependencies = [
  "chrono",
  "git2",
  "maabarium-core",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",
@@ -2698,6 +2699,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]

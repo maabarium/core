@@ -1,10 +1,12 @@
 import json
+import fcntl
 import os
 from pathlib import Path
 import signal
 import sqlite3
 import subprocess
 import sys
+import runpy
 import tempfile
 import time
 import unittest
@@ -14,6 +16,179 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_autonomous_checkpoint_pauses_and_final_step_needs_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cli = root / "unused-codex"
+            cli.write_text("#!/bin/sh\nexit 1\n")
+            cli.chmod(0o700)
+            cmd = [sys.executable, str(SCRIPT), "--state", tmp, "--codex", str(cli)]
+            def run(*args):
+                return subprocess.check_output([*cmd, *args], timeout=5)
+            run("loop-start", "--id", "batch", "--public-target", "Public test",
+                "--plan", "muse", "muse", "muse", "--review-every", "2")
+            answer = root / "answer"
+            answer.write_text("Synthetic result")
+            for step, expected_count in ((1, 2), (2, 2), (3, 3)):
+                run("import-result", "--id", f"loop:batch:{step}", "--result-file", str(answer))
+                run("tick")
+                run("tick")
+                self.assertEqual(len(json.loads(run("status"))), expected_count)
+                if step >= 2:
+                    self.assertEqual(json.loads(run("loop-status", "--id", "batch"))["phase"], "awaiting_review")
+                    run("loop-review", "--id", "batch", "--step", str(step), "--decision", "accept")
+            self.assertEqual(json.loads(run("loop-status", "--id", "batch"))["status"], "done")
+
+    def test_muse_only_honours_subscription_quota_reset_records(self):
+        reset = runpy.run_path(str(SCRIPT))["muse_quota_reset"]
+        reason = "API error 429: Subscription quota exhausted. Your usage window resets at 2026-11-23T00:00:00Z. (rate_limit_error)"
+        self.assertEqual(reset(json.dumps({"payload_type": "run.terminal.failed", "payload": {"reason": reason}})),
+                         1795392000)
+        self.assertIsNone(reset(json.dumps({"payload_type": "run.terminal.completed", "payload": {"text": reason}})))
+
+    def test_opt_in_account_lanes_recover_abandoned_claim_without_fallback(self):
+        for lane in ("claude", "antigravity", "muse"):
+            with self.subTest(lane=lane), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cli = root / "fake"
+                marker = root / "first"
+                cli.write_text(f"""#!{sys.executable}
+import json, os, pathlib, sys, time
+assert 'ANTHROPIC_API_KEY' not in os.environ and 'GEMINI_API_KEY' not in os.environ
+assert 'META_API_KEY' not in os.environ and 'MUSE_AUTH_PATH' not in os.environ
+lane = {lane!r}
+if 'serve' in sys.argv:
+    for line in sys.stdin:
+        request = json.loads(line)
+        if 'id' not in request:
+            continue
+        result = (dict(experimentalApi=True, schema=dict(fingerprint='fake'))
+                  if request['method'] == 'initialize' else dict(state='accountLogin'))
+        print(json.dumps(dict(jsonrpc='2.0', id=request['id'], result=result)), flush=True)
+elif 'auth' in sys.argv:
+    print(json.dumps(dict(loggedIn=True, authMethod='claude.ai', apiProvider='firstParty', subscriptionType='pro')))
+elif 'models' in sys.argv:
+    print('gemini-4-neon-low\\tNeon')
+else:
+    if lane == 'antigravity':
+        assert json.loads(sys.argv[sys.argv.index('--settings') + 1])['useG1Credits'] is False
+        assert '--sandbox' in sys.argv
+    elif lane == 'claude':
+        assert sys.argv[sys.argv.index('--tools') + 1] == ''
+    else:
+        assert sys.argv[sys.argv.index('--provider') + 1] == 'meta'
+        assert sys.argv[sys.argv.index('--contributor-mode') + 1] == 'off'
+    marker = pathlib.Path({str(marker)!r})
+    if not marker.exists():
+        marker.touch()
+        time.sleep(1)
+    if lane == 'muse':
+        print(json.dumps(dict(payload_type='run.terminal.completed', payload=dict(terminal='completed', text='Recovered'))))
+    else:
+        print(json.dumps(dict(status='SUCCESS', response='Recovered', subtype='success', is_error=False, result='Recovered')))
+""")
+                cli.chmod(0o700)
+                command = [sys.executable, str(SCRIPT), "--state", str(root / "state"), "--codex", str(cli)]
+                env = {**os.environ, "ANTHROPIC_API_KEY": "excluded", "GEMINI_API_KEY": "excluded",
+                       "META_API_KEY": "excluded", "MUSE_AUTH_PATH": "/excluded"}
+                subprocess.run([*command, "enqueue", "--id", "job", "--lane", lane], check=True)
+                subprocess.run([*command, "tick"], check=True)
+                self.assertFalse(marker.exists())
+                tick = [*command, "tick", f"--{lane}", str(cli)]
+                first = subprocess.Popen(tick, env=env)
+                try:
+                    until = time.monotonic() + 4
+                    while not marker.exists() and time.monotonic() < until:
+                        time.sleep(0.01)
+                    self.assertTrue(marker.exists())
+                finally:
+                    if first.poll() is None:
+                        first.kill()
+                    first.wait(timeout=5)
+                def status():
+                    return json.loads(subprocess.check_output([*command, "status"], timeout=5))[0]
+                self.assertEqual(status()["state"], "running")
+                until = time.monotonic() + 5
+                while status()["state"] != "done" and time.monotonic() < until:
+                    subprocess.run(tick, env=env, check=True, timeout=5)
+                    time.sleep(0.05)
+                row = status()
+                self.assertEqual((row["state"], row["attempts"], row["result"]), ("done", 2, "Recovered"))
+
+    def test_guardian_releases_lock_when_provider_hangs(self):
+        guard = runpy.run_path(str(SCRIPT))["GUARD"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "worker.lock"
+            with path.open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                guardian = subprocess.Popen(
+                    [sys.executable, "-I", "-c", guard, "1", sys.executable, "-c", "import time; time.sleep(30)"],
+                    pass_fds=(lock.fileno(),), start_new_session=True,
+                )
+            with guardian, path.open("a") as next_worker:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(next_worker, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(guardian.wait(timeout=4), -signal.SIGKILL)
+                fcntl.flock(next_worker, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_loop_review_is_durable_and_cannot_skip_a_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            command = [sys.executable, str(SCRIPT), "--state", tmp]
+
+            def run(*args, check=True):
+                return subprocess.run([*command, *args], check=check, capture_output=True, text=True, timeout=5)
+
+            run("loop-start", "--id", "sample", "--public-target", "Compare two public rules",
+                "--plan", "muse", "antigravity", "claude", "codex")
+            self.assertNotEqual(run("loop-review", "--id", "sample", "--step", "1",
+                                    "--decision", "accept", check=False).returncode, 0)
+            answer = Path(tmp) / "answer"
+            answer.write_text("Synthetic answer")
+            for step, lane in enumerate(("muse", "antigravity", "claude"), 1):
+                task = f"loop:sample:{step}"
+                payload = json.loads(run("export-task", "--id", task).stdout)
+                self.assertEqual(payload["lane"], lane)
+                self.assertIn("Compare two public rules", payload["prompt"])
+                run("import-result", "--id", task, "--result-file", str(answer))
+                run("loop-review", "--id", "sample", "--step", str(step), "--decision", "accept")
+                self.assertNotEqual(run("loop-review", "--id", "sample", "--step", str(step),
+                                        "--decision", "accept", check=False).returncode, 0)
+            run("loop-review", "--id", "sample", "--step", "4", "--decision", "stop")
+            self.assertEqual(json.loads(run("loop-status", "--id", "sample").stdout)["status"], "stopped")
+            jobs = json.loads(run("status").stdout)
+            self.assertEqual([(job["lane"], job["state"]) for job in jobs],
+                             [("muse", "done"), ("antigravity", "done"), ("claude", "done"), ("codex", "failed")])
+
+    def test_migrates_and_keeps_external_jobs_out_of_the_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with sqlite3.connect(root / "queue.db") as db:
+                db.execute("""CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'queued',
+                    attempts INTEGER NOT NULL DEFAULT 0, due INTEGER NOT NULL DEFAULT 0,
+                    detail TEXT, result TEXT)""")
+                db.execute("INSERT INTO jobs(id,state) VALUES ('old','done')")
+            cli = root / "fake-codex"
+            marker = root / "called"
+            cli.write_text(f"#!{sys.executable}\nimport pathlib\npathlib.Path({str(marker)!r}).touch()\n")
+            cli.chmod(0o700)
+            command = [sys.executable, str(SCRIPT), "--state", tmp, "--codex", str(cli)]
+            answer = root / "answer"
+            answer.write_text("Synthetic answer")
+            for lane in ("claude", "antigravity", "muse"):
+                subprocess.check_call([*command, "enqueue", "--id", lane, "--lane", lane])
+                task = json.loads(subprocess.check_output([*command, "export-task", "--id", lane]))
+                self.assertEqual((task["id"], task["lane"]), (lane, lane))
+            subprocess.check_call([*command, "tick"])
+            self.assertFalse(marker.exists())
+            for lane in ("claude", "antigravity", "muse"):
+                subprocess.check_call([*command, "import-result", "--id", lane, "--result-file", str(answer)])
+            rows = {row["id"]: row for row in json.loads(subprocess.check_output([*command, "status"]))}
+            self.assertEqual(rows["old"]["lane"], "codex")
+            for lane in ("claude", "antigravity", "muse"):
+                self.assertEqual((rows[lane]["state"], rows[lane]["attempts"], rows[lane]["result"]),
+                                 ("done", 0, "Synthetic answer"))
+
     def test_subscription_failure_retries_same_job_and_api_login_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -148,28 +323,13 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                 if first.poll() is None:
                     first.kill()
                     first.wait(timeout=5)
-            orphan = status()["pid"]
-            self.assertIsNotNone(orphan)
             self.assertTrue((state / "scratch").exists())
-            # Within the deadline a tick leaves the running child alone.
-            subprocess.run([*command, "tick"], check=True, timeout=10)
-            self.assertEqual(status()["state"], "running")
-            os.kill(orphan, 0)
-            # Past deadline plus grace (1 + 30 s), backdate instead of waiting.
-            with sqlite3.connect(state / "queue.db") as db:
-                db.execute("UPDATE jobs SET started=started-60")
-            subprocess.run([*command, "tick"], check=True, timeout=15)
-            time.sleep(0.2)
-            with self.assertRaises(ProcessLookupError):
-                os.kill(orphan, 0)
             until = time.monotonic() + 10
             while status()["state"] != "done" and time.monotonic() < until:
-                with sqlite3.connect(state / "queue.db") as db:
-                    db.execute("UPDATE jobs SET due=0")
                 subprocess.run([*command, "tick"], check=True, timeout=10)
+                time.sleep(0.05)
             row = status()
             self.assertEqual((row["state"], row["result"]), ("done", "Recovered"))
-            self.assertIsNone(row["pid"])
             self.assertFalse(any((state / "scratch").glob("**/answer.txt")))
 
     def test_unrelated_process_is_never_killed(self):
@@ -179,8 +339,6 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             subprocess.run([*command, "enqueue"], check=True)
             bystander = subprocess.Popen(["sleep", "30"], start_new_session=True)
             try:
-                with sqlite3.connect(state / "queue.db") as db:
-                    db.execute("UPDATE jobs SET state='running', pid=?, started=0", (bystander.pid,))
                 lock = (state / "worker.lock").open("a")
                 import fcntl
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

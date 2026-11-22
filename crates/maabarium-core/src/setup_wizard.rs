@@ -1669,8 +1669,8 @@ mod tests {
     #[tokio::test]
     async fn provider_validation_supports_openai_compatible_test_requests() {
         let endpoint = spawn_http_server(vec![
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 25\r\n\r\n{\"data\":[{\"id\":\"model\"}]}",
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 42\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}",
+            "HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 25\r\n\r\n{\"data\":[{\"id\":\"model\"}]}",
+            "HTTP/1.1 200 OK\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 42\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}",
         ]);
 
         let result = validate_provider_connection(
