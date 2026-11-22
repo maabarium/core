@@ -45,7 +45,10 @@ def worker(db, codex, lock_fd):
                                   capture_output=True, text=True, timeout=10, check=False)
         except (OSError, subprocess.TimeoutExpired):
             auth = None
-        if not auth or auth.returncode or "Logged in using ChatGPT" not in (auth.stdout + auth.stderr):
+        if not auth or auth.returncode or not any(
+            line.strip() == "Logged in using ChatGPT"
+            for line in (auth.stdout + "\n" + auth.stderr).splitlines()
+        ):
             db.execute("UPDATE jobs SET state='queued', due=?,detail='ChatGPT sign-in required' WHERE id=?",
                        (int(time.time()) + 900, job_id))
             return
@@ -69,8 +72,13 @@ def worker(db, codex, lock_fd):
             if process is not None and process.poll() is None:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-            db.execute("UPDATE jobs SET state='queued', due=?,detail='runner unavailable; retry scheduled' WHERE id=?",
-                       (int(time.time()) + min(3600, 300 * 2 ** attempts), job_id))
+            if attempts + 1 >= MAX_ATTEMPTS:
+                db.execute("UPDATE jobs SET state='failed', detail='attempt limit' WHERE id=?", (job_id,))
+            else:
+                db.execute(
+                    "UPDATE jobs SET state='queued', due=?,detail='runner unavailable; retry scheduled' WHERE id=?",
+                    (int(time.time()) + min(3600, 300 * 2 ** attempts), job_id),
+                )
             return
         db.execute("UPDATE jobs SET state='done', result=?, detail='ChatGPT' WHERE id=?", (result, job_id))
 

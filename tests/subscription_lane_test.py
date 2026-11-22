@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,61 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_subscription_failure_retries_same_job_and_api_login_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state"
+            cli = root / "fake-codex"
+            mode = root / "mode"
+            mode.write_text("api")
+            cli.write_text(f"""#!{sys.executable}
+import pathlib, sys
+mode = pathlib.Path({str(mode)!r}).read_text()
+if "login" in sys.argv:
+    print("Logged in using API key" if mode == "api" else "Logged in using ChatGPT")
+    sys.exit()
+if mode == "quota":
+    sys.exit(1)
+assert mode == "ready", "non-subscription job executed"
+pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("Recovered")
+""")
+            cli.chmod(0o700)
+            command = [sys.executable, str(SCRIPT), "--state", str(state), "--codex", str(cli)]
+
+            def run(action):
+                return subprocess.check_output([*command, action], timeout=5)
+
+            def ready_now():
+                with sqlite3.connect(state / "queue.db") as db:
+                    db.execute("UPDATE jobs SET due=0")
+
+            run("enqueue")
+            run("tick")
+            self.assertEqual(json.loads(run("status"))[0]["attempts"], 0)
+            mode.write_text("quota")
+            ready_now()
+            run("tick")
+            deferred = json.loads(run("status"))[0]
+            self.assertEqual((deferred["state"], deferred["attempts"]), ("queued", 1))
+            self.assertGreater(deferred["due"], time.time())
+            run("tick")
+            self.assertEqual(json.loads(run("status"))[0], deferred)
+            mode.write_text("ready")
+            ready_now()
+            run("tick")
+            rows = json.loads(run("status"))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual((rows[0]["state"], rows[0]["attempts"], rows[0]["result"]),
+                             ("done", 2, "Recovered"))
+
+            mode.write_text("quota")
+            subprocess.check_output([*command, "enqueue", "--id", "exhausted"], timeout=5)
+            for _ in range(5):
+                ready_now()
+                run("tick")
+            exhausted = next(row for row in json.loads(run("status")) if row["id"] == "exhausted")
+            self.assertEqual((exhausted["state"], exhausted["attempts"]), ("failed", 4))
+
     def test_interrupted_worker_resumes_without_api_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

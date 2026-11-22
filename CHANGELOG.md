@@ -14,7 +14,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Changed
 
 - Refreshed console typography and navigation, with safer inline group deletion.
-- Updated compatible Rust and desktop web dependencies.
+- Updated Rust and desktop web dependencies, including patched Wasmtime, Git and SQLite libraries.
 - Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin.
 
 ### Fixed
