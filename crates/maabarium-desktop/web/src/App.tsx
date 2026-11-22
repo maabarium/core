@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ResearchQueue, ResearchRunHistory, type ResearchJob } from "./components/ResearchQueue";
+import { ResearchQueue, type ResearchJob } from "./components/ResearchQueue";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -63,12 +64,14 @@ import {
   selectWinnerProposal,
 } from "./lib/winners";
 import { formatPromotionToastMessage } from "./lib/promotionToast";
+import { researchEvaluatorMetrics } from "./lib/researchEvaluatorMetrics";
 import type {
   AnalyticsBucket,
   AnalyticsRange,
   BlueprintFile,
   ConsoleTab,
   DesktopSetupState,
+  ExperimentBranchInventory,
   WorkspaceGitStatus,
 } from "./types/console";
 
@@ -151,11 +154,10 @@ export default function App() {
   });
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
-  const [consoleScope, setConsoleScope] = useState<"workflow" | "research" | null>(null);
+  const [branchInspection, setBranchInspection] = useState<{ key: string; inventory: ExperimentBranchInventory } | null>(null);
   const experimentJobs = researchJobs.filter(job => job.id.startsWith("loop:"));
   const featuredResearch = experimentJobs.find(job => job.review_pending) ?? experimentJobs[0];
-  const showResearch = consoleScope === "research"
-    || (consoleScope === null && Boolean(featuredResearch?.review_pending || featuredResearch?.experiment_active));
+  const showResearch = Boolean(featuredResearch?.review_pending || featuredResearch?.experiment_active);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
@@ -1928,37 +1930,22 @@ export default function App() {
             className="grid grid-cols-1 gap-6"
           >
             <div className="flex flex-col gap-6 lg:h-full">
-              {featuredResearch && <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Console data source">
-                {(["research", "workflow"] as const).map(scope => <button type="button" key={scope}
-                  aria-pressed={showResearch === (scope === "research")} onClick={() => setConsoleScope(scope)}
-                  className={`min-h-10 rounded-md border border-[var(--line)] px-3 text-sm font-semibold ${showResearch === (scope === "research") ? "bg-[var(--accent)] text-[var(--on-accent)]" : "bg-[var(--surface)] text-[var(--ink)]"}`}>
-                  {scope === "research" ? "Research experiment" : "Selected workflow"}
-                </button>)}
-              </div>}
-              {showResearch && featuredResearch ? (
-                <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                  <GlassCard title="Research experiment results" icon={Activity} className="xl:col-span-2">
-                    <ResearchRunHistory jobs={[featuredResearch]} />
-                  </GlassCard>
-                  <GlassCard title="How this experiment ran">
-                    {featuredResearch.lane === "Local evidence" ? <>
-                      <p className="font-semibold">Local benchmark and independent audit</p>
-                      <p className="mt-2 text-sm text-[var(--muted)]">
-                        The local runner produced the evidence. No council, model provider, or paid API was used.
-                      </p>
-                    </> : <>
-                      <p className="font-semibold">{featuredResearch.lane}</p>
-                      <p className="mt-2 text-sm text-[var(--muted)]">This is the provider assigned to the displayed research step, not the selected workflow’s council.</p>
-                    </>}
-                  </GlassCard>
-                </div>
-              ) : <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
-                <MetricPanelCard metricPanel={metricPanel} />
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+                <MetricPanelCard metricPanel={showResearch && featuredResearch
+                  ? researchEvaluatorMetrics(featuredResearch.experiment_title ?? "Research experiment", featuredResearch.result)
+                  : metricPanel} />
                 <CouncilRosterCard
-                  councilEntries={councilEntries}
-                  engineRunning={Boolean(state?.engineRunning)}
+                  councilEntries={showResearch && featuredResearch ? [{
+                    title: featuredResearch.lane === "Local evidence" ? "Local benchmark and independent audit" : featuredResearch.lane,
+                    subtitle: featuredResearch.experiment_title ?? "Research experiment",
+                    copy: featuredResearch.lane === "Local evidence"
+                      ? "A local runner measures this benchmark. No council, model provider, or paid API is used."
+                      : "This provider was assigned to the displayed research step.",
+                    accent: "slate",
+                  }] : councilEntries}
+                  engineRunning={showResearch ? featuredResearch?.state === "running" : Boolean(state?.engineRunning)}
                 />
-              </div>}
+              </div>
 
               {researchJobs.some(job => job.id.startsWith("loop:")) && (
                 <GlassCard title="Research experiment activity" icon={Activity}>
@@ -2118,8 +2105,20 @@ export default function App() {
               collapsed={collapsedPanels.maintenance}
               readinessItems={state?.readinessItems ?? []}
               experimentBranchInventory={
-                state?.experimentBranchInventory ?? null
+                branchInspection?.key === JSON.stringify([state?.blueprintPath, state?.desktopSetup.workspacePath, state?.runState.workspacePath])
+                  ? branchInspection.inventory : state?.experimentBranchInventory ?? null
               }
+              onInspectBranches={async () => {
+                const key = JSON.stringify([state?.blueprintPath, state?.desktopSetup.workspacePath, state?.runState.workspacePath]);
+                try {
+                  const inventory = await invoke<ExperimentBranchInventory>("inspect_experiment_branches_command");
+                  setBranchInspection({ key, inventory });
+                } catch (error) {
+                  setBranchInspection(null);
+                  presentDesktopError("Workspace access", "Couldn’t inspect workspace branches",
+                    "Open or choose a Git-backed workspace and try again.", error);
+                }
+              }}
               gitDependency={
                 state?.gitDependency ?? {
                   installed: false,
@@ -2148,9 +2147,11 @@ export default function App() {
               onPreviewBranchCleanup={(thresholdMonths) =>
                 previewExperimentBranchCleanup(thresholdMonths)
               }
-              onCleanupBranches={(thresholdMonths) =>
-                cleanupExperimentBranches(thresholdMonths)
-              }
+              onCleanupBranches={async (thresholdMonths) => {
+                const result = await cleanupExperimentBranches(thresholdMonths);
+                if (result) setBranchInspection(null);
+                return result;
+              }}
               onCheckForUpdates={() => void checkForUpdates()}
               onInstallUpdate={() => void installAvailableUpdate()}
               onSelectChannel={(channel) =>

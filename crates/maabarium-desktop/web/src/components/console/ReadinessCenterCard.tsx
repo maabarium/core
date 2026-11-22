@@ -39,6 +39,7 @@ export function ReadinessCenterCard({
   onInstallOllama,
   onStartOllama,
   onApplyFixes,
+  onInspectBranches,
   onPreviewBranchCleanup,
   onCleanupBranches,
   embedded = false,
@@ -52,6 +53,7 @@ export function ReadinessCenterCard({
   onInstallOllama: () => void;
   onStartOllama: () => void;
   onApplyFixes: () => Promise<FixOutcome[] | null>;
+  onInspectBranches?: () => Promise<void>;
   onPreviewBranchCleanup: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
@@ -67,7 +69,7 @@ export function ReadinessCenterCard({
     useState<ExperimentBranchCleanupResult | null>(null);
   const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<
-    "preview" | "cleanup" | "fix_all" | null
+    "preview" | "cleanup" | "fix_all" | "inspect" | null
   >(null);
   const [fixResults, setFixResults] = useState<FixOutcome[] | null>(null);
   const requiredItems = readinessItems.filter(
@@ -262,7 +264,7 @@ export function ReadinessCenterCard({
                 <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
                   {experimentBranchInventory
                     ? "Track stale experiment branches in the current workspace repository before they accumulate across repeated runs."
-                    : "Choose a git-backed workspace to surface stale experiment branches and maintenance actions."}
+                    : "Branch checks run only when you ask to inspect the workspace."}
                 </div>
               </div>
               <div className="flex-none self-start">
@@ -277,11 +279,18 @@ export function ReadinessCenterCard({
                 >
                   {experimentBranchInventory
                     ? `${experimentBranchInventory.totalBranches} tracked`
-                    : "Unavailable"}
+                    : "Not checked"}
                 </Badge>
               </div>
             </div>
 
+            {onInspectBranches && <button type="button" disabled={pendingAction !== null}
+              className="min-h-10 self-start rounded-md border border-[var(--line)] px-3 text-sm"
+              onClick={async () => {
+                setPendingAction("inspect");
+                setCleanupPreview(null);
+                try { await onInspectBranches(); } finally { setPendingAction(null); }
+              }}>{pendingAction === "inspect" ? "Checking…" : "Inspect workspace branches"}</button>}
             {experimentBranchInventory ? (
               <>
                 <div className="grid grid-cols-3 gap-2">

@@ -32,6 +32,8 @@ an optional automatic run window and mandatory human review checkpoints.
 
 ### Fixed
 
+- Opening the app no longer inspects saved workspaces. Git branch inspection is an explicit action, and the existing console metrics and roster reflect the active research experiment without a separate tab.
+
 - Desktop readiness no longer reads Keychain secrets in the background. About uses the active theme and native modal focus handling. Charts align with the rest of their card, disclosures share a control, and evidence import supports dropping or browsing for a file.
 
 - Group cron schedules now honour day-of-month and month, treat both `0` and `7` as Sunday, and support stepped ranges.

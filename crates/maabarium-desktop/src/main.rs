@@ -564,6 +564,7 @@ fn main() {
             install_cli_link,
             remove_cli_link,
             cleanup_experiment_branches_command,
+            inspect_experiment_branches_command,
             start_engine,
             stop_engine,
             open_log_file,
@@ -727,7 +728,8 @@ fn restored_blueprint_path(blueprints_dir: &Path, settings_path: &Path) -> PathB
     let stored_path = load_desktop_setup(settings_path)
         .selected_blueprint_path
         .map(PathBuf::from)
-        .filter(|path| path.exists())
+        .filter(|path| path.parent() == Some(blueprints_dir))
+        .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()))
         .filter(|path| BlueprintFile::load(path).is_ok());
 
     stored_path.unwrap_or_else(|| default_blueprint_path(blueprints_dir))
@@ -1522,10 +1524,14 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     let cli_link = describe_cli_link_state(&state.cli_path);
     let hardware_telemetry = sample_hardware_telemetry(state);
     let blueprint_result = BlueprintFile::load(&blueprint_path);
-    let plugin_runtime = blueprint_result
-        .as_ref()
-        .ok()
-        .and_then(describe_plugin_runtime);
+    let plugin_runtime = if matches!(run_state.status, RunStatus::Running | RunStatus::Stopping) {
+        blueprint_result
+            .as_ref()
+            .ok()
+            .and_then(describe_plugin_runtime)
+    } else {
+        None
+    };
     let available_blueprints =
         discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
     let desktop_setup = hydrated_desktop_setup(state);
@@ -1639,18 +1645,8 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         &state.db_path,
         &state.log_path,
     );
-    let experiment_branch_inventory = resolved_console_workspace_path(
-        &run_state,
-        blueprint_result.as_ref().ok(),
-        &desktop_setup,
-    )
-    .and_then(|workspace_path| match inspect_experiment_branch_inventory(&workspace_path) {
-        Ok(inventory) => Some(inventory),
-        Err(error) => {
-            warn!(workspace = %workspace_path.display(), %error, "Failed to inspect experiment branch inventory");
-            None
-        }
-    });
+    // Inventory is acquired only when the operator explicitly inspects branches.
+    let experiment_branch_inventory = None;
 
     // Load run groups, group runs, and telegram config for the console
     let persistence_handle = Persistence::open(&state.db_path.display().to_string()).ok();
@@ -2979,6 +2975,25 @@ fn install_cli_link(state: tauri::State<'_, AppState>) -> Result<ConsoleState, S
 fn remove_cli_link(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
     remove_managed_cli_link().map_err(|error| error.to_string())?;
     Ok(build_console_state(&state))
+}
+
+#[tauri::command]
+async fn inspect_experiment_branches_command(
+    app: tauri::AppHandle,
+) -> Result<ExperimentBranchInventory, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let blueprint = BlueprintFile::load(&current_blueprint_path(&state)).ok();
+        let path = resolved_console_workspace_path(
+            &current_run_state(&state),
+            blueprint.as_ref(),
+            &hydrated_desktop_setup(&state),
+        )
+        .ok_or_else(|| "Choose a Git-backed workspace before inspecting branches.".to_owned())?;
+        inspect_experiment_branch_inventory(&path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

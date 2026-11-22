@@ -137,7 +137,7 @@ impl ReadinessScanner {
         Self::scan_with_providers(workspace, runtime_strategy, Some(&providers))
     }
 
-    /// Background status refresh must not read credentials or trigger Keychain UI.
+    /// Background status refresh leaves saved workspace paths and credentials unopened.
     pub fn scan_passive(
         workspace: Option<&str>,
         runtime_strategy: Option<&str>,
@@ -156,7 +156,7 @@ impl ReadinessScanner {
         items.push(Self::check_git());
 
         // 2. Workspace
-        items.push(Self::check_workspace(workspace));
+        items.push(Self::check_workspace(workspace, providers.is_some()));
 
         // 3. Local runtime (Ollama)
         let is_remote_only = runtime_strategy == Some("remote");
@@ -198,12 +198,23 @@ impl ReadinessScanner {
         }
     }
 
-    fn check_workspace(workspace: Option<&str>) -> ReadinessItem {
+    fn check_workspace(workspace: Option<&str>, inspect: bool) -> ReadinessItem {
         let path = workspace
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(PathBuf::from);
 
+        if !inspect && path.is_some() {
+            return ReadinessItem {
+                id: "workspace".into(),
+                title: "Workspace".into(),
+                status: ReadinessLevel::Optional,
+                summary: "Saved workspace. Access is checked when you open or run the workflow."
+                    .into(),
+                fix_label: None,
+                fix_hint: None,
+            };
+        }
         let exists = path.as_ref().is_some_and(|p| p.exists());
         let level = if exists {
             ReadinessLevel::Ready
@@ -387,6 +398,22 @@ fn background_readiness_reports_remote_credentials_as_unchecked() {
         assert_eq!(item.status, ReadinessLevel::Optional);
         assert!(item.summary.contains("not checked"));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn passive_readiness_does_not_treat_a_saved_workspace_as_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("not-created");
+    let path = missing.to_str().unwrap();
+    assert_eq!(
+        ReadinessScanner::check_workspace(Some(path), false).status,
+        ReadinessLevel::Optional,
+    );
+    assert_eq!(
+        ReadinessScanner::check_workspace(Some(path), true).status,
+        ReadinessLevel::NeedsAction,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1658,7 +1685,7 @@ mod tests {
     fn readiness_item_ids_are_stable() {
         let ids = [
             ReadinessScanner::check_git().id,
-            ReadinessScanner::check_workspace(None).id,
+            ReadinessScanner::check_workspace(None, false).id,
             ReadinessScanner::check_local_runtime(false).id,
             "remote_providers".to_owned(),
             "models".to_owned(),
