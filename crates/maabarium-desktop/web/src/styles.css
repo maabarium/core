@@ -279,6 +279,13 @@ body {
 }
 .workspace-switch:disabled { opacity: 0.55; cursor: not-allowed; }
 
+.research-trend-card {
+  --trend-secondary: #5152a0;
+  border-color: var(--line);
+  background: radial-gradient(ellipse at top right, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%), var(--surface);
+}
+.maabarium-app[data-theme="dark"] .research-trend-card { --trend-secondary: #c1b4ff; }
+
 .maabarium-app .workspace-heading {
   display: flex;
   align-items: center;

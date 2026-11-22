@@ -155,3 +155,8 @@ the CLI supplies recognised counters.
 Older, manual, or unsupported records are not counted as zero. Reported
 categories may overlap and are not added into a billing total. The optional
 Muse allowance check reads account-wide windows without running a model.
+Open **14-day trends** for daily outcomes and reported input/output
+counters. Days are grouped in UTC. Terminal timestamps are recorded by
+the updated worker; existing undated jobs remain in all-time totals but
+are not backfilled into the chart. The daily table gives the exact chart
+values and identifies missing counters.

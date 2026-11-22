@@ -139,6 +139,16 @@ pub(crate) struct QueueJob {
 pub(crate) struct QueueReport {
     experiments: i64,
     lanes: Vec<LaneReport>,
+    trend: Vec<TrendDay>,
+}
+
+#[derive(Serialize)]
+struct TrendDay {
+    day: String,
+    completed: i64,
+    failed: i64,
+    input: Option<i64>,
+    output: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -193,7 +203,34 @@ fn report(db: &Connection) -> rusqlite::Result<QueueReport> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(QueueReport { experiments, lanes })
+    let mut daily = db.prepare("WITH RECURSIVE days(day) AS (
+        SELECT date('now','-13 days') UNION ALL SELECT date(day,'+1 day') FROM days WHERE day < date('now')
+      ), activity AS (
+        SELECT date(finished_at,'unixepoch') AS day,
+          COUNT(*) FILTER(WHERE state='done') AS completed,
+          COUNT(*) FILTER(WHERE state='failed' AND detail IS NOT 'loop stopped') AS failed,
+          SUM(CASE WHEN json_valid(usage_json) THEN json_extract(usage_json,'$.input') END) AS input,
+          SUM(CASE WHEN json_valid(usage_json) THEN json_extract(usage_json,'$.output') END) AS output
+        FROM jobs WHERE finished_at >= unixepoch(date('now','-13 days')) GROUP BY day
+      )
+      SELECT days.day,coalesce(completed,0),coalesce(failed,0),input,output
+      FROM days LEFT JOIN activity USING(day) ORDER BY days.day")?;
+    let trend = daily
+        .query_map([], |r| {
+            Ok(TrendDay {
+                day: r.get(0)?,
+                completed: r.get(1)?,
+                failed: r.get(2)?,
+                input: r.get(3)?,
+                output: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(QueueReport {
+        experiments,
+        lanes,
+        trend,
+    })
 }
 
 #[tauri::command]
@@ -322,6 +359,15 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
     if !has_usage {
         tx.execute_batch("ALTER TABLE jobs ADD COLUMN usage_json TEXT")?;
     }
+    let has_finished_at: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='finished_at')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_finished_at {
+        tx.execute_batch("ALTER TABLE jobs ADD COLUMN finished_at INTEGER")?;
+    }
+    tx.execute_batch("CREATE INDEX IF NOT EXISTS jobs_finished_at ON jobs(finished_at)")?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS research_loops (
         id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
@@ -486,6 +532,31 @@ mod tests {
         );
         assert_eq!(report.lanes[1].pending, 1);
         assert!(report.lanes[1].input.is_none());
+    }
+
+    #[test]
+    fn daily_trend_ignores_undated_jobs_and_keeps_missing_token_counters_null() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        db.execute_batch(
+            "INSERT INTO jobs(id,lane,state,detail,usage_json,finished_at) VALUES
+            ('legacy','codex','done',NULL,NULL,NULL),
+            ('today','codex','done',NULL,'{\"input\":25}',unixepoch()),
+            ('error','claude','failed','attempt limit',NULL,unixepoch()),
+            ('stopped','muse','failed','loop stopped',NULL,unixepoch()),
+            ('future','codex','done',NULL,NULL,unixepoch('now','+2 days'))",
+        )
+        .unwrap();
+        let result = report(&db).unwrap();
+        assert_eq!(result.trend.len(), 14);
+        let today = result.trend.last().unwrap();
+        assert_eq!(
+            (today.completed, today.failed, today.input, today.output),
+            (1, 1, Some(25), None)
+        );
+        assert!(result.trend[..13]
+            .iter()
+            .all(|day| day.completed == 0 && day.input.is_none()));
     }
 
     #[test]

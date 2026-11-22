@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import { ResearchTrends, type TrendDay } from "./ResearchTrends";
 
 const tokenLabels = { input: "Input", output: "Output", cached: "Cache reads", cache_write: "Cache writes", reasoning: "Reasoning" };
 export type TokenUsage = Partial<Record<keyof typeof tokenLabels, number | null>>;
@@ -7,7 +8,7 @@ type Lane = TokenUsage & {
   lane: string; jobs: number; completed: number; failed: number; stopped: number;
   pending: number; attempts: number; observed_jobs: number;
 };
-type Report = { experiments: number; lanes: Lane[] };
+type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse" };
 
@@ -66,6 +67,7 @@ export function ResearchReport() {
           <div><dt>Failed</dt><dd className="text-lg font-semibold">{sum("failed")}{terminal ? ` · ${rate(sum("failed"), terminal)}` : ""}</dd></div>
         </dl>
         <p className="mt-2 text-sm">{sum("pending")} queued or running · {sum("stopped")} stopped. Completion rates exclude pending and stopped jobs.</p>
+        {report.trend && <ResearchTrends days={report.trend} />}
         <label className="mt-3 flex items-center gap-2 text-sm">
           <input type="checkbox" role="switch" className="workspace-switch" checked={details}
             onChange={(event) => setDetails(event.target.checked)} />

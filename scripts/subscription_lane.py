@@ -195,7 +195,7 @@ def worker(db, runners, lock_fd, state):
     job_id, attempts, prompt, lane = job
     binary = runners[lane]
     if attempts >= MAX_ATTEMPTS:
-        db.execute("UPDATE jobs SET state='failed', pid=NULL, detail='attempt limit' WHERE id=?", (job_id,))
+        db.execute("UPDATE jobs SET state='failed', finished_at=unixepoch(), detail='attempt limit' WHERE id=?", (job_id,))
         return
     # An allowlist intentionally excludes API keys, identity federation and custom endpoints.
     env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "CODEX_HOME") if k in os.environ}
@@ -305,7 +305,7 @@ def worker(db, runners, lock_fd, state):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             if attempts + 1 >= MAX_ATTEMPTS:
-                db.execute("UPDATE jobs SET state='failed', detail='attempt limit' WHERE id=?", (job_id,))
+                db.execute("UPDATE jobs SET state='failed', finished_at=unixepoch(), detail='attempt limit' WHERE id=?", (job_id,))
             else:
                 db.execute(
                     "UPDATE jobs SET state='queued', due=?,detail='runner unavailable; retry scheduled' WHERE id=?",
@@ -315,7 +315,7 @@ def worker(db, runners, lock_fd, state):
         detail = {"codex": "ChatGPT", "claude": "Claude account; API credentials excluded",
                   "antigravity": "Antigravity account; AI credits disabled for run",
                   "muse": "Muse browser account; API-key overrides excluded"}[lane]
-        db.execute("UPDATE jobs SET state='done', result=?, detail=?, usage_json=? WHERE id=?",
+        db.execute("UPDATE jobs SET state='done', finished_at=unixepoch(), result=?, detail=?, usage_json=? WHERE id=?",
                    (result, detail, usage_json, job_id))
 
 
@@ -391,6 +391,8 @@ def main():
                 db.execute("ALTER TABLE jobs ADD COLUMN prompt TEXT")
             if "usage_json" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN usage_json TEXT")
+            if "finished_at" not in columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN finished_at INTEGER")
             db.execute("""CREATE TABLE IF NOT EXISTS research_loops (
                 id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
                 step INTEGER NOT NULL, status TEXT NOT NULL)""")
@@ -423,7 +425,7 @@ def main():
                     if not answer:
                         parser.error("expected a non-empty UTF-8 result up to 16 KiB")
                     written = db.execute(
-                        "UPDATE jobs SET state='done', result=?, detail='manual result; billing unverified' "
+                        "UPDATE jobs SET state='done', finished_at=unixepoch(), result=?, detail='manual result; billing unverified' "
                         "WHERE id=? AND lane=? AND state='queued'", (answer, args.id, row[0]),
                     ).rowcount
                     if written != 1:
@@ -460,7 +462,7 @@ def main():
                     db.execute("UPDATE research_loops SET status=? WHERE id=?",
                                ("stopped" if args.decision == "stop" else "done", args.id))
                     if args.decision == "stop":
-                        db.execute("UPDATE jobs SET state='failed',detail='loop stopped' WHERE id=? AND state IN ('queued','running')",
+                        db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail='loop stopped' WHERE id=? AND state IN ('queued','running')",
                                    (f"loop:{args.id}:{step}",))
                 else:
                     queue_loop_step(db, args.id, step + 1, lanes, target)
