@@ -1516,9 +1516,9 @@ export default function App() {
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <ResearchQueue />
-          <Disclosure id="overview-section" title="Run history and system activity">
+          <Disclosure id="overview-section" title="Run history and system activity" contentClassName="space-y-4">
           <section
-            className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
+            className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
             {[
               {
