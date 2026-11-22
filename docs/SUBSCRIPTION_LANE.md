@@ -238,7 +238,24 @@ worker was restarted between stages, not killed during a live model call.
 The opt-in test `live_public_research_pilot` consumes live subscription quota
 and should only be run with authorization.
 
+## Local benchmark checkpoints
+
+A trusted local runner can make an experiment visible in the desktop queue
+without sending its title or report to a provider:
+
+```sh
+python3 scripts/subscription_lane.py local-checkpoint-start --id example --local-title 'Local benchmark'
+python3 scripts/subscription_lane.py local-checkpoint-finish --id example --result-file audit-summary.txt
+python3 scripts/subscription_lane.py loop-status --id example
+```
+
+Use **Refresh queue** to see the report under **Local evidence**. The finish
+command stores the independently verified report once and pauses at human
+review. It does not run or certify the benchmark itself. A local checkpoint
+cannot be exported to a provider and does not consume subscription quota.
+
 ## Optional paid DeepSeek route
+
 
 Select **DeepSeek (paid API)** as a research step or reviewer and confirm API
 charges in the experiment setup. The worker also needs explicit opt-in:

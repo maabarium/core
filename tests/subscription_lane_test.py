@@ -17,6 +17,31 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_local_checkpoint_is_visible_and_never_routes_to_a_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cli = root / "must-not-run"
+            cli.write_text("#!/bin/sh\ntouch \"$0.called\"\nexit 1\n")
+            cli.chmod(0o700)
+            base = [sys.executable, str(SCRIPT), "--state", tmp, "--codex", str(cli)]
+            def run(*args):
+                return subprocess.run([*base, *args], capture_output=True, text=True, timeout=5)
+            report = root / "audit.txt"
+            report.write_text("Independent local audit: both baselines evaluated.")
+            start = ("local-checkpoint-start", "--id", "local-pilot", "--local-title", "Local pilot")
+            finish = ("local-checkpoint-finish", "--id", "local-pilot", "--result-file", str(report))
+            self.assertEqual(run(*start).returncode, 0)
+            self.assertNotEqual(run(*start).returncode, 0)
+            self.assertEqual(run("tick").returncode, 0)
+            self.assertFalse(Path(f"{cli}.called").exists())
+            self.assertNotEqual(run("export-task", "--id", "loop:local-pilot:1").returncode, 0)
+            self.assertEqual(run(*finish).returncode, 0)
+            self.assertNotEqual(run(*finish).returncode, 0)
+            status = json.loads(run("loop-status", "--id", "local-pilot").stdout)
+            self.assertEqual((status["phase"], status["lane"]), ("awaiting_review", "Local evidence"))
+            jobs = json.loads(run("status").stdout)
+            self.assertEqual((len(jobs), jobs[0]["attempts"], jobs[0]["result"]), (1, 0, report.read_text()))
+
     def test_paid_deepseek_is_bounded_and_never_retries_an_interrupted_charge(self):
         script = runpy.run_path(str(SCRIPT))
         request = script["deepseek_request"]

@@ -493,7 +493,8 @@ def main():
     parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
     parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
     parser.add_argument("--enable-deepseek", action="store_true", help="allow paid DeepSeek jobs using the macOS Keychain")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish"])
+    parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
     parser.add_argument("--lane", choices=LANES, default="codex")
     parser.add_argument("--result-file", type=Path)
     parser.add_argument("--public-target", help="Public synthetic target; sent to the selected providers")
@@ -582,11 +583,47 @@ def main():
                            (args.id, args.lane, detail))
                 if db.execute("SELECT lane FROM jobs WHERE id=?", (args.id,)).fetchone()[0] != args.lane:
                     parser.error("job ID already belongs to another lane")
+            elif args.action in ("local-checkpoint-start", "local-checkpoint-finish"):
+                if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", args.id):
+                    parser.error("use a short experiment ID containing letters, digits, hyphens or underscores")
+                job_id = f"loop:{args.id}:1"
+                lane = "Local evidence"
+                db.execute("BEGIN IMMEDIATE")
+                if args.action == "local-checkpoint-start":
+                    title = (args.local_title or "").strip()
+                    if not title or len(title.encode()) > 256:
+                        parser.error("provide a short --local-title")
+                    if db.execute("SELECT 1 FROM research_loops WHERE id=?", (args.id,)).fetchone():
+                        parser.error("experiment ID already exists")
+                    db.execute(
+                        "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,?,1,'active',1)",
+                        (args.id, title, json.dumps([lane])),
+                    )
+                    db.execute("INSERT INTO jobs(id,lane,state,detail) VALUES (?,?,'queued',?)",
+                               (job_id, lane, f"{title}: waiting for the local runner"))
+                else:
+                    try:
+                        if not args.result_file or not args.result_file.is_file():
+                            raise ValueError
+                        with args.result_file.open("rb") as handle:
+                            raw = handle.read(16385)
+                        if len(raw) > 16384 or not (summary := raw.decode().strip()):
+                            raise ValueError
+                    except (OSError, ValueError):
+                        parser.error("provide a nonempty UTF-8 --result-file up to 16 KiB")
+                    if db.execute("""
+                        UPDATE jobs SET state='done', finished_at=unixepoch(), result=?,
+                          detail='Local runner report; awaiting human review'
+                        WHERE id=? AND lane=? AND state='queued' AND EXISTS(
+                          SELECT 1 FROM research_loops WHERE id=? AND status='active')
+                    """, (summary, job_id, lane, args.id)).rowcount != 1:
+                        parser.error("no active local checkpoint waiting for a report")
+                db.commit()
             elif args.action in ("export-task", "import-result"):
                 if args.id.startswith("loop:") and args.id.endswith(":review"):
                     parser.error("AI reviews must run through the selected subscription worker")
                 row = db.execute("SELECT lane,state,prompt,model,effort FROM jobs WHERE id=?", (args.id,)).fetchone()
-                if not row or row[0] in ("codex", "deepseek") or row[1] != "queued":
+                if not row or row[0] not in OPT_IN_LANES or row[1] != "queued":
                     parser.error("expected a queued external-lane job")
                 if args.action == "export-task":
                     print(json.dumps({"id": args.id, "lane": row[0], "prompt": row[2] or PROMPT,
