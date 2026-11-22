@@ -19,6 +19,28 @@ it("queues the selected provider and displays manual handoff without claiming au
   expect(invoke).toHaveBeenNthCalledWith(2, "research_queue_list");
 });
 
+it("locks the local rule and a separate subscription reviewer in Both mode", async () => {
+  cleanup();
+  vi.mocked(invoke).mockReset().mockResolvedValueOnce("both-loop").mockResolvedValueOnce([]);
+  render(<ResearchQueue />);
+  fireEvent.change(screen.getByLabelText("Public research target"), { target: { value: "Public fixture" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add Codex step" }));
+  fireEvent.change(screen.getByLabelText("How should we review this experiment?"), { target: { value: "both" } });
+  const start = screen.getByRole("button", { name: "Start experiment" }) as HTMLButtonElement;
+  expect(start.disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("Reviewer provider"), { target: { value: "claude" } });
+  fireEvent.change(screen.getByLabelText("Reviewer model"), { target: { value: "opus" } });
+  fireEvent.change(screen.getByLabelText("Reviewer thinking effort"), { target: { value: "high" } });
+  fireEvent.click(screen.getByRole("button", { name: "Fill in an example baseline" }));
+  fireEvent.click(start);
+  expect(await screen.findByText(/Experiment ID: both-loop/)).toBeTruthy();
+  expect(invoke).toHaveBeenNthCalledWith(1, "research_loop_start", {
+    target: "Public fixture", plan: [{ lane: "codex", model: null, effort: null }], reviewEvery: 1,
+    evaluation: { baseline: expect.stringContaining("public-example-v1"), minimumSavingsPercent: 20 },
+    reviewer: { lane: "claude", model: "opus", effort: "high" },
+  });
+});
+
 it("starts a public experiment with an ordered provider plan", async () => {
   cleanup();
   vi.mocked(invoke).mockReset().mockResolvedValueOnce("example-loop").mockResolvedValueOnce([]);
@@ -38,5 +60,23 @@ it("starts a public experiment with an ordered provider plan", async () => {
       { lane: "codex", model: "gpt-5.6-sol", effort: "high" },
       { lane: "muse", model: null, effort: null },
     ], reviewEvery: 2,
+  });
+});
+
+it("requires a separate paid opt-in before starting a DeepSeek research step", async () => {
+  cleanup();
+  vi.mocked(invoke).mockReset().mockResolvedValueOnce("paid-loop").mockResolvedValueOnce([]);
+  render(<ResearchQueue />);
+  fireEvent.change(screen.getByLabelText("Public research target"), { target: { value: "Public fixture" } });
+  fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "deepseek" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add DeepSeek (paid API) step" }));
+  const start = screen.getByRole("button", { name: "Start experiment" }) as HTMLButtonElement;
+  expect(start.disabled).toBe(true);
+  fireEvent.click(screen.getByRole("switch", { name: "Allow DeepSeek API charges for this experiment" }));
+  fireEvent.click(start);
+  expect(await screen.findByText(/Experiment ID: paid-loop/)).toBeTruthy();
+  expect(invoke).toHaveBeenNthCalledWith(1, "research_loop_start", {
+    target: "Public fixture", plan: [{ lane: "deepseek", model: null, effort: null }],
+    reviewEvery: 1, allowPaid: true,
   });
 });

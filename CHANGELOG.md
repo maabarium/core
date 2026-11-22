@@ -11,6 +11,8 @@ an optional automatic run window and mandatory human review checkpoints.
 
 ### Added
 
+- Research experiments can lock a local exact-answer and work-saving rule, queue a separate AI reviewer, or use both. DeepSeek is available as an opt-in paid API route for research and review, without automatic billing fallback. AI advice cannot change the local verdict.
+
 - Workflow groups with sequential or parallel runs, schedules, history, and optional Telegram notifications.
 - An experimental local ChatGPT subscription lane with a durable queue and a macOS launch agent configuration.
 

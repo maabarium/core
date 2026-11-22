@@ -41,6 +41,7 @@ use tracing_subscriber::prelude::*;
 use url::Url;
 
 mod maintenance;
+mod research_evaluator;
 mod research_queue;
 mod setup;
 
@@ -548,6 +549,9 @@ fn main() {
             research_queue::research_queue_enqueue,
             research_queue::research_subscription_check,
             research_queue::research_loop_start,
+            research_evaluator::research_evaluation_preview,
+            research_evaluator::research_evaluation_check,
+            research_evaluator::research_evaluation_read,
             get_console_state,
             save_desktop_setup,
             set_provider_api_key,

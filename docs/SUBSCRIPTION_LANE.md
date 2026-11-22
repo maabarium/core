@@ -44,6 +44,38 @@ python3 scripts/subscription_lane.py loop-status --id public-example
 python3 scripts/subscription_lane.py loop-review --id public-example --step 1 --decision accept
 ```
 
+### Local evaluation
+
+Select **Same answers, less work** when setting up an experiment. Open
+or paste baseline results and choose the minimum work saving. **Try an
+example** runs a sample without changing the saved rule. Starting the
+experiment writes the baseline and rule into the local queue transaction.
+Neither is automatically included in any provider prompt.
+
+Once the final step finishes, open **Check experiment evidence** and
+load the candidate results. The local evaluator compares exact answer
+strings by case ID and independently adds the five work counters. The
+first complete verdict is stored with the submitted evidence and cannot
+be overwritten through the app. Incomplete evidence is not recorded as
+a failure. You can stop the loop without acceptance; accepting the final
+step requires a saved verdict, including a failure you choose to acknowledge.
+
+Both result files use the same format:
+
+```json
+{
+  "fixture": "public-fixture-v1",
+  "cases": [{ "id": "case-1", "answer": "yes" }],
+  "work": { "setup": 5, "execute": 90, "propose": 0, "verify": 5, "fallback": 0 }
+}
+```
+
+Use a trusted local test runner to produce the results and count the work
+in consistent units. The app checks that the reported fixture and case IDs
+match, but does not authenticate the files, run the candidate or baseline,
+or verify that the upstream counters were collected correctly. It does not
+send the evidence to a model or choose another experiment automatically.
+
 Each desktop experiment step can pin a provider model ID and thinking
 effort, or leave either at its default. The values are saved in the plan
 and copied to the queued job; retrying does not change them. The choices
@@ -169,3 +201,44 @@ counters. Days are grouped in UTC. Terminal timestamps are recorded by
 the updated worker; existing undated jobs remain in all-time totals but
 are not backfilled into the chart. The daily table gives the exact chart
 values and identifies missing counters.
+
+## Independent AI review
+
+In the desktop experiment setup, choose **AI reviewer** or **Both** and select
+a different provider from the final research step. Model and thinking effort
+are optional; leave them unset to use the lane defaults. The same installed
+subscription worker handles the review, with no alternate billing route.
+Use only public material: the reviewer receives the public target, up to 3,000
+characters of the final step's result, and (in Both mode) the local verdict
+and work totals. Raw local evidence is not sent.
+
+In Both mode the review queues only after a complete local verdict is saved.
+Read the reviewer advice in the research jobs list. It cannot change the
+verdict or launch a follow-up. Accepting the final checkpoint acknowledges the
+result, including a failed local check; it does not promote the candidate.
+If the subscription is unavailable, the review waits or fails under the lane's
+existing policy. You can stop the experiment without a review. Use the
+updated worker and CLI from the same release as the desktop app.
+
+## Optional paid DeepSeek route
+
+Select **DeepSeek (paid API)** as a research step or reviewer and confirm API
+charges in the experiment setup. The worker also needs explicit opt-in:
+add `--enable-deepseek` to your existing `launchd-plist` command and reload
+the updated agent. For foreground use, run
+`python3 scripts/subscription_lane.py tick --enable-deepseek` with your
+usual worker options. Neither step changes any provider's billing settings.
+
+In macOS Keychain Access, create a password item named `maabarium.deepseek`
+with account `api` and the DeepSeek API key as the password. Keep the key
+out of Terminal history, queue files and launch-agent configuration.
+Approve Keychain access on the first run if macOS asks; desktop **Check setup**
+checks for the entry without contacting DeepSeek. It does not prove that
+the unattended worker can read the key or that billing is active.
+
+The default model is `deepseek-flash`; `deepseek-v4-pro` is also supported.
+Thinking is off unless low, high or max is selected. Each job uses at most
+one request, with a 2,048 generated-token limit. If the worker is interrupted
+after claiming a paid request, the next worker marks it failed rather than
+risking a duplicate charge. Missing credentials keep the job queued without
+requesting the model. No subscription job falls back to this route.

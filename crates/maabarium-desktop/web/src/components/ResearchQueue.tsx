@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
 import { ResearchReport, TokenDetails, type TokenUsage } from "./ResearchReport";
+import { EvaluationRuleFields, EvidenceCheck, type EvaluationSetup } from "./ResearchEvaluation";
 
-const labels = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse" };
+const labels = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
 type Lane = keyof typeof labels;
 type Step = { lane: Lane; model: string | null; effort: string | null };
 const commonEffort = ["low", "medium", "high", "xhigh"];
@@ -11,6 +12,7 @@ const effortOptions: Record<Lane, string[]> = {
   claude: [...commonEffort, "max"],
   antigravity: [...commonEffort, "max"],
   muse: ["none", "minimal", ...commonEffort, "max", "ultra"],
+  deepseek: ["low", "high", "max"],
 };
 const setup: Record<Lane, { status: string; steps: string[]; check: string }> = {
   codex: {
@@ -46,6 +48,15 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
     ],
     check: "muse usage",
   },
+  deepseek: {
+    status: "Optional usage-based billing. Subscription jobs never switch to this route.",
+    steps: [
+      "Create an API key in the DeepSeek platform and check its billing settings.",
+      "In macOS Keychain Access, add a password item named maabarium.deepseek, with account api and your API key as the password.",
+      "Enable DeepSeek in the local worker using the queue guide. Check setup does not make an API call.",
+    ],
+    check: "Worker option: --enable-deepseek",
+  },
 };
 type Job = {
   id: string;
@@ -71,11 +82,23 @@ export function ResearchQueue() {
   const [plan, setPlan] = useState<Step[]>([]);
   const [reviewEvery, setReviewEvery] = useState(1);
   const [loopId, setLoopId] = useState("");
+  const [evaluation, setEvaluation] = useState<EvaluationSetup | null>(null);
+  const [evaluationMode, setEvaluationMode] = useState("human");
+  const [reviewer, setReviewer] = useState<Step | null>(null);
+  const [allowPaid, setAllowPaid] = useState(false);
+  const useReviewer = evaluationMode === "ai" || evaluationMode === "both";
+  const hasPaid = plan.some((step) => step.lane === "deepseek") || (useReviewer && reviewer?.lane === "deepseek");
+  const finalLane = plan[plan.length - 1]?.lane;
+  const reviewerValid = !useReviewer || (reviewer && reviewer.lane !== finalLane);
   async function startLoop() {
     setBusy(true);
     setMessage("");
     try {
-      const id = await invoke<string>("research_loop_start", { target, plan, reviewEvery });
+      const id = await invoke<string>("research_loop_start", {
+        target, plan, reviewEvery, ...(evaluation ? { evaluation } : {}),
+        ...(useReviewer && reviewer ? { reviewer } : {}),
+        ...(hasPaid ? { allowPaid } : {}),
+      });
       setLoopId(id);
       setMessage("Experiment saved and its first step queued.");
       setJobs(await invoke<Job[]>("research_queue_list"));
@@ -121,7 +144,7 @@ export function ResearchQueue() {
           disabled={busy} onChange={(event) => setLane(event.target.value as Lane)}>
           {Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select>
-        <button type="button" className="rounded border px-3 py-2" disabled={busy} onClick={() => void update(true)}>Queue task</button>
+        <button type="button" className="rounded border px-3 py-2" disabled={busy || lane === "deepseek"} onClick={() => void update(true)}>Queue task</button>
         <button type="button" className="rounded border px-3 py-2" disabled={busy} onClick={() => void update(false)}>Refresh queue</button>
       </div>
       <details className="mt-4 rounded border p-3">
@@ -190,22 +213,79 @@ export function ResearchQueue() {
               </div>
             </li>)}
           </ol>
+          <fieldset disabled={busy} className="space-y-2 rounded-xl border p-3">
+            <legend className="px-1 font-medium">Evaluation</legend>
+            <label className="block text-sm">How should we review this experiment?
+              <select className="ml-2 rounded border bg-transparent p-2" value={evaluationMode}
+                onChange={(event) => {
+                  const mode = event.target.value;
+                  setEvaluationMode(mode);
+                  setEvaluation((previous) => mode === "local" || mode === "both"
+                    ? previous ?? { baseline: "", minimumSavingsPercent: 20 } : null);
+                }}>
+                <option value="human">Human review only</option>
+                <option value="local">Local checks</option>
+                <option value="ai">AI reviewer</option>
+                <option value="both">Both: local checks and AI review</option>
+              </select>
+            </label>
+            {evaluation && <EvaluationRuleFields setup={evaluation} onChange={setEvaluation} disabled={busy} />}
+            {useReviewer && <>
+              <p className="text-sm">The selected provider receives the public target, an excerpt of the final step, and local verdict totals if available. Keep private information out of the target and steps. The reviewer cannot change a verdict or start another experiment.</p>
+              <label className="block text-sm">Reviewer provider
+                <select className="ml-2 rounded border bg-transparent p-2" required value={reviewer?.lane ?? ""}
+                  onChange={(event) => {
+                    const selected = event.target.value as Lane | "";
+                    setReviewer(selected ? { lane: selected, model: null, effort: null } : null);
+                  }}>
+                  <option value="">Choose a provider</option>
+                  {(Object.keys(labels) as Lane[]).map((provider) => <option key={provider} value={provider}
+                    disabled={provider === finalLane}>{labels[provider]}</option>)}
+                </select>
+              </label>
+              {reviewer && <>
+                <label className="block text-sm">Reviewer model
+                  <input className="ml-2 rounded border bg-transparent p-2" value={reviewer.model ?? ""}
+                    maxLength={128} pattern="[A-Za-z0-9][A-Za-z0-9._:/\\-]{0,127}" placeholder="Subscription default"
+                    onChange={(event) => {
+                      const model = event.target.value || null;
+                      setReviewer({ ...reviewer, model, effort: reviewer.lane === "antigravity" && /orchestrator/i.test(model ?? "") ? null : reviewer.effort });
+                    }} />
+                </label>
+                <label className="block text-sm">Reviewer thinking effort
+                  <select className="ml-2 rounded border bg-transparent p-2" value={reviewer.effort ?? ""}
+                    disabled={reviewer.lane === "antigravity" && /orchestrator/i.test(reviewer.model ?? "")}
+                    onChange={(event) => setReviewer({ ...reviewer, effort: event.target.value || null })}>
+                    <option value="">{reviewer.lane === "deepseek" ? "Off" : "Provider default"}</option>
+                    {effortOptions[reviewer.lane].map((effort) => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
+                  </select>
+                </label>
+              </>}
+              {!reviewerValid && reviewer && <p role="alert" className="text-sm">Choose a different reviewer provider from the last research step.</p>}
+            </>}
+          </fieldset>
+          {hasPaid && <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" role="switch" className="toggle-switch" checked={allowPaid}
+              onChange={(event) => setAllowPaid(event.target.checked)} />
+            Allow DeepSeek API charges for this experiment
+          </label>}
           <div className="flex flex-wrap gap-2">
             <button type="button" className="rounded border px-3 py-2" disabled={busy || plan.length >= 20}
               onClick={() => setPlan((previous) => [...previous, { lane, model: null, effort: null }])}>Add {labels[lane]} step</button>
             <button type="submit" className="rounded border px-3 py-2"
-              disabled={busy || !target.trim() || new TextEncoder().encode(target.trim()).length > 4096 || !plan.length}>Start experiment</button>
+              disabled={busy || !reviewerValid || (hasPaid && !allowPaid) || !target.trim() || new TextEncoder().encode(target.trim()).length > 4096 || !plan.length}>Start experiment</button>
           </div>
         </form>
         {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Use the command-line tool to review the result and continue.</p>}
       </details>
+      <EvidenceCheck experimentId={loopId} />
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
       <ResearchReport />
       {jobs.length > 0 && (
         <ul className="mt-3 space-y-2" aria-label="Latest research jobs">
           {jobs.map((job) => (
             <li key={job.id} className="rounded border p-3">
-              <p className="font-semibold">{labels[job.lane] ?? job.lane}: {job.state}</p>
+              <p className="font-semibold">{job.id.endsWith(":review") ? "AI review · " : ""}{labels[job.lane] ?? job.lane}: {job.state}</p>
               <p className="break-all text-sm">{job.id}</p>
               <p className="text-sm">{job.attempts} attempts{job.detail ? ` · ${job.detail}` : ""}</p>
               {(job.model || job.effort) && <p className="text-sm">Model: {job.model ?? "Default"} · Thinking effort: {job.effort ?? "Default"}</p>}

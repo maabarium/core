@@ -5,6 +5,36 @@ use std::path::Path;
 
 #[tauri::command]
 pub(crate) async fn research_subscription_check(lane: String) -> Result<String, String> {
+    if lane == "deepseek" {
+        if !cfg!(target_os = "macos") {
+            return Err("The paid DeepSeek lane needs macOS Keychain.".into());
+        }
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tokio::process::Command::new("/usr/bin/security")
+                .args([
+                    "find-generic-password",
+                    "-s",
+                    "maabarium.deepseek",
+                    "-a",
+                    "api",
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .status(),
+        )
+        .await
+        .map_err(|_| "Keychain check timed out.")?
+        .map_err(|_| "Could not check Keychain.")?;
+        return Ok(if status.success() {
+            "API key entry found. Account balance and worker access have not been checked."
+        } else {
+            "No accessible DeepSeek key entry. Follow the Keychain setup steps."
+        }
+        .into());
+    }
     let cli = match lane.as_str() {
         "codex" => "codex",
         "claude" => "claude",
@@ -168,10 +198,12 @@ impl ResearchStep {
             "muse" => &[
                 "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
             ],
+            "deepseek" => &["low", "high", "max"],
             _ => return false,
         };
         model.is_none_or(|m| {
             m.len() <= 128
+                && (lane != "deepseek" || matches!(m, "deepseek-flash" | "deepseek-v4-pro"))
                 && m.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
                 && m.bytes()
                     .all(|c| c.is_ascii_alphanumeric() || b"._:/-".contains(&c))
@@ -331,7 +363,7 @@ fn allowance_summary(usage: &serde_json::Value) -> Option<serde_json::Value> {
 }
 
 #[cfg(target_os = "macos")]
-fn connect() -> Result<Connection, String> {
+pub(super) fn connect() -> Result<Connection, String> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
     let dir = Path::new(&home).join(".maabarium/subscription-lane");
@@ -370,7 +402,7 @@ fn connect() -> Result<Connection, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn connect() -> Result<Connection, String> {
+pub(super) fn connect() -> Result<Connection, String> {
     Err("The local subscription queue currently requires macOS".into())
 }
 
@@ -443,6 +475,11 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
             "ALTER TABLE research_loops ADD COLUMN review_every INTEGER NOT NULL DEFAULT 1",
         )?;
     }
+    tx.execute_batch(super::research_evaluator::TABLE)?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS research_reviewers (
+        loop_id TEXT PRIMARY KEY, selection TEXT NOT NULL)",
+    )?;
     tx.commit()
 }
 
@@ -451,6 +488,9 @@ pub(crate) async fn research_loop_start(
     target: String,
     plan: Vec<ResearchStep>,
     review_every: usize,
+    evaluation: Option<super::research_evaluator::EvaluationSetup>,
+    reviewer: Option<ResearchStep>,
+    allow_paid: Option<bool>,
 ) -> Result<String, String> {
     if target.trim().is_empty()
         || target.len() > 4096
@@ -458,15 +498,41 @@ pub(crate) async fn research_loop_start(
         || plan.len() > 20
         || !(1..=plan.len()).contains(&review_every)
         || plan.iter().any(|step| !step.is_valid())
+        || reviewer.as_ref().is_some_and(|step| {
+            !step.is_valid()
+                || plan
+                    .last()
+                    .is_some_and(|last| last.fields().0 == step.fields().0)
+        })
     {
         return Err(
-            "Enter a public target, 1–20 provider steps, and a checkpoint within the plan.".into(),
+            "Enter a public target, 1–20 valid steps, and a checkpoint within the plan. An AI reviewer must use a different provider from the last step.".into(),
         );
     }
+    if plan
+        .iter()
+        .chain(reviewer.iter())
+        .any(|step| step.fields().0 == "deepseek")
+        && allow_paid != Some(true)
+    {
+        return Err("Confirm paid DeepSeek API use before starting the experiment.".into());
+    }
+    let locked = evaluation
+        .map(super::research_evaluator::LockedRule::new)
+        .transpose()?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut db = connect()?;
         let id = uuid::Uuid::new_v4().to_string();
-        insert_loop(&mut db, &id, target.trim(), &plan, review_every).map_err(|e| e.to_string())?;
+        insert_loop(
+            &mut db,
+            &id,
+            target.trim(),
+            &plan,
+            review_every,
+            locked.as_ref(),
+            reviewer.as_ref(),
+        )
+        .map_err(|e| e.to_string())?;
         Ok(id)
     })
     .await
@@ -479,6 +545,8 @@ fn insert_loop(
     target: &str,
     plan: &[ResearchStep],
     review_every: usize,
+    rule: Option<&super::research_evaluator::LockedRule>,
+    reviewer: Option<&ResearchStep>,
 ) -> rusqlite::Result<()> {
     let [first, ..] = plan else {
         return Err(rusqlite::Error::InvalidQuery);
@@ -501,12 +569,33 @@ fn insert_loop(
         rusqlite::params![
             format!("loop:{id}:1"),
             lane,
-            (lane != "codex").then_some("awaiting manual handoff"),
+            match lane {
+                "codex" => None,
+                "deepseek" => Some("Paid DeepSeek API; waiting for enabled worker"),
+                _ => Some("awaiting manual handoff"),
+            },
             prompt,
             model,
             effort,
         ],
     )?;
+    if let Some(rule) = rule {
+        let json = serde_json::to_string(rule)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        tx.execute(
+            "INSERT INTO research_evaluations(loop_id,rule) VALUES (?,?)",
+            rusqlite::params![id, json],
+        )?;
+    }
+    if let Some(reviewer) = reviewer {
+        let (lane, model, effort) = reviewer.fields();
+        let json =
+            serde_json::json!({ "lane": lane, "model": model, "effort": effort }).to_string();
+        tx.execute(
+            "INSERT INTO research_reviewers(loop_id,selection) VALUES (?,?)",
+            rusqlite::params![id, json],
+        )?;
+    }
     tx.commit()
 }
 
@@ -663,7 +752,7 @@ mod tests {
             ResearchStep::Lane("muse".into()),
             ResearchStep::Lane("codex".into()),
         ];
-        insert_loop(&mut db, "first", "public target", &plan, 2).unwrap();
+        insert_loop(&mut db, "first", "public target", &plan, 2, None, None).unwrap();
         let row: (String, String) = db
             .query_row("SELECT id,lane FROM jobs", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -672,7 +761,7 @@ mod tests {
         assert_eq!(row, ("loop:first:1".into(), "muse".into()));
         db.execute("INSERT INTO jobs(id) VALUES ('loop:second:1')", [])
             .unwrap();
-        assert!(insert_loop(&mut db, "second", "public target", &plan, 1).is_err());
+        assert!(insert_loop(&mut db, "second", "public target", &plan, 1, None, None).is_err());
         let count: u32 = db
             .query_row("SELECT COUNT(*) FROM research_loops", [], |r| r.get(0))
             .unwrap();

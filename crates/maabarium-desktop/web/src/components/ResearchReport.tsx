@@ -10,7 +10,7 @@ type Lane = TokenUsage & {
 };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
-const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse" };
+const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
 
 export function TokenDetails({ usage }: { usage: TokenUsage }) {
   const counters = (Object.keys(tokenLabels) as (keyof TokenUsage)[]).filter((key) => usage[key] != null);

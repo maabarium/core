@@ -10,12 +10,39 @@ import runpy
 import tempfile
 import time
 import unittest
+from unittest.mock import MagicMock, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py"
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_paid_deepseek_is_bounded_and_never_retries_an_interrupted_charge(self):
+        script = runpy.run_path(str(SCRIPT))
+        request = script["deepseek_request"]
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "Independent review"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 15},
+        }).encode()
+        with patch.dict(request.__globals__, {"build_opener": lambda *_: opener}):
+            result, usage = request("fake-test-key", "public prompt", "deepseek-v4-pro", "high")
+        self.assertEqual(result, "Independent review")
+        self.assertEqual(json.loads(usage), {"input": 10, "output": 15})
+        sent = opener.open.call_args.args[0]
+        self.assertEqual(sent.full_url, "https://api.deepseek.com/chat/completions")
+        self.assertEqual(json.loads(sent.data)["max_tokens"], 2048)
+        self.assertEqual(json.loads(sent.data)["reasoning_effort"], "high")
+        run = script["run_deepseek"]
+        with sqlite3.connect(":memory:") as db:
+            db.execute("CREATE TABLE jobs(id,state,finished_at,detail)")
+            db.execute("INSERT INTO jobs VALUES ('paid','running',NULL,NULL)")
+            with patch.dict(run.__globals__, {"deepseek_request": MagicMock(side_effect=AssertionError)}):
+                run(db, "paid", 1, "public prompt", None, None)
+            state, detail = db.execute("SELECT state,detail FROM jobs").fetchone()
+        self.assertEqual(state, "failed")
+        self.assertIn("not retried", detail)
+
     def test_model_selection_preserves_provider_specific_arguments(self):
         script = runpy.run_path(str(SCRIPT))
         valid, apply = script["valid_selection"], script["apply_selection"]
@@ -79,6 +106,55 @@ class SubscriptionLaneTest(unittest.TestCase):
         self.assertEqual(reset(json.dumps({"payload_type": "run.terminal.failed", "payload": {"reason": reason}})),
                          1795392000)
         self.assertIsNone(reset(json.dumps({"payload_type": "run.terminal.completed", "payload": {"text": reason}})))
+
+    def test_both_modes_wait_for_local_verdict_then_run_one_separate_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cli = root / "fake-claude"
+            cli.write_text(f"""#!{sys.executable}
+import json, os, sys
+assert 'ANTHROPIC_API_KEY' not in os.environ
+if 'auth' in sys.argv:
+    print(json.dumps(dict(loggedIn=True, authMethod='claude.ai', apiProvider='firstParty', subscriptionType='pro')))
+else:
+    assert sys.argv[1:5] == ['--model', 'opus', '--effort', 'high']
+    prompt = sys.stdin.read()
+    assert 'Synthetic result' in prompt and 'private candidate' not in prompt
+    assert '"outcome": "fail"' in prompt
+    print(json.dumps(dict(subtype='success', is_error=False, result='Try a separate control.')))
+""")
+            cli.chmod(0o700)
+            cmd = [sys.executable, str(SCRIPT), "--state", tmp, "--codex", str(cli)]
+            def run(*args):
+                return subprocess.run([*cmd, *args], timeout=5, capture_output=True, text=True)
+            self.assertEqual(run("loop-start", "--id", "both", "--public-target", "Public target",
+                                 "--plan", "muse").returncode, 0)
+            with sqlite3.connect(root / "queue.db") as db:
+                db.execute("INSERT INTO research_reviewers VALUES (?,?)",
+                           ("both", json.dumps(dict(lane="claude", model="opus", effort="high"))))
+                db.execute("INSERT INTO research_evaluations(loop_id,rule,candidate) VALUES (?,?,?)",
+                           ("both", "{}", "private candidate"))
+            answer = root / "answer"
+            answer.write_text("Synthetic result")
+            self.assertEqual(run("import-result", "--id", "loop:both:1", "--result-file", str(answer)).returncode, 0)
+            accept = ("loop-review", "--id", "both", "--step", "1", "--decision", "accept")
+            self.assertEqual(run("tick").returncode, 0)
+            self.assertEqual(len(json.loads(run("status").stdout)), 1)
+            self.assertIn("check the evidence", run(*accept).stderr)
+            verdict = json.dumps(dict(outcome="fail", baseline_work="100", candidate_work="110"))
+            with sqlite3.connect(root / "queue.db") as db:
+                db.execute("UPDATE research_evaluations SET verdict=?", (verdict,))
+            self.assertEqual(run("tick").returncode, 0)
+            self.assertIn("wait for the AI review", run(*accept).stderr)
+            review = run("--claude", str(cli), "tick")
+            self.assertEqual(review.returncode, 0, review.stderr)
+            self.assertEqual(run("tick").returncode, 0)
+            with sqlite3.connect(root / "queue.db") as db:
+                self.assertEqual(db.execute("SELECT state,result FROM jobs WHERE id='loop:both:review'").fetchone(),
+                                 ("done", "Try a separate control."))
+                self.assertEqual(db.execute("SELECT verdict FROM research_evaluations").fetchone(), (verdict,))
+                self.assertEqual(db.execute("SELECT count(*) FROM jobs").fetchone(), (2,))
+            self.assertEqual(run(*accept).returncode, 0)
 
     def test_opt_in_account_lanes_recover_abandoned_claim_without_fallback(self):
         for lane in ("claude", "antigravity", "muse"):
