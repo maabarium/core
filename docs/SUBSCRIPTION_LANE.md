@@ -240,6 +240,35 @@ and should only be run with authorization.
 
 ## Local benchmark checkpoints
 
+For a managed run, register two independently reviewed, self-contained
+executables by absolute path and SHA-256. Use scripts with an absolute
+interpreter path or standalone binaries. The local benchmark runs with your
+OS user privileges: this is a trusted code path, not a sandbox. Do not use
+provider-generated commands or unreviewed code.
+
+```sh
+python3 scripts/subscription_lane.py local-benchmark-enqueue --id public-benchmark \
+  --local-title 'Local benchmark' --public-target 'An approved public description of the test' \
+  --runner /path/to/runner --runner-sha256 RUNNER_SHA256 \
+  --auditor /path/to/auditor --auditor-sha256 AUDITOR_SHA256 \
+  --reviewer codex --benchmark-timeout 60
+```
+
+The same worker runs the pinned benchmark and auditor with separate bounded
+processes. The runner writes evidence to stdout. The auditor receives those
+bytes on stdin and writes a JSON object with `evidence_sha256`, `outcome`
+(`pass` or `fail`), and a human-readable `report`. The worker verifies the
+evidence hash before saving the result, preserves the local evidence and
+process logs under `local-evidence/<id>`, and queues only the approved public
+description and the gate outcome for independent review. The local title,
+report, evidence and paths are never part of that reviewer request.
+
+Worker ticks resume a queued review after restart. An interrupted,
+oversized, invalid or timed-out benchmark does not advance or automatically
+rerun. When the review finishes, the run stops at human review. Neither
+the local report nor the reviewer can automatically start a follow-up.
+This setup currently uses the CLI; status and results appear in the desktop.
+
 A trusted local runner can make an experiment visible in the desktop queue
 without sending its title or report to a provider:
 

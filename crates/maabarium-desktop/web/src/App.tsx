@@ -157,8 +157,14 @@ export default function App() {
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
   const [branchInspection, setBranchInspection] = useState<{ key: string; inventory: ExperimentBranchInventory } | null>(null);
   const experimentJobs = researchJobs.filter(job => job.id.startsWith("loop:"));
-  const featuredResearch = experimentJobs.find(job => job.review_pending)
+  const currentStep = experimentJobs.find(job => job.review_pending)
     ?? experimentJobs.find(job => job.experiment_active);
+  const currentLocalBenchmark = currentStep?.id.endsWith(":review")
+    ? experimentJobs.find(job => job.lane === "Local evidence" && job.id === currentStep.id.replace(/:review$/, ":1"))
+    : undefined;
+  const featuredResearch = currentLocalBenchmark && currentStep
+    ? { ...currentLocalBenchmark, review_pending: currentStep.review_pending }
+    : currentStep;
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
@@ -371,6 +377,8 @@ export default function App() {
   const reportingTitle = reportingJob?.experiment_title ?? "Research experiment";
   const reportingMetrics = reportingJob ? researchEvaluatorMetrics(reportingTitle, reportingJob.result) : null;
   const reportingStatus = reportingJob?.review_pending ? "Awaiting human review"
+    : reportingJob && currentLocalBenchmark && currentStep?.state !== "done"
+      ? (currentStep?.state === "failed" ? "Independent review blocked" : "Awaiting independent review")
     : reportingJob?.state === "running" ? "Running"
     : reportingJob?.state === "queued" ? "Waiting to run"
     : reportingJob?.state === "failed" ? "Failed" : "Report available";

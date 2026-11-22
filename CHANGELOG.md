@@ -11,6 +11,8 @@ an optional automatic run window and mandatory human review checkpoints.
 
 ### Added
 
+- A trusted local benchmark can be queued with pinned runner and auditor executables, then reviewed through a subscription lane before a human checkpoint.
+
 - The macOS application menu can check for updates in a compact panel and install only after the user chooses a release.
 
 - Research experiments can lock a local exact-answer and work-saving rule, queue a separate AI reviewer, or use both. DeepSeek is available as an opt-in paid API route for research and review, without automatic billing fallback. AI advice cannot change the local verdict.

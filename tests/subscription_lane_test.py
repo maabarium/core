@@ -1,5 +1,6 @@
 import json
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -17,6 +18,106 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def managed_benchmark(self, live=False, damage=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "runner"
+            fixture.write_text(f"""#!{sys.executable}
+import json
+values = tuple(range(4, 28, 3))
+queries = [4, 8, 19, 21, 25, 29]
+indexed = set(values)
+print(json.dumps(dict(
+    baseline=[any(q == v for v in values) for q in queries],
+    candidate=[q in indexed for q in queries],
+    scan_work=sum(next((i for i, v in enumerate(values, 1) if q == v), len(values)) for q in queries),
+    index_work=len(indexed)+len(queries),
+)))
+""")
+            auditor = root / "auditor"
+            auditor.write_text(f"""#!{sys.executable}
+import hashlib, json, sys
+raw = sys.stdin.buffer.read()
+report = json.loads(raw)
+expected = [True, False, True, False, True, False]
+assert report["baseline"] == report["candidate"] == expected
+assert report["scan_work"] == 39 and report["index_work"] == 14
+print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
+    outcome="pass", report="PRIVATE-LOCAL-REPORT. Six matches; 14 versus 39 work units.")))
+""")
+            fake = root / "codex"
+            fake.write_text(f"""#!{sys.executable}
+import pathlib, sys
+if "login" in sys.argv:
+    print("Logged in using ChatGPT")
+    sys.exit()
+prompt = sys.stdin.read()
+assert "PRIVATE-LOCAL-REPORT" not in prompt and "PRIVATE-TITLE" not in prompt and '"local_gate": "pass"' in prompt
+pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("Review complete; a handoff needs a human.")
+""")
+            if damage == "bad-audit":
+                text = auditor.read_text().replace("hashlib.sha256(raw).hexdigest()", "'0' * 64")
+                auditor.write_text(text)
+            for path in (fixture, auditor, fake):
+                path.chmod(0o700)
+            state = root / "state"
+            base = [sys.executable, str(SCRIPT), "--state", str(state),
+                    "--codex", "codex" if live else str(fake)]
+            def run(*args):
+                return subprocess.run([*base, *args], capture_output=True, text=True,
+                                      timeout=135 if live else 10)
+            def successful(*args):
+                result = run(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout
+            successful("local-benchmark-enqueue", "--id", "fresh-public-check",
+                       "--local-title", "PRIVATE-TITLE",
+                       "--public-target", "Public test of exact integer membership: linear scan versus a prebuilt set on six fixed queries, charging set setup and probes.",
+                       "--reviewer", "codex", "--runner", str(fixture),
+                       "--runner-sha256", hashlib.sha256(fixture.read_bytes()).hexdigest(),
+                       "--auditor", str(auditor),
+                       "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest())
+            if damage is not None:
+                if damage == "identity":
+                    fixture.write_text("Changed after enqueue")
+                if damage == "interrupted":
+                    with sqlite3.connect(state / "queue.db") as db:
+                        db.execute("UPDATE jobs SET state='running', attempts=1")
+                successful("tick")
+                self.assertEqual(json.loads(successful("loop-status", "--id", "fresh-public-check"))["phase"], "blocked")
+                self.assertEqual(len(json.loads(successful("status"))), 1)
+                return
+            successful("tick")
+            status_args = ("loop-status", "--id", "fresh-public-check")
+            self.assertEqual(json.loads(successful(*status_args))["phase"], "awaiting_independent_review")
+            jobs = json.loads(successful("status"))
+            self.assertIn("14 versus 39", jobs[0]["result"])
+            self.assertNotIn("PRIVATE-LOCAL-REPORT", jobs[1]["prompt"])
+            self.assertTrue((state / "local-evidence/fresh-public-check/hashes.json").is_file())
+            self.assertNotEqual(run("loop-review", "--id", "fresh-public-check", "--step", "1",
+                                    "--decision", "accept").returncode, 0)
+            successful("tick")  # A new worker process must resume the queued review.
+            self.assertEqual(json.loads(successful(*status_args))["phase"], "awaiting_review")
+            jobs = json.loads(successful("status"))
+            self.assertEqual([(job["lane"], job["state"], job["attempts"]) for job in jobs],
+                             [("Local evidence", "done", 1), ("codex", "done", 1)])
+
+    def test_managed_local_benchmark_reaches_human_checkpoint(self):
+        self.managed_benchmark()
+
+    def test_managed_local_benchmark_rejects_changed_identity(self):
+        self.managed_benchmark(damage="identity")
+
+    def test_managed_local_benchmark_rejects_unbound_audit(self):
+        self.managed_benchmark(damage="bad-audit")
+
+    def test_managed_local_benchmark_does_not_retry_an_interrupted_run(self):
+        self.managed_benchmark(damage="interrupted")
+
+    @unittest.skipUnless(os.getenv("MAABARIUM_LIVE_BENCHMARK_REVIEW") == "1", "uses a live subscription")
+    def test_live_managed_benchmark_review(self):
+        self.managed_benchmark(live=True)
+
     def test_local_checkpoint_is_visible_and_never_routes_to_a_provider(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

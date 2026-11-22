@@ -92,6 +92,7 @@ function QueueEntry({ job }: { job: ResearchJob }) {
     : experiment ? (job.id.endsWith(":review") ? `AI review · ${provider}` : provider) : null;
   const finding = job.result?.match(/^(?:#{1,6}\s+)?(?:\*\*)?(?:Answer|Finding|Verdict)(?:\*\*)?\s*:(?:\*\*)?\s*(.{1,240})(?:\r?\n|$)/im)?.[1];
   const next = local && job.state === "queued" ? "The benchmark hasn’t started."
+    : local && job.state === "running" ? job.detail
     : job.review_pending ? "Read the report before deciding whether to continue."
     : retry ? `${job.detail?.includes("quota") ? "Waiting for the provider’s quota to reset. " : ""}Next attempt: ${new Date(retry * 1000).toLocaleString()}`
     : job.state === "failed" ? job.detail ?? "See technical details for more information."
