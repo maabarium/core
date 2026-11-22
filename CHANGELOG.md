@@ -13,7 +13,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Changed
 
-- Rebuilt the console around the active workflow, with a desktop navigation rail, compact narrow layout, and on-demand hardware and run metrics. Workflow groups keep inline deletion confirmation.
+- Rebuilt the console around the active workflow, with a light default, a remembered dark option, and run controls beside the workflow status. Moved analytics and hardware metrics behind a disclosure. Workflow groups keep inline deletion confirmation.
 - Updated Rust and desktop web dependencies, including patched Wasmtime, Git and SQLite libraries.
 - Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin.
 

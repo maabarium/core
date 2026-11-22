@@ -208,6 +208,95 @@ body {
   .workspace-actions button { padding-inline: 0.25rem; }
 }
 
+.maabarium-app {
+  --canvas: #f7f8f5;
+  --surface: #fff;
+  --subtle: #edf2ee;
+  --line: #d9e1db;
+  --ink: #182622;
+  --muted: #4c5e56;
+  --accent: #205b4e;
+  --on-accent: #fff;
+  --danger: #9c2636;
+  color-scheme: light;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.maabarium-app[data-theme="dark"] {
+  --canvas: #131a19;
+  --surface: #1b2523;
+  --subtle: #263330;
+  --line: #3a4a44;
+  --ink: #edf5f0;
+  --muted: #b8c8c0;
+  --accent: #9be1cb;
+  --on-accent: #142f28;
+  --danger: #ffb5be;
+  color-scheme: dark;
+}
+
+.maabarium-app .workspace-shell { background: var(--canvas); }
+.maabarium-app .workspace-rail {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.maabarium-app .console-navigation button { color: var(--muted); }
+.maabarium-app .console-navigation button:hover,
+.maabarium-app .console-navigation button:focus-visible { background: var(--subtle); color: var(--ink); }
+.maabarium-app .workspace-actions button:not(:disabled) {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+.workspace-theme { border-radius: 0.5rem; padding: 0.55rem; font-size: 0.8rem; font-weight: 650; }
+.workspace-theme[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+
+.maabarium-app .workspace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0 0 1.25rem;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  color-scheme: inherit;
+}
+.maabarium-app .workspace-heading h1 { font-size: clamp(1.75rem, 3vw, 2rem); letter-spacing: -0.035em; }
+.maabarium-app .workspace-heading :is(p, span) { color: var(--muted); }
+.workspace-heading-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.maabarium-app .workspace-heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  margin: 0;
+  border: 1px solid var(--line);
+}
+.maabarium-app .workspace-primary { background: var(--accent); color: var(--on-accent); }
+.maabarium-app .workspace-secondary { background: var(--surface); color: var(--ink); }
+.maabarium-app .workspace-primary[data-run-state="running"] { background: var(--surface); color: var(--danger); }
+.workspace-heading button:disabled { opacity: 0.55; cursor: not-allowed; }
+.maabarium-app :is(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.maabarium-app .workspace-metrics summary,
+.maabarium-app .workspace-card { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.workspace-metrics > section { margin-top: 0.75rem; }
+
+/* Compatibility for existing slate-based panels while they adopt surface tokens. */
+.maabarium-app[data-theme="light"] :is(.text-white,.text-slate-50,.text-slate-100,.text-slate-200) { color: var(--ink); }
+.maabarium-app[data-theme="light"] :is(.text-slate-300,.text-slate-400,.text-slate-500,.text-slate-600) { color: var(--muted); }
+.maabarium-app[data-theme="light"] :is(.text-teal-200,.text-teal-300,.text-teal-400,.text-emerald-300,.text-emerald-400) { color: var(--accent); }
+.maabarium-app[data-theme="light"] :is(.text-rose-200,.text-rose-300,.text-rose-400,.text-red-400) { color: var(--danger); }
+.maabarium-app[data-theme="light"] :is(.text-yellow-300,.text-amber-200,.text-amber-300,.text-amber-400) { color: #74461a; }
+.maabarium-app[data-theme="light"] :is(.text-blue-300,.text-blue-400,.text-sky-300,.text-cyan-300) { color: #255885; }
+.maabarium-app[data-theme="light"] :is(.bg-slate-800,.bg-slate-900,.bg-slate-950,[class*="bg-slate-800/"],[class*="bg-slate-900/"],[class*="bg-slate-950/"],[class*="bg-white/"]) { background-color: var(--subtle); }
+.maabarium-app[data-theme="light"] :is([class*="border-white/"],[class*="border-slate-800"]) { border-color: var(--line); }
+.maabarium-app[data-theme="light"] [class*="fixed inset-0"][class*="bg-slate-950/"] { background-color: rgb(24 38 34 / 50%); }
+.maabarium-app[data-theme="light"] .workspace-card > div:first-child { background-image: none; }
+
 code,
 pre,
 kbd,

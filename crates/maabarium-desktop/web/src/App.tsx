@@ -146,6 +146,16 @@ export default function App() {
     latestPromotedExperimentId: null,
   });
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
+    catch { return "light"; }
+  });
+  const toggleTheme = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    try { localStorage.setItem("maabarium-theme", next); }
+    catch { /* The current session still keeps the selection. */ }
+  };
   const [cpuInfoOpen, setCpuInfoOpen] = useState(false);
   const [analyticsRange, setAnalyticsRange] = useState<AnalyticsRange>("daily");
   const [successToast, setSuccessToast] = useState<string | null>(null);
@@ -1176,7 +1186,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b1220] text-slate-100 font-sans selection:bg-teal-500/40 selection:text-teal-50">
+    <div className="maabarium-app min-h-screen font-sans" data-theme={theme}>
       <ValidationErrorModal
         title={desktopError?.title ?? "Desktop Error"}
         heading={desktopError?.heading ?? "The desktop action failed"}
@@ -1468,32 +1478,12 @@ export default function App() {
 
           <div className="workspace-actions">
             <button
-              onClick={() => void handleRunFlowClick()}
-              data-run-state={runStatus}
-              className={`relative overflow-hidden rounded-lg px-4 py-2 transition-all duration-300 group flex items-center justify-center gap-2 font-black uppercase tracking-[0.16em] border text-xs whitespace-nowrap ${runStatus === "idle" ? "bg-gradient-to-r from-teal-500 to-amber-400 border-teal-300/20 text-slate-950 shadow-[0_0_30px_rgba(45,212,191,0.18)]" : "bg-slate-900 border-rose-500/50 text-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.2)]"}`}
-              type="button"
-              disabled={loading || runStatus === "stopping" || runLoopStarting}
-            >
-              {runStatus === "idle" ? (
-                <Play size={16} fill="currentColor" />
-              ) : (
-                <Square size={16} fill="currentColor" />
-              )}
-              {runStatus === "idle"
-                ? runLoopStarting
-                  ? "STARTING"
-                  : "RUN FLOW"
-                : runStatus === "stopping"
-                  ? "STOPPING"
-                  : "STOP"}
-            </button>
-            <button
               onClick={openBlueprintWizard}
               className={`px-4 py-2 rounded-lg border text-xs font-black tracking-[0.14em] transition-all whitespace-nowrap ${workflowActionsLocked ? "cursor-not-allowed border-white/5 bg-white/[0.03] text-slate-500" : "bg-gradient-to-r from-teal-500 to-amber-400 border-teal-300/20 text-slate-950 hover:brightness-110"}`}
               type="button"
               disabled={workflowActionsLocked}
             >
-              NEW FLOW
+              New flow
             </button>
             <button
               onClick={() => void selectBlueprint()}
@@ -1501,7 +1491,10 @@ export default function App() {
               type="button"
               disabled={workflowActionsLocked}
             >
-              OPEN FLOW
+              Open flow
+            </button>
+            <button type="button" className="workspace-theme" aria-pressed={theme === "dark"} onClick={toggleTheme}>
+              Dark mode
             </button>
           </div>
         </div>
@@ -1509,12 +1502,20 @@ export default function App() {
 
       <main className="workspace-main">
         <header className="workspace-heading">
-          <p>Research workspace / Active workflow</p>
-          <h1>{activeWorkflowLabel}</h1>
-          <span>{activeWorkflowMeta ?? blueprintSummary}</span>
-          <button type="button" onClick={handleJumpToActiveWorkflow}>
-            View workflow
-          </button>
+          <div className="min-w-0">
+            <p>Research workspace</p>
+            <h1>{activeWorkflowLabel}</h1>
+            <span>{activeWorkflowMeta ?? (activeBlueprintOption ? blueprintSummary : "Open or create a workflow to get started.")}</span>
+          </div>
+          <div className="workspace-heading-actions">
+            {activeBlueprintOption ? <button type="button" className="workspace-secondary" onClick={handleJumpToActiveWorkflow}>View workflow</button> : null}
+            <button type="button" className="workspace-primary" data-run-state={runStatus}
+              disabled={loading || runStatus === "stopping" || runLoopStarting}
+              onClick={() => void handleRunFlowClick()}>
+              {runStatus === "idle" ? <Play size={14} aria-hidden="true" /> : <Square size={14} aria-hidden="true" />}
+              {runStatus === "idle" ? (runLoopStarting ? "Starting…" : "Run flow") : runStatus === "stopping" ? "Stopping…" : "Stop run"}
+            </button>
+          </div>
         </header>
         {actionError ? (
           <div className="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
@@ -1524,7 +1525,7 @@ export default function App() {
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <details id="overview-section" className="workspace-metrics">
-            <summary>Run metrics and hardware telemetry</summary>
+            <summary>Run health, analytics and hardware</summary>
           <section
             className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
@@ -1703,8 +1704,6 @@ export default function App() {
               </div>
             </GlassCard>
           </section>
-          </details>
-
           <section>
             <GlassCard className="border-white/10 bg-white/[0.04]">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -1881,6 +1880,8 @@ export default function App() {
               </div>
             </GlassCard>
           </section>
+
+          </details>
 
           <section id="active-workflow-card" className="pt-2">
             <ActiveBlueprintCard
