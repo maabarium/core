@@ -114,6 +114,83 @@ out.write_text("Synthetic counterexample")
             self.assertEqual(status()["attempts"], 2)
             self.assertEqual(status()["result"], "Synthetic counterexample")
 
+    def test_hung_orphan_is_stopped_and_job_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / "state"
+            cli = root / "fake-codex"
+            marker = root / "first"
+            cli.write_text(f"""#!{sys.executable}
+import pathlib, sys, time
+if "login" in sys.argv:
+    print("Logged in using ChatGPT")
+    sys.exit()
+marker = pathlib.Path({str(marker)!r})
+if not marker.exists():
+    marker.touch()
+    time.sleep(600)  # hangs far past its deadline
+pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("Recovered")
+""")
+            cli.chmod(0o700)
+            command = [sys.executable, str(SCRIPT), "--state", str(state), "--codex", str(cli),
+                       "--child-timeout", "1"]
+            status = lambda: json.loads(subprocess.check_output([*command, "status"]))[0]
+            subprocess.run([*command, "enqueue"], check=True)
+            first = subprocess.Popen([*command, "tick"])
+            try:
+                until = time.monotonic() + 5
+                while not marker.exists() and time.monotonic() < until:
+                    time.sleep(0.01)
+                self.assertTrue(marker.exists())
+                first.send_signal(signal.SIGKILL)
+                first.wait(timeout=5)
+            finally:
+                if first.poll() is None:
+                    first.kill()
+                    first.wait(timeout=5)
+            orphan = status()["pid"]
+            self.assertIsNotNone(orphan)
+            self.assertTrue((state / "scratch").exists())
+            # Within the deadline a tick leaves the running child alone.
+            subprocess.run([*command, "tick"], check=True, timeout=10)
+            self.assertEqual(status()["state"], "running")
+            os.kill(orphan, 0)
+            # Past deadline plus grace (1 + 30 s), backdate instead of waiting.
+            with sqlite3.connect(state / "queue.db") as db:
+                db.execute("UPDATE jobs SET started=started-60")
+            subprocess.run([*command, "tick"], check=True, timeout=15)
+            time.sleep(0.2)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(orphan, 0)
+            until = time.monotonic() + 10
+            while status()["state"] != "done" and time.monotonic() < until:
+                with sqlite3.connect(state / "queue.db") as db:
+                    db.execute("UPDATE jobs SET due=0")
+                subprocess.run([*command, "tick"], check=True, timeout=10)
+            row = status()
+            self.assertEqual((row["state"], row["result"]), ("done", "Recovered"))
+            self.assertIsNone(row["pid"])
+            self.assertFalse(any((state / "scratch").glob("**/answer.txt")))
+
+    def test_unrelated_process_is_never_killed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            command = [sys.executable, str(SCRIPT), "--state", str(state), "--codex", sys.executable]
+            subprocess.run([*command, "enqueue"], check=True)
+            bystander = subprocess.Popen(["sleep", "30"], start_new_session=True)
+            try:
+                with sqlite3.connect(state / "queue.db") as db:
+                    db.execute("UPDATE jobs SET state='running', pid=?, started=0", (bystander.pid,))
+                lock = (state / "worker.lock").open("a")
+                import fcntl
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                subprocess.run([*command, "tick"], check=True, timeout=15)
+                self.assertIsNone(bystander.poll())
+                lock.close()
+            finally:
+                bystander.kill()
+                bystander.wait(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()

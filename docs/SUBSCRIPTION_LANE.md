@@ -30,6 +30,14 @@ A tick claims one item and exits. Enqueue with a different `--id` for
 another independent run of the same fixed prompt. The SQLite queue
 lives in a private per-user directory; do not commit it or its replies.
 
+If the worker is killed while Codex runs, the child keeps the worker lock
+so no second run starts. The queue records the child's process id and
+start time; a later tick that finds the child running past its 120 second
+deadline plus 30 seconds of grace stops it, after checking that the
+process id still belongs to that Codex command, and retries the job.
+Scratch files live under the state directory and are removed by the next
+tick. Launch agent output goes to `launchd.log` in the state directory.
+
 The queue is at-least-once across a crash before durable completion.
 A retry may use subscription quota again, but cannot create a second
 completed row. This is appropriate for synthetic research, not a
