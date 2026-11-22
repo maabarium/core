@@ -2653,6 +2653,7 @@ dependencies = [
  "futures",
  "git2",
  "keyring",
+ "libc",
  "num_cpus",
  "reqwest 0.12.28",
  "rusqlite",

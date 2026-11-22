@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod blueprint;
+pub mod cron;
 pub mod engine;
 pub mod error;
 pub mod evaluator;

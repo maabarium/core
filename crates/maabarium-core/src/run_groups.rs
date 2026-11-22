@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::cron::CronSchedule;
+
 /// How workflows in a group should be executed.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -117,34 +119,58 @@ impl ScheduleKind {
         }
     }
 
-    /// Return true if this schedule is due right now.
-    /// `last_run_at` is the ISO timestamp of the last execution (None = never run).
+    /// Return true if this schedule is due at `now`.
+    ///
+    /// `last_run_at` is the RFC 3339 time of the last scheduled execution.
+    /// Cron expressions use local wall-clock time. A cron schedule that has
+    /// never run and has no stored anchor is due only during a matching
+    /// minute; [`ScheduledRun::is_due`] prefers the stored next-run anchor.
     pub fn is_due(&self, last_run_at: Option<&str>, now: &chrono::DateTime<chrono::Utc>) -> bool {
         match self {
             Self::None => false,
             Self::Cron { expression } => {
-                if let Some(last) =
-                    last_run_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                {
-                    // Parse cron and check if we're past the next occurrence
-                    match parse_cron_next(expression, &last) {
-                        Some(next_run) => *now > next_run,
-                        None => false,
-                    }
-                } else {
-                    // Never run: due if now aligns with the cron expression.
-                    cron_matches_now(expression, now)
+                let Ok(schedule) = CronSchedule::parse(expression) else {
+                    return false;
+                };
+                let now_local = now.with_timezone(&chrono::Local);
+                match last_run_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
+                    Some(last) => schedule
+                        .next_after(&last.with_timezone(&chrono::Local))
+                        .is_some_and(|next| next <= now_local),
+                    None => schedule.matches(&now_local),
                 }
             }
-            Self::OneShot { datetime } => {
-                if let Ok(scheduled_dt) = chrono::DateTime::parse_from_rfc3339(datetime) {
-                    // One-shot is due if the scheduled time has passed and it hasn't run yet
-                    let has_run = last_run_at.is_some();
-                    *now >= scheduled_dt && !has_run
-                } else {
-                    false
-                }
-            }
+            Self::OneShot { datetime } => chrono::DateTime::parse_from_rfc3339(datetime)
+                .is_ok_and(|scheduled| *now >= scheduled && last_run_at.is_none()),
+        }
+    }
+
+    /// Validate the schedule before it is stored.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::None => Ok(()),
+            Self::Cron { expression } => CronSchedule::parse(expression).map(|_| ()),
+            Self::OneShot { datetime } => chrono::DateTime::parse_from_rfc3339(datetime)
+                .map(|_| ())
+                .map_err(|e| format!("One-shot schedule must be an RFC 3339 datetime: {e}")),
+        }
+    }
+
+    /// The next time this schedule fires strictly after `after`, if any.
+    pub fn next_run_after(
+        &self,
+        after: &chrono::DateTime<chrono::Utc>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self {
+            Self::None => None,
+            Self::Cron { expression } => CronSchedule::parse(expression)
+                .ok()?
+                .next_after(&after.with_timezone(&chrono::Local))
+                .map(|next| next.with_timezone(&chrono::Utc)),
+            Self::OneShot { datetime } => chrono::DateTime::parse_from_rfc3339(datetime)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .filter(|dt| dt > after),
         }
     }
 }
@@ -168,159 +194,88 @@ const fn default_schedule_enabled() -> bool {
     true
 }
 
-/// Parse a cron expression and compute the next run time after a given timestamp.
-/// Returns None if parsing fails.
-fn parse_cron_next(
-    expression: &str,
-    after: &chrono::DateTime<chrono::FixedOffset>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
-    let parts: Vec<&str> = expression.split_whitespace().collect();
-    if parts.len() != 5 {
-        return None;
-    }
-
-    let minute = parts[0];
-    let hour = parts[1];
-    let _day_of_month = parts[2];
-    let _month = parts[3];
-    let day_of_week = parts[4];
-
-    // Simple next-run computation for common patterns
-    // "0 9 * * 1" = Mondays at 09:00
-    // "0 17 * * *" = Every day at 17:00
-    // "*/30 * * * *" = Every 30 minutes
-
-    let after_utc = after.with_timezone(&chrono::Utc);
-    let mut candidate = after_utc.checked_add_signed(chrono::Duration::minutes(1))?;
-
-    // Search up to 7 days forward for the next matching time
-    for _ in 0..(7 * 24 * 60) {
-        let candidate_minute = candidate.format("%M").to_string();
-        let candidate_hour = candidate.format("%H").to_string();
-        let candidate_dow = candidate.format("%u").to_string(); // 1=Mon..7=Sun
-
-        let minute_match = cron_field_matches(minute, &candidate_minute);
-        let hour_match = cron_field_matches(hour, &candidate_hour);
-        let dow_match = cron_field_matches(day_of_week, &candidate_dow);
-
-        if minute_match && hour_match && dow_match {
-            return Some(candidate);
+impl ScheduledRun {
+    /// Build a validated schedule, anchored to its first run after `now`.
+    ///
+    /// One-shot times in the past are rejected so saving does not trigger an
+    /// immediate run by surprise.
+    pub fn new_validated(
+        kind: ScheduleKind,
+        enabled: bool,
+        now: &chrono::DateTime<chrono::Utc>,
+    ) -> Result<Self, String> {
+        kind.validate()?;
+        let next_run_at = kind.next_run_after(now);
+        if matches!(kind, ScheduleKind::OneShot { .. }) && next_run_at.is_none() {
+            return Err("One-shot schedules must be in the future".to_owned());
         }
-        candidate = candidate.checked_add_signed(chrono::Duration::minutes(1))?;
+        if matches!(kind, ScheduleKind::Cron { .. }) && next_run_at.is_none() {
+            return Err("This cron expression has no upcoming run".to_owned());
+        }
+        Ok(Self {
+            enabled: enabled && !matches!(kind, ScheduleKind::None),
+            kind,
+            last_run_at: None,
+            next_run_at: next_run_at.map(|next| next.to_rfc3339()),
+        })
     }
 
-    None
+    /// Whether an enabled schedule is due at `now`, preferring the stored
+    /// next-run anchor so a missed minute is caught up on the next check.
+    pub fn is_due(&self, now: &chrono::DateTime<chrono::Utc>) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if let ScheduleKind::Cron { .. } = self.kind {
+            if let Some(next) = self
+                .next_run_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            {
+                return *now >= next;
+            }
+        }
+        self.kind.is_due(self.last_run_at.as_deref(), now)
+    }
 }
 
-/// Check if a cron field value matches the current value.
-/// Supports: exact match, */step, comma lists, ranges.
-/// Numeric values are compared after stripping leading zeros.
-fn cron_field_matches(field: &str, current: &str) -> bool {
-    if field == "*" {
-        return true;
-    }
-
-    // Strip leading zeros for numeric comparison
-    let current_trimmed = current.trim_start_matches('0');
-    let current_stripped = if current_trimmed.is_empty() {
-        "0"
-    } else {
-        current_trimmed
-    };
-    let field_trimmed = field.trim_start_matches('0');
-    let field_stripped = if field_trimmed.is_empty() {
-        "0"
-    } else {
-        field_trimmed
-    };
-
-    // Handle */N (step)
-    if let Some(step_str) = field.strip_prefix("*/") {
-        if let (Ok(step), Ok(curr)) = (step_str.parse::<u32>(), current_stripped.parse::<u32>()) {
-            return step > 0 && curr % step == 0;
-        }
-    }
-
-    // Handle comma-separated lists
-    if field.contains(',') {
-        return field
-            .split(',')
-            .any(|part| cron_field_matches(part.trim(), current));
-    }
-
-    // Handle N-M ranges
-    if let Some((start_str, end_str)) = field.split_once('-') {
-        if let (Ok(start), Ok(end), Ok(curr)) = (
-            start_str.parse::<u32>(),
-            end_str.parse::<u32>(),
-            current_stripped.parse::<u32>(),
-        ) {
-            return curr >= start && curr <= end;
-        }
-    }
-
-    // Exact match (try both stripped and original)
-    field == current || field_stripped == current_stripped
-}
-
-/// Check if a cron expression matches the current time (within a 1-minute window).
-fn cron_matches_now(expression: &str, now: &chrono::DateTime<chrono::Utc>) -> bool {
-    let parts: Vec<&str> = expression.split_whitespace().collect();
-    if parts.len() != 5 {
-        return false;
-    }
-
-    let now_str = now.format("%M %H %u").to_string();
-    let now_parts: Vec<&str> = now_str.split_whitespace().collect();
-
-    cron_field_matches(parts[0], now_parts[0])
-        && cron_field_matches(parts[1], now_parts[1])
-        && cron_field_matches(parts[4], now_parts[2])
-}
-
-/// Produce a human-readable description of a cron expression.
+/// Produce a human-readable description of a cron expression (local time).
 fn describe_cron(expression: &str) -> String {
+    if CronSchedule::parse(expression).is_err() {
+        return format!("invalid cron: {expression}");
+    }
     let parts: Vec<&str> = expression.split_whitespace().collect();
-    if parts.len() != 5 {
-        return format!("cron: {expression}");
-    }
-
-    let minute_str = parts[0];
-    let hour_str = parts[1];
-    let _dom = parts[2];
-    let _month = parts[3];
-    let dow = parts[4];
-
-    let minute_val: u32 = minute_str.parse().unwrap_or(0);
-    let hour_val: u32 = hour_str.parse().unwrap_or(0);
-
-    let time_desc = if hour_str == "*" && minute_str == "*" {
-        "every minute".to_owned()
-    } else if hour_str == "*" {
-        format!("at minute {minute_str} past every hour")
-    } else if minute_str == "0" {
-        format!("at {:02}:00", hour_val)
-    } else {
-        format!("at {:02}:{:02}", hour_val, minute_val)
+    let (minute_str, hour_str, dom, month, dow) =
+        (parts[0], parts[1], parts[2], parts[3], parts[4]);
+    let simple = |s: &str| s.parse::<u32>().ok();
+    let time_desc = match (simple(hour_str), simple(minute_str)) {
+        (Some(hour), Some(minute)) => format!("at {hour:02}:{minute:02}"),
+        _ if hour_str == "*" && minute_str == "*" => "every minute".to_owned(),
+        _ => format!("cron {minute_str} {hour_str}"),
     };
-
-    let day_desc = match dow {
-        "*" => String::new(),
-        "0" | "7" => " on Sunday".to_owned(),
-        "1" => " on Monday".to_owned(),
-        "2" => " on Tuesday".to_owned(),
-        "3" => " on Wednesday".to_owned(),
-        "4" => " on Thursday".to_owned(),
-        "5" => " on Friday".to_owned(),
-        "6" => " on Saturday".to_owned(),
-        other => format!(" on day {other}"),
+    let day_name = |value: &str| match value.to_ascii_lowercase().as_str() {
+        "0" | "7" | "sun" => Some("Sunday"),
+        "1" | "mon" => Some("Monday"),
+        "2" | "tue" => Some("Tuesday"),
+        "3" | "wed" => Some("Wednesday"),
+        "4" | "thu" => Some("Thursday"),
+        "5" | "fri" => Some("Friday"),
+        "6" | "sat" => Some("Saturday"),
+        _ => None,
     };
-
-    if day_desc.is_empty() {
-        time_desc
-    } else {
-        format!("{time_desc}{day_desc}")
+    let mut desc = time_desc;
+    if dom != "*" {
+        desc.push_str(&format!(" on day {dom} of the month"));
     }
+    if month != "*" {
+        desc.push_str(&format!(" in month {month}"));
+    }
+    match (dow, day_name(dow)) {
+        ("*", _) => {}
+        (_, Some(name)) => desc.push_str(&format!(" on {name}")),
+        (other, None) => desc.push_str(&format!(" on weekdays {other}")),
+    }
+    desc
 }
 
 /// A workflow run group definition.
@@ -470,6 +425,13 @@ pub struct HardwareProfile {
 }
 
 impl HardwareProfile {
+    /// Hardware detected once per process; detection spawns `sysctl`,
+    /// `nvidia-smi` and `system_profiler`, which take a noticeable time.
+    pub fn cached() -> Self {
+        static PROFILE: std::sync::OnceLock<HardwareProfile> = std::sync::OnceLock::new();
+        PROFILE.get_or_init(Self::detect).clone()
+    }
+
     /// Detect hardware resources on the current machine.
     pub fn detect() -> Self {
         let logical_cpus = num_cpus::get() as u32;
@@ -816,78 +778,6 @@ mod tests {
     }
 
     #[test]
-    fn cron_matches_now_works_for_exact_time() {
-        // Monday 09:00 should match "0 9 * * 1"
-        // Use a known Monday at 09:00 UTC
-        let monday_9am = chrono::DateTime::parse_from_rfc3339("2026-05-11T09:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        assert!(cron_matches_now("0 9 * * 1", &monday_9am));
-        assert!(!cron_matches_now("0 9 * * 2", &monday_9am)); // Tuesday - no match
-    }
-
-    #[test]
-    fn cron_matches_now_handles_step() {
-        // Every 30 minutes should match at minute 30
-        let time_at_30 = chrono::DateTime::parse_from_rfc3339("2026-05-11T10:30:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        assert!(cron_matches_now("*/30 * * * *", &time_at_30));
-    }
-
-    #[test]
-    fn cron_matches_now_handles_comma_list() {
-        // Mon/Wed/Fri at 09:00
-        let monday_9am = chrono::DateTime::parse_from_rfc3339("2026-05-11T09:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        // Monday = 1 in %u format
-        assert!(cron_matches_now("0 9 * * 1,3,5", &monday_9am));
-    }
-
-    #[test]
-    fn cron_matches_now_handles_range() {
-        let weekday_9am = chrono::DateTime::parse_from_rfc3339("2026-05-11T09:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        // Mon-Fri = 1-5
-        assert!(cron_matches_now("0 9 * * 1-5", &weekday_9am));
-    }
-
-    #[test]
-    fn cron_field_matches_exact() {
-        assert!(cron_field_matches("5", "5"));
-        assert!(!cron_field_matches("5", "6"));
-    }
-
-    #[test]
-    fn cron_field_matches_wildcard() {
-        assert!(cron_field_matches("*", "anything"));
-    }
-
-    #[test]
-    fn cron_field_matches_step() {
-        assert!(cron_field_matches("*/15", "0"));
-        assert!(cron_field_matches("*/15", "15"));
-        assert!(cron_field_matches("*/15", "30"));
-        assert!(!cron_field_matches("*/15", "7"));
-    }
-
-    #[test]
-    fn cron_field_matches_list() {
-        assert!(cron_field_matches("1,3,5", "3"));
-        assert!(!cron_field_matches("1,3,5", "2"));
-    }
-
-    #[test]
-    fn cron_field_matches_range() {
-        assert!(cron_field_matches("1-5", "3"));
-        assert!(cron_field_matches("1-5", "1"));
-        assert!(cron_field_matches("1-5", "5"));
-        assert!(!cron_field_matches("1-5", "6"));
-    }
-
-    #[test]
     fn describe_cron_every_minute() {
         assert_eq!(describe_cron("* * * * *"), "every minute");
     }
@@ -907,7 +797,7 @@ mod tests {
     #[test]
     fn describe_cron_weekdays() {
         let desc = describe_cron("0 9 * * 1-5");
-        assert_eq!(desc, "at 09:00 on day 1-5");
+        assert_eq!(desc, "at 09:00 on weekdays 1-5");
     }
 
     #[test]
@@ -946,29 +836,116 @@ mod tests {
         assert!(!kind.is_due(Some(&now.to_rfc3339()), &now));
     }
 
-    #[test]
-    fn is_due_cron_never_run() {
-        // If never run, check if current time aligns
-        let kind = ScheduleKind::Cron {
-            expression: "0 9 * * *".to_owned(),
-        };
-        let now = chrono::DateTime::parse_from_rfc3339("2026-05-11T09:00:00Z")
+    fn local(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Local
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .earliest()
             .unwrap()
-            .with_timezone(&chrono::Utc);
-        assert!(kind.is_due(None, &now));
+            .with_timezone(&chrono::Utc)
     }
 
     #[test]
-    fn is_due_cron_already_run_recently() {
-        let last_run = chrono::DateTime::parse_from_rfc3339("2026-05-11T09:00:00Z").unwrap();
-        let now = chrono::DateTime::parse_from_rfc3339("2026-05-11T09:01:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        // Next run should be 2026-05-12T09:00:00Z, which is > now
+    fn is_due_cron_never_run_matches_local_minute() {
         let kind = ScheduleKind::Cron {
             expression: "0 9 * * *".to_owned(),
         };
-        assert!(!kind.is_due(Some(&last_run.to_rfc3339()), &now));
+        assert!(kind.is_due(None, &local(2026, 5, 11, 9, 0)));
+        assert!(!kind.is_due(None, &local(2026, 5, 11, 9, 1)));
+    }
+
+    #[test]
+    fn is_due_cron_after_last_run_waits_for_next_occurrence() {
+        let kind = ScheduleKind::Cron {
+            expression: "0 9 * * *".to_owned(),
+        };
+        let last = local(2026, 5, 11, 9, 0).to_rfc3339();
+        assert!(!kind.is_due(Some(&last), &local(2026, 5, 11, 9, 1)));
+        assert!(kind.is_due(Some(&last), &local(2026, 5, 12, 9, 0)));
+        // A missed occurrence is caught up later.
+        assert!(kind.is_due(Some(&last), &local(2026, 5, 20, 13, 7)));
+    }
+
+    #[test]
+    fn sunday_cron_is_due_on_sunday_and_after_a_long_gap() {
+        // 2026-11-22 is a Sunday.
+        let kind = ScheduleKind::Cron {
+            expression: "0 9 * * 0".to_owned(),
+        };
+        assert!(kind.is_due(None, &local(2026, 11, 22, 9, 0)));
+        let last = local(2026, 11, 1, 9, 0).to_rfc3339();
+        assert!(kind.is_due(Some(&last), &local(2026, 11, 20, 9, 0)));
+    }
+
+    #[test]
+    fn monthly_cron_does_not_fire_daily() {
+        let kind = ScheduleKind::Cron {
+            expression: "0 9 1 * *".to_owned(),
+        };
+        assert!(!kind.is_due(None, &local(2026, 11, 2, 9, 0)));
+        assert!(kind.is_due(None, &local(2026, 12, 1, 9, 0)));
+    }
+
+    #[test]
+    fn scheduled_run_uses_next_run_anchor() {
+        let next = local(2026, 11, 22, 9, 0);
+        let schedule = ScheduledRun {
+            kind: ScheduleKind::Cron {
+                expression: "0 9 * * *".to_owned(),
+            },
+            enabled: true,
+            last_run_at: None,
+            next_run_at: Some(next.to_rfc3339()),
+        };
+        assert!(!schedule.is_due(&local(2026, 11, 22, 8, 59)));
+        // A poll that misses the exact minute still fires.
+        assert!(schedule.is_due(&local(2026, 11, 22, 9, 3)));
+        let disabled = ScheduledRun {
+            enabled: false,
+            ..schedule
+        };
+        assert!(!disabled.is_due(&local(2026, 11, 22, 9, 3)));
+    }
+
+    #[test]
+    fn validate_rejects_bad_schedules() {
+        assert!(
+            ScheduleKind::Cron {
+                expression: "0 9 * *".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ScheduleKind::Cron {
+                expression: "0 25 * * *".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ScheduleKind::OneShot {
+                datetime: "tomorrow".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ScheduleKind::Cron {
+                expression: "0 9 * * 0".into()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn next_run_after_skips_past_one_shot() {
+        let now = chrono::Utc::now();
+        let past = ScheduleKind::OneShot {
+            datetime: (now - chrono::Duration::hours(1)).to_rfc3339(),
+        };
+        assert!(past.next_run_after(&now).is_none());
     }
 
     #[test]

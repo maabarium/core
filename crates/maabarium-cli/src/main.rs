@@ -606,6 +606,19 @@ fn mask_secret(value: &str) -> String {
 
 // ============== Group Command Handlers ==============
 
+/// Close group runs left active by a process that no longer exists.
+fn reconcile_interrupted_runs(persistence: &Persistence) {
+    let none_here = std::collections::HashSet::new();
+    match persistence.reconcile_interrupted_group_runs(
+        &none_here,
+        &maabarium_core::group_runner::process_is_alive,
+    ) {
+        Ok(0) => {}
+        Ok(closed) => eprintln!("Marked {closed} interrupted group run(s) as failed."),
+        Err(error) => eprintln!("Could not check for interrupted group runs: {error}"),
+    }
+}
+
 async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
     match cmd {
         GroupCommands::Create { name, description } => {
@@ -694,6 +707,7 @@ async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
         }
         GroupCommands::Remove { name, blueprint } => {
             let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            reconcile_interrupted_runs(&persistence);
             if let Some(bp_name) = blueprint {
                 persistence.remove_blueprint_from_group(name, bp_name)?;
                 println!("Removed blueprint '{bp_name}' from group '{name}'");
@@ -832,15 +846,16 @@ async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
                 .clone()
                 .unwrap_or_else(|| default_db_path().display().to_string());
             let persistence = Arc::new(Persistence::open(&db_path)?);
+            reconcile_interrupted_runs(&persistence);
             let now = chrono::Utc::now();
             let due_groups = persistence
                 .list_groups()?
                 .into_iter()
                 .filter(|group| {
-                    group.schedule.as_ref().is_some_and(|schedule| {
-                        schedule.enabled
-                            && schedule.kind.is_due(schedule.last_run_at.as_deref(), &now)
-                    })
+                    group
+                        .schedule
+                        .as_ref()
+                        .is_some_and(|schedule| schedule.is_due(&now))
                 })
                 .collect::<Vec<_>>();
             if due_groups.is_empty() {
@@ -861,6 +876,7 @@ async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
                     CancellationToken::new(),
                 );
                 let run = runner
+                    .triggered_by_schedule()
                     .run_group(&group, None)
                     .await
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -878,6 +894,7 @@ async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
         }
         GroupCommands::Status { name, db } => {
             let persistence = Persistence::open(db)?;
+            reconcile_interrupted_runs(&persistence);
             let group = persistence
                 .get_group(name)?
                 .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
@@ -993,27 +1010,19 @@ async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
             let enabled = if *disable { false } else { true };
 
-            let schedule = if let Some(cron_expr) = cron {
-                ScheduledRun {
-                    kind: ScheduleKind::Cron {
-                        expression: cron_expr.clone(),
-                    },
-                    enabled,
-                    last_run_at: None,
-                    next_run_at: None,
+            let kind = if let Some(cron_expr) = cron {
+                ScheduleKind::Cron {
+                    expression: cron_expr.trim().to_owned(),
                 }
             } else if let Some(dt) = at {
-                ScheduledRun {
-                    kind: ScheduleKind::OneShot {
-                        datetime: dt.clone(),
-                    },
-                    enabled,
-                    last_run_at: None,
-                    next_run_at: Some(dt.clone()),
+                ScheduleKind::OneShot {
+                    datetime: dt.trim().to_owned(),
                 }
             } else {
                 anyhow::bail!("Must specify --cron <expr> or --at <datetime>");
             };
+            let schedule = ScheduledRun::new_validated(kind, enabled, &chrono::Utc::now())
+                .map_err(|e| anyhow::anyhow!(e))?;
             persistence.update_group_schedule(name, &schedule)?;
             println!(
                 "Updated schedule for group '{name}': {}",

@@ -95,10 +95,14 @@ pub fn default_db_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/maabarium.db")
 }
 
+const TELEGRAM_KEYCHAIN_SERVICE: &str = "org.maabarium.telegram";
+
 impl Persistence {
     pub fn open(db_path: &str) -> Result<Self, PersistError> {
         let conn = Connection::open(db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        // Group runs and the scheduler write from several connections.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS experiments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,6 +286,13 @@ impl Persistence {
             "ALTER TABLE run_groups ADD COLUMN schedule_next_run_at TEXT",
             [],
         );
+        let _ = conn.execute("ALTER TABLE group_runs ADD COLUMN runner_pid INTEGER", []);
+        // Earlier development builds stored the bot token in plain text.
+        // The token now lives in the OS keychain, so scrub any leftover copy.
+        conn.execute(
+            "UPDATE telegram_config SET bot_token = '' WHERE bot_token <> ''",
+            [],
+        )?;
         Ok(Self { conn })
     }
 
@@ -1396,8 +1407,8 @@ impl Persistence {
         let mode = group_run.execution_mode.as_str();
         let status = group_run.status.as_str();
         self.conn.execute(
-            "INSERT INTO group_runs (id, group_name, execution_mode, started_at, completed_at, status, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO group_runs (id, group_name, execution_mode, started_at, completed_at, status, summary, runner_pid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 group_run.id,
                 group_run.group_name,
@@ -1406,9 +1417,113 @@ impl Persistence {
                 group_run.completed_at,
                 status,
                 group_run.summary,
+                std::process::id() as i64,
             ],
         )?;
         Ok(())
+    }
+
+    /// Close out group runs whose runner is gone.
+    ///
+    /// A run is still live if its group is in `active_groups` (tracked by this
+    /// process) or if another process recorded it and `pid_alive` says that
+    /// process still exists. Every other pending or running run was cut short
+    /// by a crash or quit: it is marked failed, its running workflows failed
+    /// and its pending workflows skipped. Returns the number of runs closed.
+    pub fn reconcile_interrupted_group_runs(
+        &self,
+        active_groups: &std::collections::HashSet<String>,
+        pid_alive: &dyn Fn(u32) -> bool,
+    ) -> Result<usize, PersistError> {
+        let own_pid = std::process::id();
+        let stale: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, group_name, runner_pid FROM group_runs WHERE status IN ('pending', 'running')",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
+            let mut stale = Vec::new();
+            for row in rows {
+                let (id, group_name, pid) = row?;
+                let live = active_groups.contains(&group_name)
+                    || pid.is_some_and(|pid| {
+                        let pid = pid as u32;
+                        pid != own_pid && pid_alive(pid)
+                    });
+                if !live {
+                    stale.push(id);
+                }
+            }
+            stale
+        };
+        if stale.is_empty() {
+            return Ok(0);
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = self.conn.unchecked_transaction()?;
+        for id in &stale {
+            tx.execute(
+                "UPDATE group_run_experiments SET status = 'failed', completed_at = ?1, error = COALESCE(error, 'Interrupted before completion') WHERE group_run_id = ?2 AND status = 'running'",
+                params![now, id],
+            )?;
+            tx.execute(
+                "UPDATE group_run_experiments SET status = 'skipped', error = COALESCE(error, 'Interrupted before start') WHERE group_run_id = ?1 AND status = 'pending'",
+                params![id],
+            )?;
+            tx.execute(
+                "UPDATE group_runs SET status = 'failed', completed_at = ?1, summary = 'Interrupted before completion' WHERE id = ?2",
+                params![now, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(stale.len())
+    }
+
+    /// Record when a workflow inside a group run started.
+    pub fn mark_group_run_experiment_started(
+        &self,
+        id: i64,
+        started_at: &str,
+    ) -> Result<(), PersistError> {
+        self.conn.execute(
+            "UPDATE group_run_experiments SET status = 'running', started_at = ?1 WHERE id = ?2",
+            params![started_at, id],
+        )?;
+        Ok(())
+    }
+
+    /// The highest experiment id recorded so far (0 when there are none).
+    pub fn max_experiment_id(&self) -> Result<i64, PersistError> {
+        Ok(self
+            .conn
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM experiments", [], |row| {
+                row.get(0)
+            })?)
+    }
+
+    /// Experiments for one blueprint recorded after `after_id`, newest first.
+    pub fn experiments_for_blueprint_after(
+        &self,
+        blueprint_name: &str,
+        after_id: i64,
+    ) -> Result<Vec<(i64, PromotionOutcome)>, PersistError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, promotion_outcome FROM experiments WHERE blueprint_name = ?1 AND id > ?2 ORDER BY id DESC",
+        )?;
+        let rows = stmt.query_map(params![blueprint_name, after_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, outcome) = row?;
+            out.push((id, PromotionOutcome::from_db_value(&outcome)));
+        }
+        Ok(out)
     }
 
     /// Update a group run's status.
@@ -1557,8 +1672,21 @@ impl Persistence {
 
     // ============== Telegram Config CRUD ==============
 
-    /// Get the Telegram config (singleton).
+    /// Get the Telegram settings without reading the bot token.
+    ///
+    /// The console and status views only need the settings, so they avoid a
+    /// keychain read (and any keychain prompt) on every refresh.
+    pub fn telegram_get_settings(&self) -> Result<Option<TelegramConfig>, PersistError> {
+        self.read_telegram_row(false)
+    }
+
+    /// Get the Telegram config (singleton), including the keychain token
+    /// when notifications are enabled.
     pub fn telegram_get_config(&self) -> Result<Option<TelegramConfig>, PersistError> {
+        self.read_telegram_row(true)
+    }
+
+    fn read_telegram_row(&self, with_token: bool) -> Result<Option<TelegramConfig>, PersistError> {
         let mut stmt = self.conn.prepare(
             "SELECT chat_id, enabled, notify_on_start, notify_on_complete, notify_on_error, notify_on_promotion, updated_at
              FROM telegram_config
@@ -1570,8 +1698,8 @@ impl Persistence {
         };
         let chat_id: String = row.get(0)?;
         let enabled = row.get::<_, i64>(1)? != 0;
-        let bot_token = if enabled {
-            match keyring::Entry::new("org.maabarium.telegram", &chat_id)
+        let bot_token = if enabled && with_token {
+            match keyring::Entry::new(TELEGRAM_KEYCHAIN_SERVICE, &chat_id)
                 .and_then(|entry| entry.get_password())
             {
                 Ok(token) => token,
@@ -1594,36 +1722,43 @@ impl Persistence {
     }
 
     /// Set the Telegram config (upsert).
+    ///
+    /// A non-empty token is stored in the keychain under the chat id. When the
+    /// chat id changes, the token stored for the previous chat is removed so
+    /// no orphaned credential is left behind.
     pub fn telegram_set_config(&self, config: &TelegramConfig) -> Result<(), PersistError> {
+        let previous_chat: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT chat_id FROM telegram_config WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
         if !config.bot_token.is_empty() {
-            keyring::Entry::new("org.maabarium.telegram", &config.chat_id)
+            keyring::Entry::new(TELEGRAM_KEYCHAIN_SERVICE, &config.chat_id)
                 .and_then(|entry| entry.set_password(&config.bot_token))
                 .map_err(PersistError::TelegramKeychain)?;
         }
-        let enabled = if config.enabled { 1_i64 } else { 0_i64 };
-        let on_start = if config.notify_on_start { 1_i64 } else { 0_i64 };
-        let on_complete = if config.notify_on_complete {
-            1_i64
-        } else {
-            0_i64
-        };
-        let on_error = if config.notify_on_error { 1_i64 } else { 0_i64 };
-        let on_promotion = if config.notify_on_promotion {
-            1_i64
-        } else {
-            0_i64
-        };
+        if let Some(previous) = previous_chat.filter(|p| !p.is_empty() && *p != config.chat_id) {
+            match keyring::Entry::new(TELEGRAM_KEYCHAIN_SERVICE, &previous)
+                .and_then(|entry| entry.delete_credential())
+            {
+                Ok(()) | Err(keyring::Error::NoEntry) => {}
+                Err(error) => return Err(PersistError::TelegramKeychain(error)),
+            }
+        }
+        let flag = |value: bool| if value { 1_i64 } else { 0_i64 };
         self.conn.execute(
             "INSERT OR REPLACE INTO telegram_config (id, bot_token, chat_id, enabled, notify_on_start, notify_on_complete, notify_on_error, notify_on_promotion, updated_at)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES (1, '', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                "",
                 config.chat_id,
-                enabled,
-                on_start,
-                on_complete,
-                on_error,
-                on_promotion,
+                flag(config.enabled),
+                flag(config.notify_on_start),
+                flag(config.notify_on_complete),
+                flag(config.notify_on_error),
+                flag(config.notify_on_promotion),
                 config.updated_at,
             ],
         )?;
@@ -1730,6 +1865,222 @@ mod tests {
                 }],
             }),
         }
+    }
+
+    fn group_fixture() -> (Persistence, std::path::PathBuf) {
+        let db_path =
+            std::env::temp_dir().join(format!("maabarium-groups-{}.db", uuid::Uuid::new_v4()));
+        let persistence = Persistence::open(db_path.to_str().unwrap()).unwrap();
+        persistence
+            .create_group(&RunGroup {
+                name: "synthetic".into(),
+                description: String::new(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                blueprints: vec![],
+                execution_mode: ExecutionMode::Sequential,
+                schedule: None,
+                telegram_enabled: false,
+            })
+            .unwrap();
+        (persistence, db_path)
+    }
+
+    fn running_run(persistence: &Persistence, id: &str) -> (i64, i64) {
+        persistence
+            .create_group_run(&GroupRun {
+                id: id.into(),
+                group_name: "synthetic".into(),
+                execution_mode: ExecutionMode::Sequential,
+                started_at: Some(chrono::Utc::now().to_rfc3339()),
+                completed_at: None,
+                status: GroupRunStatus::Running,
+                summary: None,
+            })
+            .unwrap();
+        let entry = |name: &str| GroupRunExperiment {
+            id: 0,
+            group_run_id: id.into(),
+            experiment_id: None,
+            blueprint_name: name.into(),
+            blueprint_path: format!("/fixtures/{name}.toml"),
+            sort_order: 0,
+            status: RunExperimentStatus::Pending,
+            started_at: None,
+            completed_at: None,
+            error: None,
+        };
+        let first = persistence
+            .create_group_run_experiment(&entry("alpha"))
+            .unwrap();
+        let second = persistence
+            .create_group_run_experiment(&entry("beta"))
+            .unwrap();
+        (first, second)
+    }
+
+    #[test]
+    fn workflow_start_time_is_recorded_as_started_at() {
+        let (persistence, db_path) = group_fixture();
+        let (first, _) = running_run(&persistence, "run-start");
+        persistence
+            .mark_group_run_experiment_started(first, "2026-11-22T09:00:00Z")
+            .unwrap();
+        let rows = persistence.list_group_run_experiments("run-start").unwrap();
+        let row = rows.iter().find(|row| row.id == first).unwrap();
+        assert_eq!(row.started_at.as_deref(), Some("2026-11-22T09:00:00Z"));
+        assert_eq!(row.completed_at, None);
+        assert_eq!(row.status, RunExperimentStatus::Running);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn interrupted_runs_are_closed_and_group_can_be_deleted() {
+        let (persistence, db_path) = group_fixture();
+        let (first, _) = running_run(&persistence, "run-crashed");
+        persistence
+            .mark_group_run_experiment_started(first, "2026-11-22T09:00:00Z")
+            .unwrap();
+        // Simulate a restart: the run was recorded by a process that is gone.
+        persistence
+            .conn
+            .execute(
+                "UPDATE group_runs SET runner_pid = 999999999 WHERE id = 'run-crashed'",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            persistence.delete_group("synthetic"),
+            Err(PersistError::GroupActive)
+        ));
+
+        let none = std::collections::HashSet::new();
+        let closed = persistence
+            .reconcile_interrupted_group_runs(&none, &|_| false)
+            .unwrap();
+        assert_eq!(closed, 1);
+        let run = persistence.get_group_run("run-crashed").unwrap().unwrap();
+        assert_eq!(run.status, GroupRunStatus::Failed);
+        assert!(run.completed_at.is_some());
+        let rows = persistence
+            .list_group_run_experiments("run-crashed")
+            .unwrap();
+        let statuses: Vec<_> = rows.iter().map(|row| row.status).collect();
+        assert!(statuses.contains(&RunExperimentStatus::Failed));
+        assert!(statuses.contains(&RunExperimentStatus::Skipped));
+        persistence.delete_group("synthetic").unwrap();
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn live_runs_are_not_reconciled() {
+        let (persistence, db_path) = group_fixture();
+        running_run(&persistence, "run-tracked");
+        running_run(&persistence, "run-other-process");
+        persistence
+            .conn
+            .execute(
+                "UPDATE group_runs SET runner_pid = 4242 WHERE id = 'run-other-process'",
+                [],
+            )
+            .unwrap();
+        // run-tracked belongs to this process and its group is tracked as active.
+        let active: std::collections::HashSet<String> = ["synthetic".to_owned()].into();
+        assert_eq!(
+            persistence
+                .reconcile_interrupted_group_runs(&active, &|_| false)
+                .unwrap(),
+            0
+        );
+        // Untracked here, but another live process owns run-other-process.
+        let none = std::collections::HashSet::new();
+        assert_eq!(
+            persistence
+                .reconcile_interrupted_group_runs(&none, &|pid| pid == 4242)
+                .unwrap(),
+            1
+        );
+        let other = persistence
+            .get_group_run("run-other-process")
+            .unwrap()
+            .unwrap();
+        assert_eq!(other.status, GroupRunStatus::Running);
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn experiments_are_linked_by_blueprint_and_baseline() {
+        let (persistence, db_path) = group_fixture();
+        persistence
+            .log_experiment(
+                "alpha",
+                &sample_result(),
+                PromotionOutcome::Rejected,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let baseline = persistence.max_experiment_id().unwrap();
+        persistence
+            .log_experiment(
+                "alpha",
+                &sample_result(),
+                PromotionOutcome::Promoted,
+                Some("runs/a"),
+                None,
+                None,
+            )
+            .unwrap();
+        // A concurrent workflow writes later; it must not be attributed to alpha.
+        persistence
+            .log_experiment(
+                "beta",
+                &sample_result(),
+                PromotionOutcome::Rejected,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let alpha = persistence
+            .experiments_for_blueprint_after("alpha", baseline)
+            .unwrap();
+        assert_eq!(alpha.len(), 1);
+        assert_eq!(alpha[0].1, PromotionOutcome::Promoted);
+        assert!(
+            persistence
+                .experiments_for_blueprint_after("gamma", baseline)
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn legacy_plaintext_telegram_token_is_scrubbed_on_open() {
+        let (persistence, db_path) = group_fixture();
+        persistence
+            .conn
+            .execute(
+                "INSERT INTO telegram_config (id, bot_token, chat_id, enabled, updated_at) VALUES (1, 'synthetic-legacy-token', '42', 0, 'now')",
+                [],
+            )
+            .unwrap();
+        drop(persistence);
+        let reopened = Persistence::open(db_path.to_str().unwrap()).unwrap();
+        let stored: String = reopened
+            .conn
+            .query_row(
+                "SELECT bot_token FROM telegram_config WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "");
+        let settings = reopened.telegram_get_settings().unwrap().unwrap();
+        assert_eq!(settings.chat_id, "42");
+        assert!(settings.bot_token.is_empty());
+        let _ = std::fs::remove_file(db_path);
     }
 
     #[test]

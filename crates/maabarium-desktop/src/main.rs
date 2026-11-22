@@ -10,7 +10,7 @@ use maabarium_core::blueprint::{
 };
 use maabarium_core::error::EngineError;
 use maabarium_core::git_manager::GitManager;
-use maabarium_core::group_runner::GroupRunner;
+use maabarium_core::group_runner::{process_is_alive, GroupRunner};
 use maabarium_core::persistence::PersistedExperiment;
 use maabarium_core::run_groups::{
     ExecutionMode, GroupBlueprintEntry, GroupRun, GroupRunExperiment, RunGroup, ScheduleKind,
@@ -531,7 +531,13 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let state = initialize_app_state(app.handle(), &runtime_paths)?;
+            let db_path = state.db_path.display().to_string();
+            let group_cancels = state.group_cancels.clone();
             app.manage(state);
+            // Runs left active by a crash or quit can never finish; close them
+            // so their groups can be run or deleted again.
+            reconcile_group_runs(&db_path, &group_cancels);
+            start_group_scheduler(db_path, group_cancels);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1661,7 +1667,7 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         .unwrap_or_default();
     let telegram_config: Option<TelegramConfig> = persistence_handle
         .as_ref()
-        .and_then(|p| p.telegram_get_config().ok())
+        .and_then(|p| p.telegram_get_settings().ok())
         .flatten();
 
     match blueprint_result {
@@ -2062,9 +2068,13 @@ fn create_run_group_command(
 ) -> Result<(), String> {
     let persistence = Persistence::open(&state.db_path.display().to_string())
         .map_err(|e| format!("DB open error: {e}"))?;
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err("Group names must be 1-80 characters.".to_owned());
+    }
     let group = RunGroup {
         name,
-        description,
+        description: description.trim().to_owned(),
         created_at: chrono::Utc::now().to_rfc3339(),
         blueprints: vec![],
         execution_mode: ExecutionMode::Sequential,
@@ -2102,6 +2112,7 @@ fn add_blueprint_to_group_command(
 
 #[tauri::command]
 fn delete_run_group_command(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    reconcile_group_runs(&state.db_path.display().to_string(), &state.group_cancels);
     let persistence = Persistence::open(&state.db_path.display().to_string())
         .map_err(|e| format!("DB open error: {e}"))?;
     persistence
@@ -2124,32 +2135,14 @@ fn set_run_group_schedule_command(
         .map_err(|e| format!("Get group error: {e}"))?
         .ok_or_else(|| format!("Group '{group_name}' not found"))?;
 
-    let mut next_run_at = None;
+    let value = value.unwrap_or_default().trim().to_owned();
     let kind = match schedule_type.as_str() {
         "none" => ScheduleKind::None,
-        "cron" => {
-            let expression = value.unwrap_or_default().trim().to_owned();
-            if expression.split_whitespace().count() != 5 {
-                return Err("Cron schedules must use a 5-field expression.".to_owned());
-            }
-            ScheduleKind::Cron { expression }
-        }
-        "one_shot" => {
-            let datetime = value.unwrap_or_default().trim().to_owned();
-            chrono::DateTime::parse_from_rfc3339(&datetime)
-                .map_err(|e| format!("One-shot schedule must be an RFC 3339 datetime: {e}"))?;
-            next_run_at = Some(datetime.clone());
-            ScheduleKind::OneShot { datetime }
-        }
+        "cron" => ScheduleKind::Cron { expression: value },
+        "one_shot" => ScheduleKind::OneShot { datetime: value },
         other => return Err(format!("Unsupported schedule type '{other}'")),
     };
-
-    let schedule = ScheduledRun {
-        enabled: enabled && !matches!(kind, ScheduleKind::None),
-        kind,
-        last_run_at: None,
-        next_run_at,
-    };
+    let schedule = ScheduledRun::new_validated(kind, enabled, &chrono::Utc::now())?;
     persistence
         .update_group_schedule(&group_name, &schedule)
         .map_err(|e| format!("Update schedule error: {e}"))
@@ -2160,6 +2153,7 @@ fn spawn_group_run(
     group_name: String,
     mode: Option<String>,
     group_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    scheduled: bool,
 ) -> Result<(), String> {
     {
         let persistence = Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
@@ -2194,7 +2188,10 @@ fn spawn_group_run(
                 .ok_or_else(|| format!("Group '{group_name}' not found"))?;
 
             let force_mode = mode.and_then(|m| ExecutionMode::from_str(&m));
-            let runner = GroupRunner::new(persistence, db_path, cancel);
+            let mut runner = GroupRunner::new(persistence, db_path, cancel);
+            if scheduled {
+                runner = runner.triggered_by_schedule();
+            }
             let rt = tokio::runtime::Runtime::new().map_err(|e| format!("Runtime error: {e}"))?;
             rt.block_on(async { runner.run_group(&group, force_mode).await })?;
             Ok(())
@@ -2221,59 +2218,106 @@ fn run_group_command(
         group_name,
         mode,
         state.group_cancels.clone(),
+        false,
     )
 }
 
 #[tauri::command]
 fn stop_group_command(state: tauri::State<'_, AppState>, group_name: String) -> Result<(), String> {
-    let active = state
-        .group_cancels
-        .lock()
-        .map_err(|_| "Group run tracker is unavailable".to_owned())?;
-    let cancel = active
-        .get(&group_name)
-        .ok_or_else(|| format!("Group '{group_name}' is not running"))?;
-    cancel.cancel();
-    Ok(())
-}
-
-#[tauri::command]
-fn run_due_groups_command(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
-    let db_path = state.db_path.display().to_string();
-    let persistence = Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
-    let now = chrono::Utc::now();
-    let groups = persistence
-        .list_groups()
-        .map_err(|e| format!("List groups error: {e}"))?;
-    let active = state
+    let cancel = state
         .group_cancels
         .lock()
         .map_err(|_| "Group run tracker is unavailable".to_owned())?
-        .keys()
-        .cloned()
-        .collect::<HashSet<_>>();
-    drop(persistence);
+        .get(&group_name)
+        .cloned();
+    match cancel {
+        Some(cancel) => cancel.cancel(),
+        // Nothing in this process is running it, so a recorded active run
+        // was interrupted earlier; close it so the group is usable again.
+        None => reconcile_group_runs(&state.db_path.display().to_string(), &state.group_cancels),
+    }
+    Ok(())
+}
 
+type GroupCancels = Arc<Mutex<HashMap<String, CancellationToken>>>;
+
+fn reconcile_group_runs(db_path: &str, group_cancels: &GroupCancels) {
+    let active = match group_cancels.lock() {
+        Ok(active) => active.keys().cloned().collect::<HashSet<_>>(),
+        Err(_) => return,
+    };
+    match Persistence::open(db_path)
+        .and_then(|p| p.reconcile_interrupted_group_runs(&active, &process_is_alive))
+    {
+        Ok(0) => {}
+        Ok(closed) => info!(closed, "Closed interrupted workflow group runs"),
+        Err(error) => warn!(%error, "Could not reconcile workflow group runs"),
+    }
+}
+
+/// Start every enabled group whose schedule is due. One group's failure is
+/// logged and does not stop the others.
+fn start_due_groups(db_path: &str, group_cancels: &GroupCancels) -> Vec<String> {
+    let groups = match Persistence::open(db_path).and_then(|p| p.list_groups()) {
+        Ok(groups) => groups,
+        Err(error) => {
+            warn!(%error, "Could not load workflow groups for scheduling");
+            return Vec::new();
+        }
+    };
+    let active = group_cancels
+        .lock()
+        .map(|active| active.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
     let mut started = Vec::new();
     for group in groups {
         if active.contains(&group.name) || group.blueprints.is_empty() {
             continue;
         }
-        let Some(schedule) = group.schedule.as_ref() else {
-            continue;
-        };
-        if !schedule.enabled || !schedule.kind.is_due(schedule.last_run_at.as_deref(), &now) {
+        if !group
+            .schedule
+            .as_ref()
+            .is_some_and(|schedule| schedule.is_due(&now))
+        {
             continue;
         }
-        spawn_group_run(
-            db_path.clone(),
+        match spawn_group_run(
+            db_path.to_owned(),
             group.name.clone(),
             None,
-            state.group_cancels.clone(),
-        )?;
-        started.push(group.name);
+            group_cancels.clone(),
+            true,
+        ) {
+            Ok(()) => started.push(group.name),
+            Err(error) => warn!(group = %group.name, %error, "Scheduled group did not start"),
+        }
     }
-    Ok(started)
+    started
+}
+
+/// Check schedules from a background thread so they run while the window is
+/// hidden or its timers are throttled.
+fn start_group_scheduler(db_path: String, group_cancels: GroupCancels) {
+    std::thread::Builder::new()
+        .name("group-scheduler".to_owned())
+        .spawn(move || loop {
+            let started = start_due_groups(&db_path, &group_cancels);
+            if !started.is_empty() {
+                info!(?started, "Started scheduled workflow groups");
+            }
+            std::thread::sleep(std::time::Duration::from_secs(20));
+        })
+        .map(|_| ())
+        .unwrap_or_else(|error| warn!(%error, "Could not start the group scheduler"));
+}
+
+#[tauri::command]
+fn run_due_groups_command(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(start_due_groups(
+        &state.db_path.display().to_string(),
+        &state.group_cancels,
+    ))
 }
 
 #[tauri::command]
@@ -2283,7 +2327,7 @@ fn get_telegram_config_command(
     let persistence = Persistence::open(&state.db_path.display().to_string())
         .map_err(|e| format!("DB open error: {e}"))?;
     persistence
-        .telegram_get_config()
+        .telegram_get_settings()
         .map_err(|e| format!("Get telegram config error: {e}"))
 }
 

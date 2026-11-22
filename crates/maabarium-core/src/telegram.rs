@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Telegram bot configuration (singleton in the database).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TelegramConfig {
     /// Bot API token.
     #[serde(default, skip_serializing)]
@@ -30,6 +30,28 @@ pub struct TelegramConfig {
     pub notify_on_promotion: bool,
     /// When this config was last updated.
     pub updated_at: String,
+}
+
+impl std::fmt::Debug for TelegramConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramConfig")
+            .field(
+                "bot_token",
+                &if self.bot_token.is_empty() {
+                    ""
+                } else {
+                    "[redacted]"
+                },
+            )
+            .field("chat_id", &self.chat_id)
+            .field("enabled", &self.enabled)
+            .field("notify_on_start", &self.notify_on_start)
+            .field("notify_on_complete", &self.notify_on_complete)
+            .field("notify_on_error", &self.notify_on_error)
+            .field("notify_on_promotion", &self.notify_on_promotion)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 const fn default_true() -> bool {
@@ -85,6 +107,7 @@ pub struct NotificationLogEntry {
 /// Notification configuration for a specific workflow in a group.
 ///
 /// Used to check whether a particular workflow should trigger notifications.
+#[derive(Debug, Clone)]
 pub struct NotificationConfig {
     /// Global enabled.
     pub global_enabled: bool,
@@ -126,7 +149,7 @@ impl TelegramNotifier {
     /// Create a new notifier from config.
     pub fn new(config: &TelegramConfig) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: notification_client(),
             bot_token: config.bot_token.clone(),
             chat_id: config.chat_id.clone(),
         }
@@ -180,16 +203,15 @@ impl TelegramNotifier {
         blueprint_name: &str,
         iteration: u64,
         max_iterations: u64,
-        repo_path: &str,
     ) -> Result<bool, String> {
+        // Local paths stay on this machine.
         let msg = format!(
             "\u{1F916} <b>Starting: {}</b>\n\
-             Iteration {}/{} | Repo: {}\n\
+             Iteration {}/{}\n\
              Started: {}",
-            blueprint_name,
+            escape_html(blueprint_name),
             iteration,
             max_iterations,
-            repo_path,
             chrono::Utc::now().format("%Y-%m-%d %H:%M"),
         );
         self.send_message(&msg).await
@@ -210,7 +232,11 @@ impl TelegramNotifier {
              Score: {:.3} | Duration: {:.1}s\n\
              Branch: {}\n\
              Iteration: {}",
-            blueprint_name, score, duration_secs, branch, iteration,
+            escape_html(blueprint_name),
+            score,
+            duration_secs,
+            escape_html(branch),
+            iteration,
         );
         self.send_message(&msg).await
     }
@@ -240,11 +266,11 @@ impl TelegramNotifier {
             } else {
                 "COMPLETED"
             },
-            blueprint_name,
+            escape_html(blueprint_name),
             score,
             duration_secs,
             iteration,
-            reason,
+            escape_html(reason),
         );
         self.send_message(&msg).await
     }
@@ -260,7 +286,9 @@ impl TelegramNotifier {
             "\u{26A0}\u{FE0F} <b>ERROR: {}</b>\n\
              {}\n\
              Run aborted after {} iteration(s)",
-            blueprint_name, error, iteration,
+            escape_html(blueprint_name),
+            escape_html(error),
+            iteration,
         );
         self.send_message(&msg).await
     }
@@ -275,15 +303,15 @@ impl TelegramNotifier {
         let workflows = workflow_names
             .iter()
             .enumerate()
-            .map(|(i, name)| format!("{}.\u{2009}{}", i + 1, name))
+            .map(|(i, name)| format!("{}.\u{2009}{}", i + 1, escape_html(name)))
             .collect::<Vec<_>>()
             .join("    ");
         let msg = format!(
             "\u{1F680} <b>Group run started: {}</b>\n\
              Mode: {} | Workflows: {}\n\
              {}",
-            group_name,
-            mode,
+            escape_html(group_name),
+            escape_html(mode),
             workflow_names.len(),
             workflows,
         );
@@ -301,12 +329,41 @@ impl TelegramNotifier {
     ) -> Result<bool, String> {
         let msg = format!(
             "\u{1F3C1} <b>Group run COMPLETED: {}</b>\n\
-             \u{2705} {} promoted | \u{274C} {} rejected | \u{26A0}\u{FE0F} {} errors\n\
+             \u{2705} {} promoted | \u{274C} {} not promoted | \u{26A0}\u{FE0F} {} errors\n\
              Duration: {:.1}s",
-            group_name, promoted, rejected, errors, duration_secs,
+            escape_html(group_name),
+            promoted,
+            rejected,
+            errors,
+            duration_secs,
         );
         self.send_message(&msg).await
     }
+}
+
+/// Escape text for Telegram's HTML parse mode.
+pub fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// A client that gives up quickly, so a stalled Telegram request never
+/// holds up a workflow run.
+fn notification_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 /// Notification log entry for database persistence.
@@ -385,6 +442,28 @@ mod tests {
         };
         assert!(!config.should_notify(NotificationEvent::RunStart));
         assert!(!config.should_notify(NotificationEvent::RunComplete));
+    }
+
+    #[test]
+    fn debug_output_redacts_the_token() {
+        let config = TelegramConfig {
+            bot_token: "123:synthetic-secret".into(),
+            chat_id: "42".into(),
+            enabled: true,
+            notify_on_start: true,
+            notify_on_complete: true,
+            notify_on_error: true,
+            notify_on_promotion: true,
+            updated_at: String::new(),
+        };
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("synthetic-secret"));
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn escape_html_neutralises_markup() {
+        assert_eq!(escape_html("a<b>&\"c\""), "a&lt;b&gt;&amp;&quot;c&quot;");
     }
 
     #[test]
