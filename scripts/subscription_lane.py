@@ -44,14 +44,16 @@ def queue_loop_step(db, loop_id, step, lanes, target):
     )
 
 
-def worker(db, codex, lock_fd):
+def worker(db, runners, lock_fd):
+    slots = ",".join("?" for _ in runners)
     job = db.execute(
-        "SELECT id,attempts,prompt FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane='codex' ORDER BY due,id LIMIT 1",
-        (int(time.time()),),
+        f"SELECT id,attempts,prompt,lane FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane IN ({slots}) ORDER BY due,id LIMIT 1",
+        (int(time.time()), *runners),
     ).fetchone()
     if not job:
         return
-    job_id, attempts, prompt = job
+    job_id, attempts, prompt, lane = job
+    binary = runners[lane]
     if attempts >= MAX_ATTEMPTS:
         db.execute("UPDATE jobs SET state='failed', detail='attempt limit' WHERE id=?", (job_id,))
         return
@@ -59,36 +61,64 @@ def worker(db, codex, lock_fd):
     env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "CODEX_HOME") if k in os.environ}
     flags = ['-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"']
     with tempfile.TemporaryDirectory(prefix="maabarium-lane-") as scratch:
+        check = ([binary, *flags, "login", "status"] if lane == "codex" else
+                 [binary, "auth", "status"] if lane == "claude" else [binary, "models"])
         try:
-            auth = subprocess.run([codex, *flags, "login", "status"], cwd=scratch, env=env,
+            auth = subprocess.run(check, cwd=scratch, env=env,
                                   capture_output=True, text=True, timeout=10, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            auth = None
-        if not auth or auth.returncode or not any(
-            line.strip() == "Logged in using ChatGPT"
-            for line in (auth.stdout + "\n" + auth.stderr).splitlines()
-        ):
-            db.execute("UPDATE jobs SET state='queued', due=?,detail='ChatGPT sign-in required' WHERE id=?",
-                       (int(time.time()) + 900, job_id))
+            if lane == "claude":
+                status = json.loads(auth.stdout)
+                ready = (isinstance(status, dict) and status.get("loggedIn") is True and
+                         status.get("authMethod") == "claude.ai" and status.get("apiProvider") == "firstParty" and
+                         status.get("subscriptionType") in ("pro", "max", "ultra"))
+            elif lane == "antigravity":
+                ready = any(line.startswith("gemini-4-neon-low\t") for line in auth.stdout.splitlines())
+            else:
+                ready = any(line.strip() == "Logged in using ChatGPT"
+                            for line in (auth.stdout + "\n" + auth.stderr).splitlines())
+            ready = ready and auth.returncode == 0
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            ready = False
+        if not ready:
+            detail = "ChatGPT sign-in required" if lane == "codex" else "subscription CLI preflight failed"
+            db.execute("UPDATE jobs SET state='queued', due=?,detail=? WHERE id=?",
+                       (int(time.time()) + 900, detail, job_id))
             return
         db.execute("UPDATE jobs SET state='running', attempts=attempts+1, detail=NULL WHERE id=?", (job_id,))
         output = Path(scratch) / "answer.txt"
-        cmd = [codex, *flags, "-a", "never", "exec", "--ignore-user-config", "--ephemeral",
+        cmd = [binary, *flags, "-a", "never", "exec", "--ignore-user-config", "--ephemeral",
                "--disable", "shell_tool", "--disable", "hooks", "-c", 'web_search="disabled"',
                "--sandbox", "read-only", "--skip-git-repo-check", "--output-last-message", str(output), "-"]
+        if lane == "claude":
+            cmd = [binary, "-p", "--tools", "", "--setting-sources", "", "--strict-mcp-config",
+                   "--settings", '{"disableAllHooks":true}', "--no-session-persistence",
+                   "--output-format", "json", "--max-turns", "1"]
+        elif lane == "antigravity":
+            cmd = [binary, "--sandbox", "--settings", '{"useG1Credits":false}',
+                   "--print-timeout", "90s", "--disable-slash-commands", "--model", "gemini-4-neon-low",
+                   "--output-format", "json", "-p", prompt or PROMPT]
         process = None
         try:
             # The guardian, not the vendor process, holds the lock and enforces
             # the deadline even if the queue worker is killed.
-            process = subprocess.Popen([sys.executable, "-I", "-c", GUARD, "120", *cmd],
-                                       cwd=scratch, env=env, stdin=subprocess.PIPE,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       text=True, start_new_session=True, pass_fds=(lock_fd,))
-            process.communicate(prompt or PROMPT, timeout=125)
-            if process.returncode or not output.is_file() or output.stat().st_size > 16384:
+            with (output.open("wb") if lane != "codex" else open(os.devnull, "wb")) as stdout:
+                process = subprocess.Popen([sys.executable, "-I", "-c", GUARD, "120", *cmd],
+                                           cwd=scratch, env=env, stdin=subprocess.PIPE,
+                                           stdout=stdout, stderr=subprocess.DEVNULL,
+                                           text=True, start_new_session=True, pass_fds=(lock_fd,))
+                process.communicate("" if lane == "antigravity" else prompt or PROMPT, timeout=125)
+            if process.returncode or not output.is_file() or output.stat().st_size > 65536:
                 raise ValueError("no bounded reply")
             result = output.read_text(encoding="utf-8").strip()
-            if not result:
+            if lane != "codex":
+                data = json.loads(result)
+                if not isinstance(data, dict):
+                    raise ValueError("invalid response")
+                if lane == "claude":
+                    result = data.get("result") if data.get("subtype") == "success" and data.get("is_error") is False else None
+                else:
+                    result = data.get("response") if data.get("status") == "SUCCESS" else None
+            if not isinstance(result, str) or not result.strip() or len(result.encode()) > 16384:
                 raise ValueError("empty reply")
         except (OSError, ValueError, subprocess.TimeoutExpired):
             if process is not None and process.poll() is None:
@@ -102,13 +132,17 @@ def worker(db, codex, lock_fd):
                     (int(time.time()) + min(3600, 300 * 2 ** attempts), job_id),
                 )
             return
-        db.execute("UPDATE jobs SET state='done', result=?, detail='ChatGPT' WHERE id=?", (result, job_id))
+        detail = {"codex": "ChatGPT", "claude": "Claude account; API credentials excluded",
+                  "antigravity": "Antigravity account; AI credits disabled for run"}[lane]
+        db.execute("UPDATE jobs SET state='done', result=?, detail=? WHERE id=?", (result, detail, job_id))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, default=Path.home() / ".maabarium" / "subscription-lane")
     parser.add_argument("--codex", default="codex", help="trusted local Codex CLI")
+    parser.add_argument("--claude", help="trusted Claude CLI; opt in only after confirming account Usage credits are off")
+    parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
     parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status"])
     parser.add_argument("--lane", choices=LANES, default="codex")
     parser.add_argument("--result-file", type=Path)
@@ -135,6 +169,13 @@ def main():
             "RunAtLoad": True,
             "StartInterval": 60,
         }
+        for lane in ("claude", "antigravity"):
+            path = getattr(args, lane)
+            if path:
+                binary = shutil.which(path)
+                if not binary:
+                    parser.error(f"{lane} CLI not found")
+                job["ProgramArguments"].extend([f"--{lane}", os.path.abspath(binary)])
         if "CODEX_HOME" in os.environ:
             job["EnvironmentVariables"] = {"CODEX_HOME": os.environ["CODEX_HOME"]}
         sys.stdout.buffer.write(plistlib.dumps(job))
@@ -234,7 +275,15 @@ def main():
                 codex = shutil.which(args.codex)
                 if not codex:
                     parser.error("Codex CLI not found")
-                worker(db, os.path.abspath(codex), lock.fileno())
+                runners = {"codex": os.path.abspath(codex)}
+                for lane in ("claude", "antigravity"):
+                    path = getattr(args, lane)
+                    if path:
+                        binary = shutil.which(path)
+                        if not binary:
+                            parser.error(f"{lane} CLI not found")
+                        runners[lane] = os.path.abspath(binary)
+                worker(db, runners, lock.fileno())
             elif args.action == "loop-status":
                 db.row_factory = sqlite3.Row
                 row = db.execute("SELECT * FROM research_loops WHERE id=?", (args.id,)).fetchone()

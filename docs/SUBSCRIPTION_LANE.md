@@ -1,7 +1,9 @@
 # Unattended subscription research lane
 
 The local queue stores explicit Codex, Claude, Antigravity, and Muse
-routes. Only Codex runs unattended. The other routes use a manual handoff
+routes. Codex runs unattended by default when the worker is installed.
+Claude and Antigravity can opt in on a personal machine after checking
+their account's paid overage settings. Unconfigured routes use a manual handoff
 and do not invoke a provider or assert how a result was billed:
 
 ```sh
@@ -65,6 +67,19 @@ ignores user CLI config for execution, and disables shell, hooks and web
 search in an ephemeral, read-only scratch session. Use a trusted local
 Codex binary. Quota and other transient runner failures share a bounded
 retry path; the worker does not claim to read a provider's quota reset.
+
+To enable Claude and Antigravity, first verify that Claude **Settings →
+Usage → Usage credits** is off and Antigravity **Models & Usage → Enable AI
+Credit Overages** is off for the CLI accounts. Then pass
+`--claude "$HOME/.local/bin/claude" --antigravity "$HOME/.local/bin/agy"`
+when generating the launch agent or running a tick. These explicit paths
+are operator opt-ins, not programmable account-billing evidence. If you
+enable account overages later, unload the worker or remove that lane before
+doing so. The worker rechecks Claude first-party paid-plan login at each
+attempt, strips API credential environment variables, and forces
+`useG1Credits=false` for Antigravity. It never retries on another provider.
+Antigravity uses Gemini 4 Neon Low, not the desktop Orchestrator pair.
+Muse remains manual.
 
 From the checkout that will remain on disk:
 

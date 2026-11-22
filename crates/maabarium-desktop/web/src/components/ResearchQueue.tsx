@@ -14,7 +14,7 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
     check: "codex login status",
   },
   claude: {
-    status: "Manual handoff · unattended billing not verified",
+    status: "Optional local worker · verify Usage credits are off before enabling",
     steps: [
       "In Terminal, run claude auth login and choose your Claude account. Desktop and CLI sessions can differ.",
       "Check the CLI login separately. Maabarium does not read or store Claude tokens.",
@@ -22,7 +22,7 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
     check: "claude auth status",
   },
   antigravity: {
-    status: "Manual handoff · unattended billing not verified",
+    status: "Optional local worker · verify AI Credit Overages are off before enabling",
     steps: [
       "Install the official Antigravity CLI and sign in with the Google account on your plan.",
       "Turn off Use AI Credits in the CLI settings and set account credit overages to Never.",
@@ -100,7 +100,7 @@ export function ResearchQueue() {
   return (
     <section className="workspace-card rounded-xl border p-5" aria-labelledby="research-queue-title">
       <h2 id="research-queue-title" className="text-lg font-semibold">Research queue</h2>
-      <p className="mt-1 text-sm">Queue a public synthetic task. Codex runs only when the local subscription worker is installed. The other lanes currently require manual handoff.</p>
+      <p className="mt-1 text-sm">Queue a public synthetic task. Codex, Claude, and Antigravity can run through the local subscription worker when configured. Muse requires manual handoff.</p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label htmlFor="research-lane">Provider</label>
         <select className="rounded border bg-transparent p-2" id="research-lane" value={lane}

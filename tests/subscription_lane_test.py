@@ -16,6 +16,59 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_opt_in_account_lanes_recover_abandoned_claim_without_fallback(self):
+        for lane in ("claude", "antigravity"):
+            with self.subTest(lane=lane), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cli = root / "fake"
+                marker = root / "first"
+                cli.write_text(f"""#!{sys.executable}
+import json, os, pathlib, sys, time
+assert 'ANTHROPIC_API_KEY' not in os.environ and 'GEMINI_API_KEY' not in os.environ
+lane = {lane!r}
+if 'auth' in sys.argv:
+    print(json.dumps(dict(loggedIn=True, authMethod='claude.ai', apiProvider='firstParty', subscriptionType='pro')))
+elif 'models' in sys.argv:
+    print('gemini-4-neon-low\\tNeon')
+else:
+    if lane == 'antigravity':
+        assert json.loads(sys.argv[sys.argv.index('--settings') + 1])['useG1Credits'] is False
+        assert '--sandbox' in sys.argv
+    else:
+        assert sys.argv[sys.argv.index('--tools') + 1] == ''
+    marker = pathlib.Path({str(marker)!r})
+    if not marker.exists():
+        marker.touch()
+        time.sleep(1)
+    print(json.dumps(dict(status='SUCCESS', response='Recovered', subtype='success', is_error=False, result='Recovered')))
+""")
+                cli.chmod(0o700)
+                command = [sys.executable, str(SCRIPT), "--state", str(root / "state"), "--codex", str(cli)]
+                env = {**os.environ, "ANTHROPIC_API_KEY": "excluded", "GEMINI_API_KEY": "excluded"}
+                subprocess.run([*command, "enqueue", "--id", "job", "--lane", lane], check=True)
+                subprocess.run([*command, "tick"], check=True)
+                self.assertFalse(marker.exists())
+                tick = [*command, "tick", f"--{lane}", str(cli)]
+                first = subprocess.Popen(tick, env=env)
+                try:
+                    until = time.monotonic() + 4
+                    while not marker.exists() and time.monotonic() < until:
+                        time.sleep(0.01)
+                    self.assertTrue(marker.exists())
+                finally:
+                    if first.poll() is None:
+                        first.kill()
+                    first.wait(timeout=5)
+                def status():
+                    return json.loads(subprocess.check_output([*command, "status"], timeout=5))[0]
+                self.assertEqual(status()["state"], "running")
+                until = time.monotonic() + 5
+                while status()["state"] != "done" and time.monotonic() < until:
+                    subprocess.run(tick, env=env, check=True, timeout=5)
+                    time.sleep(0.05)
+                row = status()
+                self.assertEqual((row["state"], row["attempts"], row["result"]), ("done", 2, "Recovered"))
+
     def test_guardian_releases_lock_when_provider_hangs(self):
         guard = runpy.run_path(str(SCRIPT))["GUARD"]
         with tempfile.TemporaryDirectory() as tmp:
