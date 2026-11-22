@@ -150,6 +150,12 @@ export default function App() {
     try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
   });
+  useEffect(() => {
+    // Mirror the theme on <html> so the page background, overscroll and
+    // native controls outside the app root follow it too.
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  }, [theme]);
   const toggleTheme = () => {
     const next = theme === "light" ? "dark" : "light";
     setTheme(next);
@@ -227,7 +233,6 @@ export default function App() {
     setRunGroupSchedule,
     runGroup,
     stopGroup,
-    runDueGroups,
   } = useDesktopConsole();
   const {
     blueprintQuery,
@@ -734,26 +739,6 @@ export default function App() {
     };
   }, [successToast]);
 
-  useEffect(() => {
-    if (loading) {
-      return;
-    }
-
-    void runDueGroups().then((started) => {
-      if (started.length > 0) {
-        setSuccessToast(`Started scheduled group: ${started.join(", ")}`);
-      }
-    });
-    const interval = window.setInterval(() => {
-      void runDueGroups().then((started) => {
-        if (started.length > 0) {
-          setSuccessToast(`Started scheduled group: ${started.join(", ")}`);
-        }
-      });
-    }, 30_000);
-
-    return () => window.clearInterval(interval);
-  }, [loading]);
 
   useEffect(() => {
     if (loading) {
@@ -1438,7 +1423,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="console-navigation" aria-label="Workspace sections">
+          <div className="console-navigation" role="group" aria-label="Workspace sections">
             <button
               onClick={handleScrollToTop}
               className="px-6 py-2 rounded-lg text-xs font-black uppercase tracking-[0.2em] text-slate-500 hover:text-white transition-all"
@@ -1506,6 +1491,15 @@ export default function App() {
             <p>Research workspace</p>
             <h1>{activeWorkflowLabel}</h1>
             <span>{activeWorkflowMeta ?? (activeBlueprintOption ? blueprintSummary : "Open or create a workflow to get started.")}</span>
+            <span role="status" className="workspace-run-status" data-run-state={runStatus}>
+              {runStatus === "running"
+                ? `Running${runState?.currentIteration ? ` · iteration ${runState.currentIteration}` : ""}`
+                : runStatus === "stopping"
+                  ? "Stopping"
+                  : runLoopStarting
+                    ? "Starting"
+                    : "Idle"}
+            </span>
           </div>
           <div className="workspace-heading-actions">
             {activeBlueprintOption ? <button type="button" className="workspace-secondary" onClick={handleJumpToActiveWorkflow}>View workflow</button> : null}

@@ -502,8 +502,8 @@ export type GroupRunWithExperiments = GroupRun & {
   experiments: GroupRunExperiment[];
 };
 
+/** Telegram settings. The bot token stays in the OS keychain and never reaches the UI. */
 export type TelegramConfig = {
-  botToken: string;
   chatId: string;
   enabled: boolean;
   notifyOnStart: boolean;

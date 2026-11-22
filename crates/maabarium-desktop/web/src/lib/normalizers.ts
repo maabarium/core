@@ -684,15 +684,16 @@ function normalizeTelegramConfig(
   if (!config) {
     return null;
   }
+  // The desktop backend sends snake_case; accept camelCase for mocks too.
+  const record = asRecord(config);
   return {
-    botToken: config.botToken ?? "",
-    chatId: config.chatId ?? "",
-    enabled: Boolean(config.enabled),
-    notifyOnStart: Boolean(config.notifyOnStart),
-    notifyOnComplete: Boolean(config.notifyOnComplete),
-    notifyOnError: Boolean(config.notifyOnError),
-    notifyOnPromotion: Boolean(config.notifyOnPromotion),
-    updatedAt: config.updatedAt ?? "",
+    chatId: stringField(record, "chatId", "chat_id"),
+    enabled: booleanField(record, "enabled"),
+    notifyOnStart: booleanField(record, "notifyOnStart", "notify_on_start"),
+    notifyOnComplete: booleanField(record, "notifyOnComplete", "notify_on_complete"),
+    notifyOnError: booleanField(record, "notifyOnError", "notify_on_error"),
+    notifyOnPromotion: booleanField(record, "notifyOnPromotion", "notify_on_promotion"),
+    updatedAt: stringField(record, "updatedAt", "updated_at"),
   };
 }
 

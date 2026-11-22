@@ -285,47 +285,41 @@ body {
 .maabarium-app .workspace-card { background: var(--surface); color: var(--ink); border-color: var(--line); }
 .workspace-metrics > section { margin-top: 0.75rem; }
 
-/* Compatibility for existing slate-based panels while they adopt surface tokens. */
+/* Page background and native controls follow the theme outside the app root. */
+html[data-theme="light"],
+html[data-theme="light"] body {
+  background: #f7f8f5;
+  color-scheme: light;
+}
+html[data-theme="dark"],
+html[data-theme="dark"] body {
+  background: #131a19;
+  color-scheme: dark;
+}
+.workspace-run-status {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+.maabarium-app .workspace-heading .workspace-run-status[data-run-state="running"] { color: var(--accent); }
+.maabarium-app .workspace-heading .workspace-run-status[data-run-state="stopping"] { color: var(--danger); }
+
+/* Compatibility for existing slate-based panels while they adopt surface tokens.
+   Class selectors match a whole class token ([class^=…] or [class*=" …"]),
+   so variants such as hover:bg-white/10 are not restyled permanently. */
 .maabarium-app[data-theme="light"] :is(.text-white,.text-slate-50,.text-slate-100,.text-slate-200) { color: var(--ink); }
-.maabarium-app[data-theme="light"] :is(.text-slate-300,.text-slate-400,.text-slate-500,.text-slate-600) { color: var(--muted); }
-.maabarium-app[data-theme="light"] :is(.text-teal-200,.text-teal-300,.text-teal-400,.text-emerald-300,.text-emerald-400) { color: var(--accent); }
-.maabarium-app[data-theme="light"] :is(.text-rose-200,.text-rose-300,.text-rose-400,.text-red-400) { color: var(--danger); }
+.maabarium-app[data-theme="light"] :is(.text-slate-300,.text-slate-400,.text-slate-500,.text-slate-600,[class^="text-white/"],[class*=" text-white/"]) { color: var(--muted); }
+.maabarium-app[data-theme="light"] :is(.text-teal-200,.text-teal-300,.text-teal-400,.text-emerald-300,.text-emerald-400,[class^="text-teal-300/"],[class*=" text-teal-300/"]) { color: var(--accent); }
+.maabarium-app[data-theme="light"] :is(.text-rose-100,.text-rose-200,.text-rose-300,.text-rose-400,.text-red-400) { color: var(--danger); }
 .maabarium-app[data-theme="light"] :is(.text-yellow-300,.text-amber-200,.text-amber-300,.text-amber-400) { color: #74461a; }
 .maabarium-app[data-theme="light"] :is(.text-blue-300,.text-blue-400,.text-sky-300,.text-cyan-300) { color: #255885; }
-.maabarium-app[data-theme="light"] :is(.bg-slate-800,.bg-slate-900,.bg-slate-950,[class*="bg-slate-800/"],[class*="bg-slate-900/"],[class*="bg-slate-950/"],[class*="bg-white/"]) { background-color: var(--subtle); }
-.maabarium-app[data-theme="light"] :is([class*="border-white/"],[class*="border-slate-800"]) { border-color: var(--line); }
+.maabarium-app[data-theme="light"] :is(.bg-slate-800,.bg-slate-900,.bg-slate-950,[class^="bg-slate-800/"],[class*=" bg-slate-800/"],[class^="bg-slate-900/"],[class*=" bg-slate-900/"],[class^="bg-slate-950/"],[class*=" bg-slate-950/"],[class^="bg-white/"],[class*=" bg-white/"]) { background-color: var(--subtle); }
+.maabarium-app[data-theme="light"] :is([class^="border-white/"],[class*=" border-white/"],[class^="border-slate-800"],[class*=" border-slate-800"]) { border-color: var(--line); }
 .maabarium-app[data-theme="light"] [class*="fixed inset-0"][class*="bg-slate-950/"] { background-color: rgb(24 38 34 / 50%); }
 .maabarium-app[data-theme="light"] .workspace-card > div:first-child { background-image: none; }
+.maabarium-app[data-theme="light"] :is([class*="hover:bg-white/"]):hover { background-color: var(--subtle); }
 
-code,
-pre,
-kbd,
-samp {
-  font-family: var(--font-data);
-}
-
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.55);
-}
-
-::-webkit-scrollbar-thumb {
-  background: linear-gradient(
-    180deg,
-    rgba(45, 212, 191, 0.45),
-    rgba(251, 191, 36, 0.38)
-  );
-  border-radius: 999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(
-    180deg,
-    rgba(45, 212, 191, 0.65),
-    rgba(251, 191, 36, 0.55)
-  );
-}
+/* Dark: lift small muted labels and translucent text to at least 4.5:1. */
+.maabarium-app[data-theme="dark"] :is(.text-slate-500,.text-slate-600) { color: #9fb1a9; }
+.maabarium-app[data-theme="dark"] :is([class^="text-white/"],[class*=" text-white/"]) { color: var(--muted); }

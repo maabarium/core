@@ -52,7 +52,7 @@ function describeSchedule(group: RunGroup): string {
     const parts = kind.expression.split(/\s+/);
     if (parts.length === 5) {
       const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-      const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")} UTC`;
+      const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
       if (dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
         return `Every day at ${time}`;
       }
@@ -80,6 +80,40 @@ function describeSchedule(group: RunGroup): string {
 }
 
 type ScheduleMode = "none" | "once" | "daily" | "weekly";
+
+/** Prefill the schedule form from a group's saved schedule. */
+function scheduleFormValues(group: RunGroup): {
+  mode: ScheduleMode;
+  dateTime: string;
+  time: string;
+} {
+  const fallback = nextRoundedDateTimeLocal();
+  const schedule = group.schedule;
+  if (!schedule || !schedule.enabled) {
+    return { mode: "once", dateTime: fallback, time: fallback.slice(11) };
+  }
+  const kind = schedule.kind;
+  if (kind.type === "one_shot") {
+    const date = new Date(kind.datetime);
+    const value = Number.isNaN(date.getTime()) ? fallback : toDateTimeLocalValue(date);
+    return { mode: "once", dateTime: value, time: value.slice(11) };
+  }
+  if (kind.type === "cron") {
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = kind.expression.split(/\s+/);
+    const time = `${(hour ?? "").padStart(2, "0")}:${(minute ?? "").padStart(2, "0")}`;
+    const simple = /^\d{1,2}$/.test(minute ?? "") && /^\d{1,2}$/.test(hour ?? "");
+    if (simple && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+      return { mode: "daily", dateTime: fallback, time };
+    }
+    if (simple && dayOfMonth === "*" && month === "*" && /^[0-7]$/.test(dayOfWeek ?? "")) {
+      const date = new Date();
+      date.setHours(Number(hour), Number(minute), 0, 0);
+      date.setDate(date.getDate() + ((Number(dayOfWeek) % 7) - date.getDay() + 7) % 7);
+      return { mode: "weekly", dateTime: toDateTimeLocalValue(date), time };
+    }
+  }
+  return { mode: "once", dateTime: fallback, time: fallback.slice(11) };
+}
 
 function toDateTimeLocalValue(date: Date): string {
   const offsetMs = date.getTimezoneOffset() * 60_000;
@@ -118,11 +152,11 @@ function buildSchedulePayload(
     ) {
       return null;
     }
-    const date = new Date();
-    date.setHours(hours, minutes, 0, 0);
+    // Cron schedules are evaluated in local time, so DST changes keep the
+    // wall-clock time the user picked.
     return {
       scheduleType: "cron",
-      value: `${date.getUTCMinutes()} ${date.getUTCHours()} * * *`,
+      value: `${minutes} ${hours} * * *`,
       enabled: true,
     };
   }
@@ -140,13 +174,21 @@ function buildSchedulePayload(
     };
   }
 
-  const minute = date.getUTCMinutes();
-  const hour = date.getUTCHours();
   return {
     scheduleType: "cron",
-    value: `${minute} ${hour} * * ${date.getUTCDay()}`,
+    value: `${date.getMinutes()} ${date.getHours()} * * ${date.getDay()}`,
     enabled: true,
   };
+}
+
+function formatRunTime(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? null
+    : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function blueprintNameFromPath(path: string): string {
@@ -229,23 +271,25 @@ function ExperimentRow({
   return (
     <div className="border-b border-white/5 last:border-b-0">
       <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition hover:bg-white/5"
       >
         <Badge color={statusColor(exp.status)}>{statusLabel(exp.status)}</Badge>
-        <span className="flex-1 font-medium">{exp.blueprintName}</span>
+        <span className="min-w-0 flex-1 break-words font-medium">{exp.blueprintName}</span>
         {persisted && (
-          <span className="text-white/50 text-xs">
+          <span className="text-slate-300 text-xs">
             score={persisted.weighted_total.toFixed(3)}
           </span>
         )}
         <ArrowRight
           size={14}
-          className={`text-white/30 transition ${expanded ? "rotate-90" : ""}`}
+          className={`text-slate-400 transition ${expanded ? "rotate-90" : ""}`}
         />
       </button>
       {expanded && persisted && (
-        <div className="space-y-1 px-5 pb-3 text-xs text-white/60">
+        <div className="space-y-1 px-5 pb-3 text-xs text-slate-300">
           <div className="grid grid-cols-2 gap-2">
             <span>Duration: {persisted.duration_ms}ms</span>
             <span>Outcome: {persisted.promotion_outcome}</span>
@@ -297,7 +341,7 @@ function GroupRunHistory({
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   if (runs.length === 0) {
-    return <p className="px-3 py-4 text-sm text-white/40 italic">No runs yet.</p>;
+    return <p className="px-3 py-4 text-sm text-slate-400 italic">No runs yet.</p>;
   }
 
   return (
@@ -305,10 +349,12 @@ function GroupRunHistory({
       {runs.slice(0, 5).map((run) => (
         <div key={run.id} className="border-b border-white/5 last:border-b-0">
           <button
+            type="button"
+            aria-expanded={expandedRun === run.id}
             onClick={() =>
               setExpandedRun(expandedRun === run.id ? null : run.id)
             }
-            className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition hover:bg-white/5"
+            className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-sm transition hover:bg-white/5"
           >
             <Badge
               color={
@@ -321,17 +367,17 @@ function GroupRunHistory({
             >
               {run.status}
             </Badge>
-            <span className="flex-1 font-medium">
-              Run {run.id.slice(0, 8)}
+            <span className="min-w-0 flex-1 font-medium">
+              {formatRunTime(run.startedAt) ?? `Run ${run.id.slice(0, 8)}`}
             </span>
             {run.summary && (
-              <span className="text-white/50 text-xs truncate max-w-[200px]">
+              <span className="w-full text-xs text-slate-400 sm:w-auto sm:max-w-[16rem] sm:truncate">
                 {run.summary}
               </span>
             )}
             <ArrowRight
               size={14}
-              className={`text-white/30 transition ${expandedRun === run.id ? "rotate-90" : ""}`}
+              className={`text-slate-400 transition ${expandedRun === run.id ? "rotate-90" : ""}`}
             />
           </button>
           {expandedRun === run.id && (
@@ -408,11 +454,17 @@ export function GroupRunPanel({
   const [scheduleTime, setScheduleTime] = useState(() =>
     nextRoundedDateTimeLocal().slice(11),
   );
+  const closeDeleteConfirm = (groupIndex: number) => {
+    setConfirmDelete(null);
+    window.requestAnimationFrame(() =>
+      document.getElementById(`group-delete-${groupIndex}`)?.focus(),
+    );
+  };
   const experimentMap = new Map(
     experiments.map((e) => [e.id, e]),
   );
   const inputClass =
-    "h-9 w-full rounded-md border border-white/10 bg-slate-950/80 px-2 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-teal-400/50 [color-scheme:dark]";
+    "h-9 w-full rounded-md border border-white/10 bg-slate-950/80 px-2 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-teal-400/50 ";
   const smallButtonClass =
     "rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs font-medium text-slate-300 transition hover:bg-white/10 hover:text-white";
   const chooseBlueprintFile = async () => {
@@ -515,7 +567,7 @@ export function GroupRunPanel({
         </form>
       )}
       {groups.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 py-8 text-white/40">
+        <div className="flex flex-col items-center gap-3 py-8 text-slate-400">
           <Layers size={32} className="opacity-30" />
           <p className="text-sm">No workflow run groups yet.</p>
           <p className="text-xs">
@@ -524,7 +576,7 @@ export function GroupRunPanel({
         </div>
       ) : (
         <div className="divide-y divide-white/5">
-          {groups.map((group) => {
+          {groups.map((group, groupIndex) => {
             const isExpanded = expandedGroup === group.name;
             const runs = groupRuns.filter(
               (r) => r.groupName === group.name,
@@ -537,18 +589,19 @@ export function GroupRunPanel({
 
             return (
               <div key={group.name}>
-                <div className="flex w-full items-center gap-3 px-3 py-3 transition hover:bg-white/5">
+                <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 px-3 py-3 transition hover:bg-white/5">
                   <button
                     type="button"
+                    aria-expanded={isExpanded}
                     onClick={() =>
                       setExpandedGroup(isExpanded ? null : group.name)
                     }
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    className="flex min-w-0 flex-1 basis-60 items-center gap-3 text-left"
                   >
                     <Layers size={16} className="text-teal-400 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="min-w-0 break-words font-medium text-sm">
                           {group.name}
                         </span>
                         <Badge
@@ -561,7 +614,7 @@ export function GroupRunPanel({
                           {group.executionMode}
                         </Badge>
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5 text-xs text-white/40">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
                         <span>
                           {group.blueprints.length} blueprint
                           {group.blueprints.length !== 1 ? "s" : ""}
@@ -577,7 +630,7 @@ export function GroupRunPanel({
                             <Bell size={10} /> Notifications on
                           </span>
                         ) : (
-                          <span className="flex items-center gap-1 text-white/30">
+                          <span className="flex items-center gap-1 text-slate-400">
                             <BellOff size={10} /> Notifications off
                           </span>
                         )}
@@ -589,7 +642,7 @@ export function GroupRunPanel({
                               {progress.currentLabel}
                             </span>
                             {progress.total > 0 && (
-                              <span className="shrink-0 text-white/35">
+                              <span className="shrink-0 text-slate-400">
                                 {progress.completed}/{progress.total}
                               </span>
                             )}
@@ -618,10 +671,10 @@ export function GroupRunPanel({
                     </div>
                     <ArrowRight
                       size={14}
-                      className={`text-white/30 transition ${isExpanded ? "rotate-90" : ""}`}
+                      className={`text-slate-400 transition ${isExpanded ? "rotate-90" : ""}`}
                     />
                   </button>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="ml-auto flex shrink-0 items-center gap-1">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -630,8 +683,9 @@ export function GroupRunPanel({
                         setBlueprintName(defaultBlueprintName);
                         setBlueprintPath(defaultBlueprintPath);
                       }}
-                      className="rounded p-1 text-white/40 transition hover:bg-white/10 hover:text-white"
+                      className="rounded p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
                       title="Add blueprint"
+                      aria-label={`Add blueprint to ${group.name}`}
                     >
                       <Plus size={14} />
                     </button>
@@ -640,13 +694,14 @@ export function GroupRunPanel({
                         e.stopPropagation();
                         setSchedulingGroup(schedulingGroup === group.name ? null : group.name);
                         setExpandedGroup(group.name);
-                        setScheduleMode(group.schedule?.enabled ? "once" : "once");
-                        const nextDateTime = nextRoundedDateTimeLocal();
-                        setScheduleDateTime(nextDateTime);
-                        setScheduleTime(nextDateTime.slice(11));
+                        const existing = scheduleFormValues(group);
+                        setScheduleMode(existing.mode);
+                        setScheduleDateTime(existing.dateTime);
+                        setScheduleTime(existing.time);
                       }}
-                      className="rounded p-1 text-white/40 transition hover:bg-white/10 hover:text-white"
+                      className="rounded p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
                       title="Set schedule"
+                      aria-label={`Schedule ${group.name}`}
                     >
                       <Clock size={14} />
                     </button>
@@ -674,12 +729,20 @@ export function GroupRunPanel({
                           );
                         }
                       }}
-                      className={`rounded p-1 transition ${
+                      className={`rounded p-1.5 transition disabled:cursor-not-allowed disabled:opacity-40 ${
                         isRunning
                           ? "text-rose-400 hover:bg-rose-600/20"
                           : "text-teal-400 hover:bg-teal-600/20"
                       }`}
-                      title={isRunning ? "Stop group" : "Run group"}
+                      disabled={!isRunning && group.blueprints.length === 0}
+                      title={
+                        isRunning
+                          ? "Stop group"
+                          : group.blueprints.length === 0
+                            ? "Add a blueprint before running"
+                            : "Run group"
+                      }
+                      aria-label={`${isRunning ? "Stop" : "Run"} group ${group.name}`}
                     >
                       {isRunning ? (
                         <Square size={14} fill="currentColor" />
@@ -692,8 +755,9 @@ export function GroupRunPanel({
                         e.stopPropagation();
                         setConfirmDelete(group.name);
                       }}
-                      className="rounded p-1 text-white/40 transition hover:bg-rose-600/20 hover:text-rose-400"
-                      title="Delete group"
+                      id={`group-delete-${groupIndex}`}
+                      className="rounded p-1.5 text-slate-400 transition hover:bg-rose-600/20 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-40"
+                      title={isRunning ? "Stop the group before deleting it" : "Delete group"}
                       aria-label={`Delete group ${group.name}`}
                       disabled={isRunning}
                     >
@@ -703,9 +767,15 @@ export function GroupRunPanel({
                 </div>
                 {confirmDelete === group.name && (
                   <div role="group" aria-label={`Confirm deletion of ${group.name}`}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        closeDeleteConfirm(groupIndex);
+                      }
+                    }}
                     className="mx-4 my-3 flex flex-wrap items-center gap-2 rounded-lg border border-rose-400/30 bg-rose-950/30 p-3 text-xs">
-                    <span className="mr-auto text-rose-100">Delete “{group.name}”, its schedule and group run history?</span>
-                    <button type="button" className={smallButtonClass} onClick={() => setConfirmDelete(null)}>Cancel</button>
+                    <span className="mr-auto min-w-0 break-words text-rose-200">Delete “{group.name}”, its schedule and group run history?</span>
+                    <button type="button" autoFocus className={smallButtonClass} onClick={() => closeDeleteConfirm(groupIndex)}>Cancel</button>
                     <button type="button" disabled={isRunning} className="rounded-md bg-rose-300 px-2 py-1 font-semibold text-slate-950 disabled:opacity-50"
                       onClick={() => { setConfirmDelete(null); onDeleteGroup(group.name); }}>Delete group</button>
                   </div>
@@ -874,23 +944,23 @@ export function GroupRunPanel({
                     {/* Blueprint list */}
                     {group.blueprints.length > 0 && (
                       <div className="px-5 py-2 space-y-1">
-                        <span className="text-xs font-medium text-white/40 uppercase tracking-wider">
+                        <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
                           Blueprints
                         </span>
                         {group.blueprints.map((bp) => (
                           <div
                             key={bp.blueprintName}
-                            className="flex items-center gap-2 text-xs text-white/60"
+                            className="flex items-center gap-2 text-xs text-slate-300"
                           >
-                            <span className="w-4 text-right text-white/30">
+                            <span className="w-4 text-right text-slate-400">
                               {bp.sortOrder + 1}.
                             </span>
                             <span>{bp.blueprintName}</span>
-                            <span className="text-white/30 truncate">
+                            <span className="text-slate-400 truncate">
                               {bp.blueprintPath}
                             </span>
                             {!bp.notificationsEnabled && (
-                              <BellOff size={10} className="text-white/30" />
+                              <BellOff size={10} className="text-slate-400" />
                             )}
                           </div>
                         ))}
@@ -899,7 +969,7 @@ export function GroupRunPanel({
 
                     {/* Run history */}
                     <div className="border-t border-white/5">
-                      <span className="block px-5 pt-2 pb-1 text-xs font-medium text-white/40 uppercase tracking-wider">
+                      <span className="block px-5 pt-2 pb-1 text-xs font-medium text-slate-400 uppercase tracking-wider">
                         Run History
                       </span>
                       <GroupRunHistory
@@ -916,7 +986,7 @@ export function GroupRunPanel({
       )}
 
       {/* Telegram status footer */}
-      <div className="border-t border-white/5 px-3 py-2 flex items-center gap-2 text-xs text-white/40">
+      <div className="flex items-center gap-2 border-t border-white/5 px-3 py-2 text-xs text-slate-400">
         {telegramConfig && telegramConfig.enabled ? (
           <>
             <Bell size={12} className="text-teal-400" />

@@ -131,7 +131,7 @@ export function ConsoleActivityPanel({
 
   return (
     <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
-      <div className="flex border-b border-slate-800">
+      <div className="flex overflow-x-auto border-b border-slate-800">
         {[
           { id: "history" as const, label: "History", icon: History },
           { id: "diff" as const, label: "Diff View", icon: Terminal },
@@ -140,7 +140,8 @@ export function ConsoleActivityPanel({
           <button
             key={id}
             onClick={() => onChangeTab(id)}
-            className={`px-6 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all flex items-center gap-2 ${activeTab === id ? "text-teal-300 bg-white/5 border-b border-amber-400" : "text-slate-500 hover:text-slate-300"}`}
+            aria-pressed={activeTab === id}
+            className={`flex shrink-0 items-center gap-2 px-3 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all sm:px-6 ${activeTab === id ? "text-teal-300 bg-white/5 border-b border-amber-400" : "text-slate-500 hover:text-slate-300"}`}
             type="button"
           >
             <Icon size={12} />
