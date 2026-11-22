@@ -18,6 +18,8 @@ an optional automatic run window and mandatory human review checkpoints.
 
 ### Changed
 
+- Updated the Maabarium identity for 0.5.0 with the Specimen mark, a lowercase wordmark, and matching desktop and browser icons.
+
 - Rebuilt the console around the active workflow, with a light default, a remembered dark option, and run controls beside the workflow status. Moved analytics and hardware metrics behind a disclosure. Workflow groups keep inline deletion confirmation.
 - Updated Rust and desktop web dependencies, including patched Wasmtime, Git and SQLite libraries.
 - Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin. Any plain-text copy left by such a build is cleared when the database opens.

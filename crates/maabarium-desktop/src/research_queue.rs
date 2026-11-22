@@ -658,6 +658,133 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "uses live subscription quota; run only for an authorized pilot"]
+    fn live_public_research_pilot() {
+        use super::super::research_evaluator::{record, EvaluationSetup, LockedRule};
+
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let state = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut db = Connection::open(state.path().join("queue.db")).unwrap();
+        initialise(&mut db).unwrap();
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let run = |args: &[&str]| {
+            let output = std::process::Command::new("python3")
+                .arg(workspace.join("scripts/subscription_lane.py"))
+                .arg("--state")
+                .arg(state.path())
+                .arg("--claude")
+                .arg(home.join(".local/bin/claude"))
+                .arg("--antigravity")
+                .arg(home.join(".local/bin/agy"))
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        };
+        let job = |db: &Connection, id: &str| {
+            db.query_row(
+                "SELECT state, attempts, detail FROM jobs WHERE id=?",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap()
+        };
+
+        let values: Vec<u32> = (0..16).collect();
+        let queries = [15, 21, 31];
+        let cases = |answers: [bool; 3]| {
+            queries.into_iter().zip(answers).map(|(q, answer)| {
+                serde_json::json!({"id": q.to_string(), "answer": answer.to_string()})
+            }).collect::<Vec<_>>()
+        };
+        let mut comparisons = 0;
+        let baseline_cases = cases(queries.map(|query| {
+            values.iter().any(|&value| {
+                comparisons += 1;
+                value == query
+            })
+        }));
+        let mut insertions = 0;
+        let bits = values.iter().fold(0u32, |bits, value| {
+            insertions += 1;
+            bits | (1 << value)
+        });
+        let mut probes = 0;
+        let candidate_cases = cases(queries.map(|query| {
+            probes += 1;
+            bits & (1 << query) != 0
+        }));
+        let evidence = |cases, setup, execute| {
+            serde_json::json!({
+            "fixture": "public-membership-0-15-v1", "cases": cases,
+            "work": {"setup": setup, "execute": execute, "propose": 0, "verify": queries.len(), "fallback": 0}
+        }).to_string()
+        };
+        let baseline = evidence(baseline_cases, 0, comparisons);
+        let candidate = evidence(candidate_cases, insertions, probes);
+        let rule = LockedRule::new(
+            serde_json::from_value::<EvaluationSetup>(serde_json::json!({
+                "baseline": baseline, "minimumSavingsPercent": 20
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        insert_loop(
+            &mut db,
+            "public-pilot",
+            "Review a toy exact membership comparison: scan 0 through 15 for queries 15, 21 and 31 versus building and probing a 32-bit bitset. Count one unit per comparison, insertion, probe and answer check. Discuss what would invalidate the comparison. Do not execute anything.",
+            &[ResearchStep::Lane("codex".into()), ResearchStep::Lane("claude".into())],
+            2,
+            Some(&rule),
+            Some(&ResearchStep::Lane("antigravity".into())),
+        ).unwrap();
+        for (id, lane) in [
+            ("loop:public-pilot:1", "Codex"),
+            ("loop:public-pilot:2", "Claude"),
+        ] {
+            run(&["tick"]);
+            let result = job(&db, id);
+            println!("{lane}: {result:?}");
+            assert_eq!(result.0, "done");
+        }
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM jobs", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            2
+        );
+        let verdict =
+            serde_json::to_value(record(&mut db, "public-pilot", &candidate).unwrap()).unwrap();
+        println!("Local verdict: {verdict}");
+        assert_eq!(verdict["outcome"], "pass");
+        assert_eq!(verdict["baseline_work"], "51");
+        assert_eq!(verdict["candidate_work"], "22");
+        drop(db);
+        run(&["tick"]);
+        let db = Connection::open(state.path().join("queue.db")).unwrap();
+        let reviewer = job(&db, "loop:public-pilot:review");
+        println!("Antigravity after worker restart: {reviewer:?}");
+        assert_eq!(reviewer.0, "done");
+        let status: serde_json::Value =
+            serde_json::from_slice(&run(&["loop-status", "--id", "public-pilot"])).unwrap();
+        assert_eq!(status["phase"], "awaiting_review");
+        println!("Final phase: awaiting human review (isolated test queue discarded)");
+    }
+
     #[test]
     fn report_separates_stops_and_missing_token_data() {
         let mut db = Connection::open_in_memory().unwrap();

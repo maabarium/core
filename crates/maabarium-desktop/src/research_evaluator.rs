@@ -210,7 +210,11 @@ pub(crate) async fn research_evaluation_check(
     .map_err(|e| e.to_string())?
 }
 
-fn record(db: &mut Connection, loop_id: &str, candidate: &str) -> Result<Verdict, String> {
+pub(super) fn record(
+    db: &mut Connection,
+    loop_id: &str,
+    candidate: &str,
+) -> Result<Verdict, String> {
     let tx = db
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;

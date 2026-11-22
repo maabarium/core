@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 360" role="img" aria-labelledby="title description">
+  <title id="title">Maabarium 0.5 identity concept: The Specimen</title>
+  <desc id="description">Two offset, curved plates frame a specimen in the space between them. Shown with a lowercase wordmark and as an app icon.</desc>
+  <defs>
+    <g id="mark" fill="currentColor">
+      <path d="M5 33C3 15 14 4 37 4c-2 8-7 14-16 17C13 24 8 27 5 33Z"/>
+      <path d="M47 19c2 18-9 29-32 29 2-8 7-14 16-17 8-3 13-6 16-12Z" opacity=".77"/>
+      <path d="M26 20c1.3 3 3 4.7 6 6-3 1.3-4.7 3-6 6-1.3-3-3-4.7-6-6 3-1.3 4.7-3 6-6Z"/>
+    </g>
+    <g id="type" font-family="-apple-system, BlinkMacSystemFont, Arial, sans-serif">
+      <text x="0" y="0" font-size="47" font-weight="600" letter-spacing="-2.2" fill="currentColor">maabarium</text>
+      <text x="2" y="30" font-size="15" font-weight="400" letter-spacing=".15" fill="currentColor" opacity=".8">The research workspace</text>
+    </g>
+  </defs>
+  <rect width="840" height="180" fill="#F6F5EF"/>
+  <rect y="180" width="840" height="180" fill="#161E24"/>
+  <g color="#315D52"><use href="#mark" transform="translate(92 55) scale(1.4)"/></g>
+  <g color="#182629"><use href="#type" transform="translate(188 99)"/></g>
+  <g color="#9DCDC0"><use href="#mark" transform="translate(92 235) scale(1.4)"/></g>
+  <g color="#EAF2ED"><use href="#type" transform="translate(188 279)"/></g>
+  <rect x="646" y="45" width="90" height="90" rx="23" fill="#193731"/>
+  <g color="#A8D5C5"><use href="#mark" transform="translate(659.8 58.8) scale(1.2)"/></g>
+  <rect x="646" y="225" width="90" height="90" rx="23" fill="#DDEBE1"/>
+  <g color="#315D52"><use href="#mark" transform="translate(659.8 238.8) scale(1.2)"/></g>
+</svg>

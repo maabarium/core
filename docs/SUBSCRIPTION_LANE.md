@@ -220,6 +220,24 @@ If the subscription is unavailable, the review waits or fails under the lane's
 existing policy. You can stop the experiment without a review. Use the
 updated worker and CLI from the same release as the desktop app.
 
+### Live synthetic pilot
+
+On 22 November 2026 the 0.5.0 pilot exercised the desktop's Rust queue and
+evaluator backend with an isolated on-disk queue and real worker processes.
+Codex and Claude completed in one attempt each. On a fixed public integer
+membership example, the local rule accepted three matching answers and 22
+work units versus 51, including setup and answer checks. A new worker process
+then loaded the persisted verdict and queued Antigravity's independent
+review, which completed on its first attempt with AI credits disabled by
+the worker. The loop stopped at the human checkpoint; the disposable queue
+was discarded without approval. Muse and DeepSeek were not enabled.
+
+This validates the backend workflow on toy data. It does not establish
+desktop interaction parity or any CODA performance or quality claim. The
+worker was restarted between stages, not killed during a live model call.
+The opt-in test `live_public_research_pilot` consumes live subscription quota
+and should only be run with authorization.
+
 ## Optional paid DeepSeek route
 
 Select **DeepSeek (paid API)** as a research step or reviewer and confirm API

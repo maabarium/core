@@ -11,7 +11,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import appLogo from "../../icons/maabariumLogo.png";
+import appLogo from "../../icons/specimen-tile.svg";
 import { MiniSparkline } from "./components/charts/MiniSparkline";
 import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { AboutModal } from "./components/console/AboutModal";
@@ -1408,20 +1408,15 @@ export default function App() {
       <div className="workspace-shell">
       <nav aria-label="Research workspace" className="workspace-rail">
         <div className="workspace-rail-content">
-          <div className="flex items-center gap-3 cursor-default group">
+          <div className="flex min-w-0 items-center gap-2.5">
             <img
               src={appLogo}
               alt=""
-              className="h-9 w-9 rounded-lg border border-white/10"
+              className="h-8 w-8 shrink-0"
             />
-            <div>
-              <span className="block text-base font-semibold leading-tight tracking-tight">
-                Maabarium
-              </span>
-              <span className="text-xs text-slate-400">
-              Research console
-              </span>
-            </div>
+            <span className="whitespace-nowrap text-base font-semibold leading-none tracking-tight">
+              maabarium
+            </span>
           </div>
 
           <div className="console-navigation" role="group" aria-label="Workspace sections">

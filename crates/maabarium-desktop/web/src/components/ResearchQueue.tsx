@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { ResearchReport, TokenDetails, type TokenUsage } from "./ResearchReport";
 import { EvaluationRuleFields, EvidenceCheck, type EvaluationSetup } from "./ResearchEvaluation";
@@ -140,12 +141,15 @@ export function ResearchQueue() {
       <p className="mt-1 text-sm">Queue a test task using public information. Providers you’ve set up can run in the background. For the others, run the task yourself and import the result.</p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label htmlFor="research-lane">Provider</label>
-        <select className="rounded border bg-transparent p-2" id="research-lane" value={lane}
-          disabled={busy} onChange={(event) => setLane(event.target.value as Lane)}>
-          {Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-        </select>
-        <button type="button" className="rounded border px-3 py-2" disabled={busy || lane === "deepseek"} onClick={() => void update(true)}>Queue task</button>
-        <button type="button" className="rounded border px-3 py-2" disabled={busy} onClick={() => void update(false)}>Refresh queue</button>
+        <span className="relative inline-flex">
+          <select className="h-10 appearance-none rounded-md border bg-transparent pl-3 pr-9" id="research-lane" value={lane}
+            disabled={busy} onChange={(event) => setLane(event.target.value as Lane)}>
+            {Object.entries(labels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
+          <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
+        </span>
+        <button type="button" className="h-10 rounded-md border px-3" disabled={busy || lane === "deepseek"} onClick={() => void update(true)}>Queue task</button>
+        <button type="button" className="h-10 rounded-md border px-3" disabled={busy} onClick={() => void update(false)}>Refresh queue</button>
       </div>
       <details className="mt-4 rounded border p-3">
         <summary className="cursor-pointer font-medium">Set up {labels[lane]}</summary>

@@ -1,5 +1,5 @@
 import { FileText, FolderOpen, Package, X } from "lucide-react";
-import appLogo from "../../../../icons/maabariumLogo.png";
+import appLogo from "../../../../icons/specimen-tile.svg";
 
 type AboutModalProps = {
   isOpen: boolean;
@@ -48,8 +48,9 @@ export function AboutModal({
                 About Maabarium
               </div>
               <h2 className="mt-2 text-3xl font-black tracking-tight text-white">
-                Maabarium
+                maabarium
               </h2>
+              <p className="mt-1 text-sm text-slate-300">The research workspace</p>
               <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-300">
                 Local-first autonomous research and evaluation workflows with a
                 Rust runtime, Tauri desktop console, reproducible traces, and
