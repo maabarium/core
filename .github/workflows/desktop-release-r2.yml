@@ -4,6 +4,11 @@ run-name: desktop-release-r2
 on:
   workflow_dispatch:
     inputs:
+      verify_only:
+        description: Build and notarise without publishing to GitHub Releases or R2.
+        required: false
+        default: false
+        type: boolean
       release_tag:
         description: Optional existing release tag to publish from during a manual run.
         required: false
@@ -195,6 +200,7 @@ jobs:
             "$GITHUB_WORKSPACE/target/release/bundle/macos/Maabarium-Console.app"
 
       - name: Stage updater bundle and manifest
+        id: stage
         env:
           RELEASE_CHANNEL: ${{ steps.release-context.outputs.channel }}
         shell: bash
@@ -250,6 +256,9 @@ jobs:
           cp "$UPDATER_BUNDLE" "$STAGING_DIR/$PLATFORM_KEY/$RELEASE_BUNDLE_NAME"
           cp "$SIG_PATH" "$STAGING_DIR/$PLATFORM_KEY/$RELEASE_SIG_NAME"
           tar -C "$(dirname "$CLI_BINARY")" -czf "$STAGING_DIR/$PLATFORM_KEY/$CLI_ARCHIVE_NAME" "$(basename "$CLI_BINARY")"
+          BUNDLE_DIGEST="$(shasum -a 256 "$UPDATER_BUNDLE" | awk '{print $1}')"
+          ASSET_PREFIX="artifacts/$RELEASE_CHANNEL/$BUNDLE_DIGEST"
+          echo "asset_prefix=$ASSET_PREFIX" >> "$GITHUB_OUTPUT"
 
           if [[ "$RELEASE_BUNDLE_NAME" != "$BUNDLE_NAME" ]]; then
             echo "Publishing updater bundle as $RELEASE_BUNDLE_NAME"
@@ -257,7 +266,7 @@ jobs:
 
           cd "$DESKTOP_DIR"
           pnpm build:release-manifest -- \
-            --base-url "$MAABARIUM_UPDATE_BASE_URL" \
+            --base-url "${MAABARIUM_UPDATE_BASE_URL%/}/$ASSET_PREFIX" \
             --channel "$RELEASE_CHANNEL" \
             --artifacts-dir "$STAGING_DIR" \
             --output "$MANIFEST_DIR/latest.json" \
@@ -284,7 +293,7 @@ jobs:
             crates/maabarium-desktop/release/staging/**
 
       - name: Upload desktop artifacts to GitHub Release
-        if: steps.release-context.outputs.upload_release == 'true'
+        if: steps.release-context.outputs.upload_release == 'true' && !inputs.verify_only
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -303,11 +312,14 @@ jobs:
             --clobber
 
       - name: Publish bundles and latest.json to Cloudflare R2
+        if: ${{ !inputs.verify_only }}
+        env:
+          ASSET_PREFIX: ${{ steps.stage.outputs.asset_prefix }}
         shell: bash
         run: |
           set -euo pipefail
           DESKTOP_DIR="$GITHUB_WORKSPACE/crates/maabarium-desktop"
-          aws s3 sync "$DESKTOP_DIR/release/staging/" "s3://$R2_BUCKET/" --delete --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync "$DESKTOP_DIR/release/staging/" "s3://$R2_BUCKET/$ASSET_PREFIX/" --endpoint-url "$R2_ENDPOINT"
           aws s3 cp "$DESKTOP_DIR/release/${{ steps.release-context.outputs.channel }}/latest.json" "s3://$R2_BUCKET/${{ steps.release-context.outputs.channel }}/latest.json" --endpoint-url "$R2_ENDPOINT"
           if [[ "${{ steps.release-context.outputs.publish_root_manifest }}" == "true" ]]; then
             aws s3 cp "$DESKTOP_DIR/release/${{ steps.release-context.outputs.channel }}/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"

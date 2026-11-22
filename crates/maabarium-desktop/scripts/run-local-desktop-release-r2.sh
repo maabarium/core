@@ -374,9 +374,11 @@ CLI_ARCHIVE_NAME="maabarium-${PLATFORM_KEY}.tar.gz"
 cp "$UPDATER_BUNDLE" "$STAGING_DIR/$PLATFORM_KEY/$RELEASE_BUNDLE_NAME"
 cp "$SIG_PATH" "$STAGING_DIR/$PLATFORM_KEY/$RELEASE_SIG_NAME"
 tar -C "$(dirname "$CLI_BINARY")" -czf "$STAGING_DIR/$PLATFORM_KEY/$CLI_ARCHIVE_NAME" "$(basename "$CLI_BINARY")"
+BUNDLE_DIGEST="$(shasum -a 256 "$UPDATER_BUNDLE" | awk '{print $1}')"
+ASSET_PREFIX="artifacts/$RELEASE_CHANNEL/$BUNDLE_DIGEST"
 
 pnpm build:release-manifest -- \
-  --base-url "$MAABARIUM_UPDATE_BASE_URL" \
+  --base-url "${MAABARIUM_UPDATE_BASE_URL%/}/$ASSET_PREFIX" \
   --channel "$RELEASE_CHANNEL" \
   --artifacts-dir "$STAGING_DIR" \
   --output "$MANIFEST_DIR/latest.json" \
@@ -417,7 +419,7 @@ EOF
 fi
 
 if [[ "$PUBLISH_R2" == true ]]; then
-  aws s3 sync "$RELEASE_DIR/staging/" "s3://$R2_BUCKET/" --delete --endpoint-url "$R2_ENDPOINT"
+  aws s3 sync "$RELEASE_DIR/staging/" "s3://$R2_BUCKET/$ASSET_PREFIX/" --endpoint-url "$R2_ENDPOINT"
   aws s3 cp "$RELEASE_DIR/$RELEASE_CHANNEL/latest.json" "s3://$R2_BUCKET/$RELEASE_CHANNEL/latest.json" --endpoint-url "$R2_ENDPOINT"
   if [[ "$PUBLISH_ROOT_MANIFEST" == true ]]; then
     aws s3 cp "$RELEASE_DIR/$RELEASE_CHANNEL/latest.json" "s3://$R2_BUCKET/latest.json" --endpoint-url "$R2_ENDPOINT"
