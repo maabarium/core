@@ -81,6 +81,13 @@ attempt, strips API credential environment variables, and forces
 Antigravity uses Gemini 4 Neon Low, not the desktop Orchestrator pair.
 Muse remains manual.
 
+Local validation on 22 November 2026: verified both account toggles off,
+then stopped the launch agent, queued one public task per lane, and
+reloaded the agent. Claude and Antigravity each completed in one attempt.
+Separate simulated-provider tests kill the worker mid-attempt and verify
+same-job recovery, preserved routing, and exclusion of API credentials.
+Real quota exhaustion and account setting changes were not induced.
+
 From the checkout that will remain on disk:
 
 ```sh

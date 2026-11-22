@@ -81,10 +81,15 @@ def worker(db, runners, lock_fd):
             ready = False
         if not ready:
             detail = "ChatGPT sign-in required" if lane == "codex" else "subscription CLI preflight failed"
-            db.execute("UPDATE jobs SET state='queued', due=?,detail=? WHERE id=?",
+            db.execute("UPDATE jobs SET state='queued', due=?,detail=? WHERE id=? AND state IN ('queued','running')",
                        (int(time.time()) + 900, detail, job_id))
             return
-        db.execute("UPDATE jobs SET state='running', attempts=attempts+1, detail=NULL WHERE id=?", (job_id,))
+        claimed = db.execute(
+            "UPDATE jobs SET state='running', attempts=attempts+1, detail=NULL WHERE id=? AND state IN ('queued','running')",
+            (job_id,),
+        ).rowcount
+        if claimed != 1:
+            return
         output = Path(scratch) / "answer.txt"
         cmd = [binary, *flags, "-a", "never", "exec", "--ignore-user-config", "--ephemeral",
                "--disable", "shell_tool", "--disable", "hooks", "-c", 'web_search="disabled"',

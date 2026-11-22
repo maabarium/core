@@ -34,8 +34,8 @@ pub(crate) async fn research_subscription_check(lane: String) -> Result<String, 
     }
     let (args, positive) = match lane.as_str() {
         "codex" => (&["-c", "forced_login_method=\"chatgpt\"", "-c", "model_provider=\"openai\"", "login", "status"][..], "ChatGPT login verified. Launch-agent status is not checked."),
-        "claude" => (&["auth", "status"][..], "Claude CLI reports account login. Unattended billing is not verified; this lane stays manual."),
-        _ => return Ok(format!("{cli} found. Subscription-only billing is not verified; this lane stays manual.")),
+        "claude" => (&["auth", "status"][..], "Claude CLI reports account login. Verify Usage credits are off before opting into the local worker."),
+        _ => return Ok(format!("{cli} found. Verify account credit overages are off before opting into the local worker.")),
     };
     let mut command = tokio::process::Command::new(binary);
     command
