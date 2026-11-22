@@ -14,6 +14,36 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_migrates_and_keeps_external_jobs_out_of_the_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with sqlite3.connect(root / "queue.db") as db:
+                db.execute("""CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'queued',
+                    attempts INTEGER NOT NULL DEFAULT 0, due INTEGER NOT NULL DEFAULT 0,
+                    detail TEXT, result TEXT)""")
+                db.execute("INSERT INTO jobs(id,state) VALUES ('old','done')")
+            cli = root / "fake-codex"
+            marker = root / "called"
+            cli.write_text(f"#!{sys.executable}\nimport pathlib\npathlib.Path({str(marker)!r}).touch()\n")
+            cli.chmod(0o700)
+            command = [sys.executable, str(SCRIPT), "--state", tmp, "--codex", str(cli)]
+            answer = root / "answer"
+            answer.write_text("Synthetic answer")
+            for lane in ("claude", "antigravity", "muse"):
+                subprocess.check_call([*command, "enqueue", "--id", lane, "--lane", lane])
+                task = json.loads(subprocess.check_output([*command, "export-task", "--id", lane]))
+                self.assertEqual((task["id"], task["lane"]), (lane, lane))
+            subprocess.check_call([*command, "tick"])
+            self.assertFalse(marker.exists())
+            for lane in ("claude", "antigravity", "muse"):
+                subprocess.check_call([*command, "import-result", "--id", lane, "--result-file", str(answer)])
+            rows = {row["id"]: row for row in json.loads(subprocess.check_output([*command, "status"]))}
+            self.assertEqual(rows["old"]["lane"], "codex")
+            for lane in ("claude", "antigravity", "muse"):
+                self.assertEqual((rows[lane]["state"], rows[lane]["attempts"], rows[lane]["result"]),
+                                 ("done", 0, "Synthetic answer"))
+
     def test_subscription_failure_retries_same_job_and_api_login_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,5 +1,21 @@
 # Unattended subscription research lane
 
+The local queue stores explicit Codex, Claude, Antigravity, and Muse
+routes. Only Codex runs unattended. The other routes use a manual handoff
+and do not invoke a provider or assert how a result was billed:
+
+```sh
+python3 scripts/subscription_lane.py enqueue --lane claude --id review-1
+python3 scripts/subscription_lane.py export-task --id review-1
+python3 scripts/subscription_lane.py import-result --id review-1 --result-file answer.txt
+python3 scripts/subscription_lane.py status
+```
+
+The same commands work with `--lane antigravity` or `--lane muse`.
+Existing queues migrate in place, with old jobs assigned to Codex. A
+provider-specific job never falls back to another route. These are local
+CLI controls, not desktop UI controls or native workflow history.
+
 The experimental sidecar runs one fixed, public synthetic research task
 through the installed Codex CLI. It does not send a checkout, private
 research artifacts, or held-out inputs. This lane is separate from

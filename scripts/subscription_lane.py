@@ -23,11 +23,12 @@ PROMPT = (
     "Give the example and its answer in under 150 words. No implementation."
 )
 MAX_ATTEMPTS = 4
+LANES = ("codex", "claude", "antigravity", "muse")
 
 
 def worker(db, codex, lock_fd):
     job = db.execute(
-        "SELECT id,attempts FROM jobs WHERE state IN ('queued','running') AND due<=? ORDER BY id LIMIT 1",
+        "SELECT id,attempts FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane='codex' ORDER BY due,id LIMIT 1",
         (int(time.time()),),
     ).fetchone()
     if not job:
@@ -87,7 +88,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, default=Path.home() / ".maabarium" / "subscription-lane")
     parser.add_argument("--codex", default="codex", help="trusted local Codex CLI")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result"])
+    parser.add_argument("--lane", choices=LANES, default="codex")
+    parser.add_argument("--result-file", type=Path)
     parser.add_argument("--id", default="directed-teaching-v1")
     parser.add_argument("--label", default="org.maabarium.subscription-lane")
     args = parser.parse_args()
@@ -118,12 +121,43 @@ def main():
             except BlockingIOError:
                 return
         with sqlite3.connect(state / "queue.db", isolation_level=None) as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute("""CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'queued',
                 attempts INTEGER NOT NULL DEFAULT 0, due INTEGER NOT NULL DEFAULT 0,
-                detail TEXT, result TEXT)""")
+                detail TEXT, result TEXT, lane TEXT NOT NULL DEFAULT 'codex')""")
+            if "lane" not in {row[1] for row in db.execute("PRAGMA table_info(jobs)")}:
+                db.execute("ALTER TABLE jobs ADD COLUMN lane TEXT NOT NULL DEFAULT 'codex'")
+            db.commit()
             if args.action == "enqueue":
-                db.execute("INSERT OR IGNORE INTO jobs(id) VALUES (?)", (args.id,))
+                detail = None if args.lane == "codex" else "awaiting manual handoff"
+                db.execute("INSERT OR IGNORE INTO jobs(id,lane,detail) VALUES (?,?,?)",
+                           (args.id, args.lane, detail))
+                if db.execute("SELECT lane FROM jobs WHERE id=?", (args.id,)).fetchone()[0] != args.lane:
+                    parser.error("job ID already belongs to another lane")
+            elif args.action in ("export-task", "import-result"):
+                row = db.execute("SELECT lane,state FROM jobs WHERE id=?", (args.id,)).fetchone()
+                if not row or row[0] == "codex" or row[1] != "queued":
+                    parser.error("expected a queued external-lane job")
+                if args.action == "export-task":
+                    print(json.dumps({"id": args.id, "lane": row[0], "prompt": PROMPT}))
+                else:
+                    if not args.result_file or not args.result_file.is_file():
+                        parser.error("a regular --result-file is required")
+                    try:
+                        with args.result_file.open("rb") as result_file:
+                            data = result_file.read(16385)
+                        answer = data.decode("utf-8").strip() if len(data) <= 16384 else ""
+                    except (OSError, UnicodeError):
+                        answer = ""
+                    if not answer:
+                        parser.error("expected a non-empty UTF-8 result up to 16 KiB")
+                    written = db.execute(
+                        "UPDATE jobs SET state='done', result=?, detail='manual result; billing unverified' "
+                        "WHERE id=? AND lane=? AND state='queued'", (answer, args.id, row[0]),
+                    ).rowcount
+                    if written != 1:
+                        parser.error("job already completed")
             elif args.action == "tick":
                 codex = shutil.which(args.codex)
                 if not codex:
