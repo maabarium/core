@@ -39,13 +39,16 @@ except subprocess.TimeoutExpired:
 
 
 def queue_loop_step(db, loop_id, step, lanes, target):
-    lane = lanes[step - 1]
+    entry = lanes[step - 1]
+    lane, model, effort = (entry, None, None) if isinstance(entry, str) else (
+        entry["lane"], entry.get("model"), entry.get("effort")
+    )
     db.execute(
-        "INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
+        "INSERT INTO jobs(id,lane,detail,prompt,model,effort) VALUES (?,?,?,?,?,?)",
         (f"loop:{loop_id}:{step}", lane, None if lane == "codex" else "awaiting manual handoff",
          f"Public synthetic experiment, step {step} of {len(lanes)}. "
          "Do not use tools or read local files. Work on this public target and report a bounded result: "
-         + target),
+         + target, model, effort),
     )
 
 
@@ -187,12 +190,15 @@ def stream_usage(lane, raw):
 def worker(db, runners, lock_fd, state):
     slots = ",".join("?" for _ in runners)
     job = db.execute(
-        f"SELECT id,attempts,prompt,lane FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane IN ({slots}) ORDER BY due,id LIMIT 1",
+        f"SELECT id,attempts,prompt,lane,model,effort FROM jobs WHERE state IN ('queued','running') AND due<=? AND lane IN ({slots}) ORDER BY due,id LIMIT 1",
         (int(time.time()), *runners),
     ).fetchone()
     if not job:
         return
-    job_id, attempts, prompt, lane = job
+    job_id, attempts, prompt, lane, model, effort = job
+    if not valid_selection(lane, model, effort):
+        db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail='Model or effort selection is not supported' WHERE id=?", (job_id,))
+        return
     binary = runners[lane]
     if attempts >= MAX_ATTEMPTS:
         db.execute("UPDATE jobs SET state='failed', finished_at=unixepoch(), detail='attempt limit' WHERE id=?", (job_id,))
@@ -221,7 +227,10 @@ def worker(db, runners, lock_fd, state):
                          status.get("authMethod") == "claude.ai" and status.get("apiProvider") == "firstParty" and
                          status.get("subscriptionType") in ("pro", "max", "ultra"))
             elif lane == "antigravity":
-                ready = any(line.startswith("gemini-4-neon-low\t") for line in auth.stdout.splitlines())
+                ready = any(line.startswith(f"{model or 'gemini-4-neon-low'}\t") for line in auth.stdout.splitlines())
+                if not ready and auth.returncode == 0 and "\t" in auth.stdout and model:
+                    db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail='This model is not available to the Antigravity account' WHERE id=? AND state IN ('queued','running')", (job_id,))
+                    return
             else:
                 ready = any(line.strip() == "Logged in using ChatGPT"
                             for line in (auth.stdout + "\n" + auth.stderr).splitlines())
@@ -249,7 +258,7 @@ def worker(db, runners, lock_fd, state):
                    "--output-format", "json", "--max-turns", "1"]
         elif lane == "antigravity":
             cmd = [binary, "--sandbox", "--settings", '{"useG1Credits":false}',
-                   "--print-timeout", "90s", "--disable-slash-commands", "--model", "gemini-4-neon-low",
+                   "--print-timeout", "90s", "--disable-slash-commands", "--model", model or "gemini-4-neon-low",
                    "--output-format", "json", "-p", prompt or PROMPT]
         elif lane == "muse":
             cmd = [binary, "exec", "--provider", "meta", "--preset", "empty", "--json",
@@ -257,6 +266,7 @@ def worker(db, runners, lock_fd, state):
                    "--disable-web-tools", "--disable-reminders", "--disable-request-user-input",
                    "--disable-shell", "--disable-write", "--max-model-steps", "2",
                    "--approval-mode", "never", "--", prompt or PROMPT]
+        cmd = apply_selection(cmd, lane, model, effort)
         process = None
         try:
             # The guardian, not the vendor process, holds the lock and enforces
@@ -317,6 +327,34 @@ def worker(db, runners, lock_fd, state):
                   "muse": "Muse browser account; API-key overrides excluded"}[lane]
         db.execute("UPDATE jobs SET state='done', finished_at=unixepoch(), result=?, detail=?, usage_json=? WHERE id=?",
                    (result, detail, usage_json, job_id))
+
+
+EFFORTS = {
+    "codex": ("low", "medium", "high", "xhigh"),
+    "claude": ("low", "medium", "high", "xhigh", "max"),
+    "antigravity": ("low", "medium", "high", "xhigh", "max"),
+    "muse": ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
+}
+
+
+def valid_selection(lane, model, effort):
+    return (lane in EFFORTS
+            and (model is None or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model))
+            and (effort is None or effort in EFFORTS[lane])
+            and not (lane == "antigravity" and model and "orchestrator" in model.lower() and effort))
+
+
+def apply_selection(cmd, lane, model, effort):
+    opts = []
+    if model and lane != "antigravity":
+        opts.extend(["--model", model])
+    if effort:
+        if lane == "codex":
+            opts.extend(["-c", f'model_reasoning_effort="{effort}"'])
+        else:
+            opts.extend(["--reasoning-effort" if lane == "muse" else "--effort", effort])
+    index = (cmd.index("exec") + 1 if lane in ("codex", "muse") else 1)
+    return cmd[:index] + opts + cmd[index:]
 
 
 def main():
@@ -393,6 +431,9 @@ def main():
                 db.execute("ALTER TABLE jobs ADD COLUMN usage_json TEXT")
             if "finished_at" not in columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN finished_at INTEGER")
+            for column in ("model", "effort"):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS research_loops (
                 id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
                 step INTEGER NOT NULL, status TEXT NOT NULL)""")
@@ -408,11 +449,12 @@ def main():
                 if db.execute("SELECT lane FROM jobs WHERE id=?", (args.id,)).fetchone()[0] != args.lane:
                     parser.error("job ID already belongs to another lane")
             elif args.action in ("export-task", "import-result"):
-                row = db.execute("SELECT lane,state,prompt FROM jobs WHERE id=?", (args.id,)).fetchone()
+                row = db.execute("SELECT lane,state,prompt,model,effort FROM jobs WHERE id=?", (args.id,)).fetchone()
                 if not row or row[0] == "codex" or row[1] != "queued":
                     parser.error("expected a queued external-lane job")
                 if args.action == "export-task":
-                    print(json.dumps({"id": args.id, "lane": row[0], "prompt": row[2] or PROMPT}))
+                    print(json.dumps({"id": args.id, "lane": row[0], "prompt": row[2] or PROMPT,
+                                      "model": row[3], "effort": row[4]}))
                 else:
                     if not args.result_file or not args.result_file.is_file():
                         parser.error("a regular --result-file is required")

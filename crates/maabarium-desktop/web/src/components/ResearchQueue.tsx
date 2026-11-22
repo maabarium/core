@@ -4,6 +4,14 @@ import { ResearchReport, TokenDetails, type TokenUsage } from "./ResearchReport"
 
 const labels = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse" };
 type Lane = keyof typeof labels;
+type Step = { lane: Lane; model: string | null; effort: string | null };
+const commonEffort = ["low", "medium", "high", "xhigh"];
+const effortOptions: Record<Lane, string[]> = {
+  codex: commonEffort,
+  claude: [...commonEffort, "max"],
+  antigravity: [...commonEffort, "max"],
+  muse: ["none", "minimal", ...commonEffort, "max", "ultra"],
+};
 const setup: Record<Lane, { status: string; steps: string[]; check: string }> = {
   codex: {
     status: "Local worker · ChatGPT login required",
@@ -48,6 +56,8 @@ type Job = {
   result: string | null;
   usage?: TokenUsage | null;
   due?: number;
+  model?: string | null;
+  effort?: string | null;
 };
 
 export function ResearchQueue() {
@@ -58,7 +68,7 @@ export function ResearchQueue() {
   const [checking, setChecking] = useState(false);
   const [checks, setChecks] = useState<Partial<Record<Lane, string>>>({});
   const [target, setTarget] = useState("");
-  const [plan, setPlan] = useState<Lane[]>([]);
+  const [plan, setPlan] = useState<Step[]>([]);
   const [reviewEvery, setReviewEvery] = useState(1);
   const [loopId, setLoopId] = useState("");
   async function startLoop() {
@@ -143,19 +153,46 @@ export function ResearchQueue() {
               <option key={index} value={index + 1}>{index === 0 ? "Every step" : `Every ${index + 1} steps`}</option>)}
           </select>
           <ol className="list-decimal space-y-1 pl-5" aria-label="Experiment steps">
-            {plan.map((provider, index) => <li key={index}>
-              {labels[provider]}
+            {plan.map((step, index) => <li key={index} className="rounded border p-2">
+              <span className="font-medium">{labels[step.lane]}</span>
               <button type="button" className="ml-2 rounded border px-2"
                 aria-label={`Remove step ${index + 1}`} disabled={busy}
                 onClick={() => {
                   setPlan((previous) => previous.filter((_, i) => i !== index));
                   setReviewEvery((previous) => Math.min(previous, Math.max(1, plan.length - 1)));
                 }}>Remove</button>
+              <div className="mt-2 flex flex-wrap gap-3">
+                <label className="text-sm">Model
+                  <input className="ml-2 rounded border bg-transparent p-1"
+                    aria-label={`Model for step ${index + 1}`} placeholder="Use default"
+                    maxLength={128} pattern="[A-Za-z0-9][A-Za-z0-9._:/\\-]*"
+                    disabled={busy} value={step.model ?? ""}
+                    onChange={(event) => {
+                      const model = event.target.value || null;
+                      setPlan((previous) => previous.map((value, i) => i === index
+                        ? { ...value, model, effort: value.lane === "antigravity" && /orchestrator/i.test(model ?? "") ? null : value.effort }
+                        : value));
+                    }} />
+                </label>
+                <label className="text-sm">Thinking effort
+                  <select className="ml-2 rounded border bg-transparent p-1" aria-label={`Thinking effort for step ${index + 1}`}
+                    disabled={busy || (step.lane === "antigravity" && /orchestrator/i.test(step.model ?? ""))}
+                    value={step.effort ?? ""} onChange={(event) => {
+                      const effort = event.target.value || null;
+                      setPlan((previous) => previous.map((value, i) => i === index ? { ...value, effort } : value));
+                    }}>
+                    <option value="">Use default</option>
+                    {effortOptions[step.lane].map((effort) => <option key={effort} value={effort}>
+                      {effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}
+                    </option>)}
+                  </select>
+                </label>
+              </div>
             </li>)}
           </ol>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="rounded border px-3 py-2" disabled={busy || plan.length >= 20}
-              onClick={() => setPlan((previous) => [...previous, lane])}>Add {labels[lane]} step</button>
+              onClick={() => setPlan((previous) => [...previous, { lane, model: null, effort: null }])}>Add {labels[lane]} step</button>
             <button type="submit" className="rounded border px-3 py-2"
               disabled={busy || !target.trim() || new TextEncoder().encode(target.trim()).length > 4096 || !plan.length}>Start experiment</button>
           </div>
@@ -171,6 +208,7 @@ export function ResearchQueue() {
               <p className="font-semibold">{labels[job.lane] ?? job.lane}: {job.state}</p>
               <p className="break-all text-sm">{job.id}</p>
               <p className="text-sm">{job.attempts} attempts{job.detail ? ` · ${job.detail}` : ""}</p>
+              {(job.model || job.effort) && <p className="text-sm">Model: {job.model ?? "Default"} · Thinking effort: {job.effort ?? "Default"}</p>}
               {job.state === "queued" && job.due && job.due > Date.now() / 1000 ? (
                 <p className="text-sm">Next attempt: {new Date(job.due * 1000).toLocaleString()}</p>
               ) : null}

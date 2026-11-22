@@ -44,6 +44,15 @@ python3 scripts/subscription_lane.py loop-status --id public-example
 python3 scripts/subscription_lane.py loop-review --id public-example --step 1 --decision accept
 ```
 
+Each desktop experiment step can pin a provider model ID and thinking
+effort, or leave either at its default. The values are saved in the plan
+and copied to the queued job; retrying does not change them. The choices
+are passed to the subscription CLI, not to the API model pool. Valid
+combinations depend on the signed-in plan and installed client. The
+Antigravity CLI Orchestrator uses its own effort setting; it does not
+reproduce the desktop planning/execution pair. The CLI `--plan` shorthand
+still uses provider defaults.
+
 Use only material safe to disclose to the chosen providers. Each step uses
 the same target, not previous model output. Use `--decision stop` to stop
 the current loop. Unconfigured providers remain manual; this is not a scientific

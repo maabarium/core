@@ -28,10 +28,15 @@ it("starts a public experiment with an ordered provider plan", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Add Codex step" }));
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "muse" } });
   fireEvent.click(screen.getByRole("button", { name: "Add Muse step" }));
+  fireEvent.change(screen.getByLabelText("Model for step 1"), { target: { value: "gpt-5.6-sol" } });
+  fireEvent.change(screen.getByLabelText("Thinking effort for step 1"), { target: { value: "high" } });
   fireEvent.change(screen.getByLabelText("Pause for review after"), { target: { value: "2" } });
   fireEvent.click(screen.getByRole("button", { name: "Start experiment" }));
   expect(await screen.findByText(/Experiment ID: example-loop/)).toBeTruthy();
   expect(invoke).toHaveBeenNthCalledWith(1, "research_loop_start", {
-    target: "Compare public rules", plan: ["codex", "muse"], reviewEvery: 2,
+    target: "Compare public rules", plan: [
+      { lane: "codex", model: "gpt-5.6-sol", effort: "high" },
+      { lane: "muse", model: null, effort: null },
+    ], reviewEvery: 2,
   });
 });

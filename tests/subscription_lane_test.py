@@ -16,6 +16,22 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_model_selection_preserves_provider_specific_arguments(self):
+        script = runpy.run_path(str(SCRIPT))
+        valid, apply = script["valid_selection"], script["apply_selection"]
+        self.assertFalse(valid("codex", "--override", "high"))
+        self.assertFalse(valid("antigravity", "gemini-pro-orchestrator-neon", "high"))
+        self.assertFalse(valid("claude", "opus", "ultra"))
+        self.assertTrue(valid("claude", "opus", "high"))
+        self.assertEqual(apply(["codex", "exec", "-"], "codex", "example-model", "high"),
+                         ["codex", "exec", "--model", "example-model", "-c", 'model_reasoning_effort="high"', "-"])
+        self.assertEqual(apply(["muse", "exec", "--", "prompt"], "muse", "wonder", "high"),
+                         ["muse", "exec", "--model", "wonder", "--reasoning-effort", "high", "--", "prompt"])
+        self.assertEqual(apply(["claude", "-p"], "claude", "opus", "medium"),
+                         ["claude", "--model", "opus", "--effort", "medium", "-p"])
+        self.assertEqual(apply(["agy", "--model", "neon", "-p", "prompt"], "antigravity", "neon", "high"),
+                         ["agy", "--effort", "high", "--model", "neon", "-p", "prompt"])
+
     def test_usage_counters_distinguish_zero_from_not_reported(self):
         parse = runpy.run_path(str(SCRIPT))["reported_usage"]
         self.assertIsNone(parse("claude", {"usage": {"input_tokens": True, "output_tokens": -1}}))

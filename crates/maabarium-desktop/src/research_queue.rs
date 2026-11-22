@@ -133,6 +133,53 @@ pub(crate) struct QueueJob {
     result: Option<String>,
     usage: Option<serde_json::Value>,
     due: i64,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+#[derive(serde::Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum ResearchStep {
+    Lane(String),
+    Configured {
+        lane: String,
+        model: Option<String>,
+        effort: Option<String>,
+    },
+}
+
+impl ResearchStep {
+    fn fields(&self) -> (&str, Option<&str>, Option<&str>) {
+        match self {
+            Self::Lane(lane) => (lane, None, None),
+            Self::Configured {
+                lane,
+                model,
+                effort,
+            } => (lane, model.as_deref(), effort.as_deref()),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        let (lane, model, effort) = self.fields();
+        let levels: &[&str] = match lane {
+            "codex" => &["low", "medium", "high", "xhigh"],
+            "claude" | "antigravity" => &["low", "medium", "high", "xhigh", "max"],
+            "muse" => &[
+                "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+            ],
+            _ => return false,
+        };
+        model.is_none_or(|m| {
+            m.len() <= 128
+                && m.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && m.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._:/-".contains(&c))
+        }) && effort.is_none_or(|e| levels.contains(&e))
+            && !(lane == "antigravity"
+                && effort.is_some()
+                && model.is_some_and(|m| m.to_ascii_lowercase().contains("orchestrator")))
+    }
 }
 
 #[derive(Serialize)]
@@ -368,6 +415,19 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
         tx.execute_batch("ALTER TABLE jobs ADD COLUMN finished_at INTEGER")?;
     }
     tx.execute_batch("CREATE INDEX IF NOT EXISTS jobs_finished_at ON jobs(finished_at)")?;
+    for (name, migration) in [
+        ("model", "ALTER TABLE jobs ADD COLUMN model TEXT"),
+        ("effort", "ALTER TABLE jobs ADD COLUMN effort TEXT"),
+    ] {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name=?)",
+            [name],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            tx.execute_batch(migration)?;
+        }
+    }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS research_loops (
         id TEXT PRIMARY KEY, target TEXT NOT NULL, plan TEXT NOT NULL,
@@ -389,7 +449,7 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
 #[tauri::command]
 pub(crate) async fn research_loop_start(
     target: String,
-    plan: Vec<String>,
+    plan: Vec<ResearchStep>,
     review_every: usize,
 ) -> Result<String, String> {
     if target.trim().is_empty()
@@ -397,9 +457,7 @@ pub(crate) async fn research_loop_start(
         || plan.is_empty()
         || plan.len() > 20
         || !(1..=plan.len()).contains(&review_every)
-        || plan
-            .iter()
-            .any(|lane| !matches!(lane.as_str(), "codex" | "claude" | "antigravity" | "muse"))
+        || plan.iter().any(|step| !step.is_valid())
     {
         return Err(
             "Enter a public target, 1–20 provider steps, and a checkpoint within the plan.".into(),
@@ -419,12 +477,13 @@ fn insert_loop(
     db: &mut Connection,
     id: &str,
     target: &str,
-    plan: &[String],
+    plan: &[ResearchStep],
     review_every: usize,
 ) -> rusqlite::Result<()> {
-    let [lane, ..] = plan else {
+    let [first, ..] = plan else {
         return Err(rusqlite::Error::InvalidQuery);
     };
+    let (lane, model, effort) = first.fields();
     let plan_json = serde_json::to_string(plan)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     let prompt = format!(
@@ -438,12 +497,14 @@ fn insert_loop(
             u32::try_from(review_every).map_err(|_| rusqlite::Error::InvalidQuery)?],
     )?;
     tx.execute(
-        "INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
+        "INSERT INTO jobs(id,lane,detail,prompt,model,effort) VALUES (?,?,?,?,?,?)",
         rusqlite::params![
             format!("loop:{id}:1"),
             lane,
             (lane != "codex").then_some("awaiting manual handoff"),
             prompt,
+            model,
+            effort,
         ],
     )?;
     tx.commit()
@@ -455,7 +516,7 @@ pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
         let db = connect()?;
         let mut stmt = db
             .prepare(
-                "SELECT id,lane,state,attempts,detail,substr(result,1,16384),usage_json,due
+                "SELECT id,lane,state,attempts,detail,substr(result,1,16384),usage_json,due,model,effort
                       FROM jobs ORDER BY rowid DESC LIMIT 50",
             )
             .map_err(|e| e.to_string())?;
@@ -472,6 +533,8 @@ pub(crate) async fn research_queue_list() -> Result<Vec<QueueJob>, String> {
                         .get::<_, Option<String>>(6)?
                         .and_then(|raw| serde_json::from_str(&raw).ok()),
                     due: r.get(7)?,
+                    model: r.get(8)?,
+                    effort: r.get(9)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -596,7 +659,10 @@ mod tests {
     fn loop_creates_only_the_first_job_and_rolls_back_on_collision() {
         let mut db = Connection::open_in_memory().unwrap();
         initialise(&mut db).unwrap();
-        let plan = ["muse".into(), "codex".into()];
+        let plan = [
+            ResearchStep::Lane("muse".into()),
+            ResearchStep::Lane("codex".into()),
+        ];
         insert_loop(&mut db, "first", "public target", &plan, 2).unwrap();
         let row: (String, String) = db
             .query_row("SELECT id,lane FROM jobs", [], |r| {
