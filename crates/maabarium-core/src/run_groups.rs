@@ -456,20 +456,18 @@ impl HardwareProfile {
             }
             #[cfg(target_os = "linux")]
             {
-                match std::fs::read_to_string("/proc/meminfo") {
-                    Ok(content) => {
-                        for line in content.lines() {
-                            if line.starts_with("MemTotal:") {
-                                if let Some(kb_str) = line.split_whitespace().nth(1) {
-                                    let kb: u64 = kb_str.parse().unwrap_or(8_388_608);
-                                    return kb as f64 / 1_048_576.0;
-                                }
-                            }
-                        }
-                        8.0
-                    }
-                    Err(_) => 8.0,
-                }
+                // A plain expression: `return` here would leave detect() itself.
+                std::fs::read_to_string("/proc/meminfo")
+                    .ok()
+                    .and_then(|content| {
+                        content
+                            .lines()
+                            .find(|line| line.starts_with("MemTotal:"))
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .and_then(|kb| kb.parse::<u64>().ok())
+                    })
+                    .map(|kb| kb as f64 / 1_048_576.0)
+                    .unwrap_or(8.0)
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
