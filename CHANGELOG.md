@@ -15,11 +15,21 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - Rebuilt the console around the active workflow, with a light default, a remembered dark option, and run controls beside the workflow status. Moved analytics and hardware metrics behind a disclosure. Workflow groups keep inline deletion confirmation.
 - Updated Rust and desktop web dependencies, including patched Wasmtime, Git and SQLite libraries.
-- Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin.
+- Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin. Any plain-text copy left by such a build is cleared when the database opens.
+- Workflow group cron schedules use local wall-clock time and are validated when saved. Group schedules are checked by the desktop app in the background, not by the console window.
+- OpenAI-compatible providers report their own provider id in metrics, request JSON mode when a JSON response is wanted, and report empty replies as invalid responses.
 
 ### Fixed
 
-- None.
+- Group cron schedules now honour day-of-month and month, treat both `0` and `7` as Sunday, and support stepped ranges.
+- Group runs interrupted by a crash or quit are closed on the next start, so the group can be run or deleted again.
+- Each workflow in a group links to the experiments it recorded, not the newest experiment in the database.
+- Manual group runs no longer consume a one-time schedule or skip the next recurring run.
+- Workflow start times in group history are recorded correctly.
+- Parallel group runs execute workflows concurrently and follow the Telegram event preferences.
+- Telegram messages escape names and errors, omit local repository paths, and time out instead of stalling a run.
+- The subscription lane stops a Codex child that outlived its worker and keeps scratch files in its private state directory.
+- Light theme contrast for workflow groups, phone-width group rows, keyboard handling of group deletion, and run-status announcements.
 
 ### Breaking Changes
 
