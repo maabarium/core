@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-22
+
 The local research queue supports ordered subscription-provider plans with
 an optional automatic run window and mandatory human review checkpoints.
 
