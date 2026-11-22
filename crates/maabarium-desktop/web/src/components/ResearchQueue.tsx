@@ -1,4 +1,5 @@
 import { Disclosure } from "./ui/Disclosure";
+import { ManagedBenchmark, LocalCheckpointActions } from "./ManagedBenchmark";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type ComponentProps } from "react";
@@ -78,7 +79,7 @@ export type ResearchJob = {
 
 const ResearchOutput = lazy(() => import("./ResearchOutput"));
 
-function QueueEntry({ job }: { job: ResearchJob }) {
+function QueueEntry({ job, checkpoint }: { job: ResearchJob; checkpoint?: () => Promise<void> }) {
   const experiment = job.id.startsWith("loop:");
   const local = job.lane === "Local evidence";
   const provider = labels[job.lane as Lane] ?? job.lane;
@@ -111,6 +112,7 @@ function QueueEntry({ job }: { job: ResearchJob }) {
     {job.result && <Disclosure title="Report" className="mt-3" mountWhenExpanded>
       <Suspense fallback={<p className="text-sm">Formatting report…</p>}><ResearchOutput text={job.result} /></Suspense>
     </Disclosure>}
+    {checkpoint && <LocalCheckpointActions jobId={job.id} onChanged={checkpoint} />}
     <Disclosure title="Technical details" className="mt-3" mountWhenExpanded>
       <dl className="space-y-1 text-sm">
         <div><dt className="inline font-semibold">Job ID: </dt><dd className="inline break-all font-mono">{job.id}</dd></div>
@@ -371,6 +373,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
         {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Use the command-line tool to review the result and continue.</p>}
       </Disclosure>
       <EvidenceCheck experimentId={loopId} />
+      <ManagedBenchmark onQueued={readJobs} />
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
       <ResearchReport />
       {[
@@ -380,7 +383,15 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
       ].filter(group => group.entries.length > 0).map(group => <div key={group.title} className="mt-5">
         <h3 className="mb-2 font-semibold">{group.title}</h3>
         <ul className="space-y-2" aria-label={group.title}>
-          {group.entries.map(job => <QueueEntry key={job.id} job={job} />)}
+          {group.entries.map(job => {
+            const reviewer = job.lane === "Local evidence"
+              ? jobs.find(candidate => candidate.id === job.id.replace(/:1$/, ":review"))
+              : undefined;
+            const reviewPending = job.review_pending || Boolean(reviewer?.review_pending);
+            const actionable = job.lane === "Local evidence" && reviewPending;
+            return <QueueEntry key={job.id} job={reviewPending ? { ...job, review_pending: true } : job}
+              checkpoint={actionable ? readJobs : undefined} />;
+          })}
         </ul>
       </div>)}
       </Disclosure>

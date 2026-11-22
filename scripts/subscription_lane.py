@@ -80,8 +80,11 @@ def process_local_benchmark(db, lock_fd, state):
         stage = "executable identity check"
         spec = json.loads(raw_spec)
         directory = state / "local-evidence" / loop_id
-        db.execute("UPDATE jobs SET state='running', attempts=attempts+1,detail=? WHERE id=?",
-                   ("Preparing pinned benchmark", job))
+        if db.execute("UPDATE jobs SET state='running', attempts=attempts+1,detail=? "
+                      "WHERE id=? AND state='queued' AND EXISTS "
+                      "(SELECT 1 FROM research_loops WHERE id=? AND status='active')",
+                      ("Preparing pinned benchmark", job, loop_id)).rowcount != 1:
+            return True
         directory.mkdir(parents=True, mode=0o700)
         copies = {}
         for role in ("runner", "auditor"):

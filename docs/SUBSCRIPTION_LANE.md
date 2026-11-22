@@ -267,7 +267,11 @@ Worker ticks resume a queued review after restart. An interrupted,
 oversized, invalid or timed-out benchmark does not advance or automatically
 rerun. When the review finishes, the run stops at human review. Neither
 the local report nor the reviewer can automatically start a follow-up.
-This setup currently uses the CLI; status and results appear in the desktop.
+In the desktop research queue, open **Set up a local benchmark** to select the
+trusted runner and auditor, inspect their SHA-256 identities, and preview the
+public brief before queuing. When the benchmark and any requested independent
+review finish, **Approve** records acceptance and **Stop** closes the run.
+Neither decision queues another experiment.
 
 A trusted local runner can make an experiment visible in the desktop queue
 without sending its title or report to a provider:

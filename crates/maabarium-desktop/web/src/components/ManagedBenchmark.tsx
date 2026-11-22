@@ -1,0 +1,124 @@
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { useState } from "react";
+import { Disclosure } from "./ui/Disclosure";
+
+type Executable = { path: string; sha256: string };
+const reviewers = { codex: "Codex", claude: "Claude", antigravity: "Antigravity" } as const;
+
+export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }) {
+  const [title, setTitle] = useState("");
+  const [brief, setBrief] = useState("");
+  const [reviewer, setReviewer] = useState<keyof typeof reviewers>("codex");
+  const [timeout, setTimeoutSeconds] = useState(60);
+  const [runner, setRunner] = useState<Executable>();
+  const [auditor, setAuditor] = useState<Executable>();
+  const [busy, setBusy] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [error, setError] = useState("");
+  const [queued, setQueued] = useState("");
+
+  async function choose(set: (file?: Executable) => void) {
+    setBusy(true);
+    setError("");
+    try {
+      const path = await open({ multiple: false, directory: false });
+      if (typeof path === "string") {
+        setConfirmed(false);
+        set(undefined);
+        set(await invoke<Executable>("research_inspect_benchmark_executable", { path }));
+      }
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }
+
+  async function enqueue() {
+    if (!runner || !auditor || !confirmed || busy) return;
+    setBusy(true);
+    setError("");
+    setQueued("");
+    try {
+      const id = await invoke<string>("research_enqueue_benchmark", {
+        title, publicBrief: brief, reviewer, timeout, runner, auditor, confirmed,
+      });
+      setQueued(id);
+      setConfirmed(false);
+      await onQueued();
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }
+
+  return <Disclosure title="Set up a local benchmark" className="mt-4">
+    <form className="space-y-4" onSubmit={event => { event.preventDefault(); void enqueue(); }}>
+      <p className="text-sm text-[var(--muted)]">Choose two independently reviewed executables. They run with your account’s permissions, not in a sandbox. The updated background worker must be running.</p>
+      <label className="block text-sm font-medium">Experiment name
+        <input className="mt-1 block h-10 w-full rounded-md border bg-transparent px-3" required maxLength={256}
+          value={title} onChange={event => { setTitle(event.target.value); setConfirmed(false); }} />
+      </label>
+      <div className="grid gap-3 md:grid-cols-2">
+        {([{ label: "Runner", file: runner, set: setRunner }, { label: "Independent auditor", file: auditor, set: setAuditor }]).map(({ label, file, set }) =>
+          <div key={label} className="min-w-0 rounded-xl border border-[var(--line)] p-3">
+            <button type="button" disabled={busy} onClick={() => void choose(set)}
+              className="h-10 rounded-md border px-3 text-sm font-semibold">Choose {label.toLowerCase()}</button>
+            {file && <div className="mt-2 break-all text-xs">
+              <p className="font-medium">{file.path}</p><p className="mt-1 font-mono">SHA-256: {file.sha256}</p>
+            </div>}
+          </div>)}
+      </div>
+      <div className="flex flex-wrap gap-4">
+        <label className="text-sm font-medium">Reviewer subscription
+          <select className="mt-1 block h-10 rounded-md border bg-transparent px-3" value={reviewer}
+            onChange={event => { setReviewer(event.target.value as keyof typeof reviewers); setConfirmed(false); }}>
+            {Object.entries(reviewers).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+        </label>
+        <label className="text-sm font-medium">Time limit per process (seconds)
+          <input type="number" min={1} max={300} required className="mt-1 block h-10 w-24 rounded-md border bg-transparent px-3"
+            value={timeout || ""} onChange={event => { setTimeoutSeconds(Number(event.target.value)); setConfirmed(false); }} />
+        </label>
+      </div>
+      <div className="rounded-xl border border-[var(--line)] p-3">
+        <label className="block text-sm font-medium">Public brief sent to {reviewers[reviewer]}
+          <textarea className="mt-2 block w-full rounded-md border bg-transparent p-2" rows={3} maxLength={4096} required
+            value={brief} onChange={event => { setBrief(event.target.value); setConfirmed(false); }} />
+        </label>
+        <p className="mt-2 text-sm text-[var(--muted)]">The reviewer receives this exact text and the local pass/fail outcome. Paths, executable hashes and the local report stay on this computer.</p>
+      </div>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" role="switch" className="workspace-switch" checked={confirmed} disabled={busy}
+          onChange={event => setConfirmed(event.target.checked)} />
+        I trust these pinned executables and approve sending the public brief.
+      </label>
+      <button type="submit" className="min-h-10 rounded-md bg-[var(--accent)] px-3 font-semibold text-[var(--on-accent)] disabled:opacity-60"
+        disabled={busy || !runner || !auditor || runner.sha256 === auditor.sha256 || !confirmed || !title.trim() || !brief.trim()}>Queue benchmark</button>
+      {queued && <p role="status" className="break-all text-sm">Benchmark queued. It stops after independent review. ID: {queued}</p>}
+      {error && <p role="alert" className="break-words text-sm">{error}</p>}
+    </form>
+  </Disclosure>;
+}
+
+export function LocalCheckpointActions({ jobId, onChanged }: { jobId: string; onChanged: () => Promise<void> }) {
+  const [choice, setChoice] = useState<"approve" | "stop">();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return <div className="mt-3 space-y-2 text-sm">
+    {!choice ? <div className="flex flex-wrap gap-2">
+      <button type="button" className="h-10 rounded-md border px-3" onClick={() => setChoice("approve")}>Approve checkpoint</button>
+      <button type="button" className="h-10 rounded-md border px-3" onClick={() => setChoice("stop")}>Stop experiment</button>
+    </div> : <>
+      <p>{choice === "approve" ? "Acknowledge this report and close the checkpoint." : "Close this experiment without approval."} No follow-up will start.</p>
+      <div className="flex gap-2">
+        <button type="button" disabled={busy} className="h-10 rounded-md border px-3" onClick={() => setChoice(undefined)}>Cancel</button>
+        <button type="button" disabled={busy} className="h-10 rounded-md border px-3 font-semibold" onClick={async () => {
+          setBusy(true); setError("");
+          try {
+            await invoke("research_decide_local_checkpoint", { jobId, approved: choice === "approve" });
+            await onChanged();
+          } catch (cause) { setError(String(cause)); }
+          finally { setBusy(false); }
+        }}>{choice === "approve" ? "Approve this report" : "Stop this experiment"}</button>
+      </div>
+    </>}
+    {error && <p role="alert">{error}</p>}
+  </div>;
+}

@@ -483,7 +483,177 @@ fn initialise(db: &mut Connection) -> rusqlite::Result<()> {
         "CREATE TABLE IF NOT EXISTS research_reviewers (
         loop_id TEXT PRIMARY KEY, selection TEXT NOT NULL)",
     )?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_benchmarks (
+        loop_id TEXT PRIMARY KEY, spec TEXT NOT NULL, outcome TEXT)",
+    )?;
     tx.commit()
+}
+
+#[derive(serde::Deserialize, Serialize)]
+pub(crate) struct BenchmarkExecutable {
+    path: String,
+    sha256: String,
+}
+
+fn inspect_benchmark_file(path: &str) -> Result<BenchmarkExecutable, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    let requested = std::path::Path::new(path);
+    if !requested.is_absolute() {
+        return Err("Select an executable by its full path.".into());
+    }
+    let path = requested.canonicalize().map_err(|e| e.to_string())?;
+    let metadata = path.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_BYTES {
+        return Err("Choose a regular executable file no larger than 64 MiB.".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err("The selected file is not executable.".into());
+        }
+    }
+    let mut file = std::fs::File::open(&path)
+        .map_err(|e| e.to_string())?
+        .take(MAX_BYTES + 1);
+    let mut digest = Sha256::new();
+    let mut chunk = [0; 16 * 1024];
+    let mut bytes = 0u64;
+    loop {
+        let n = file.read(&mut chunk).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        bytes += n as u64;
+        digest.update(&chunk[..n]);
+    }
+    if bytes != metadata.len() {
+        return Err("The file changed while it was being checked. Select it again.".into());
+    }
+    Ok(BenchmarkExecutable {
+        path: path
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "The executable path must be valid UTF-8")?,
+        sha256: format!("{:x}", digest.finalize()),
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn research_inspect_benchmark_executable(
+    path: String,
+) -> Result<BenchmarkExecutable, String> {
+    tauri::async_runtime::spawn_blocking(move || inspect_benchmark_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn research_enqueue_benchmark(
+    title: String,
+    public_brief: String,
+    reviewer: String,
+    timeout: u32,
+    runner: BenchmarkExecutable,
+    auditor: BenchmarkExecutable,
+    confirmed: bool,
+) -> Result<String, String> {
+    if !confirmed
+        || title.trim().is_empty()
+        || title.len() > 256
+        || public_brief.trim().is_empty()
+        || public_brief.len() > 4096
+        || !(1..=300).contains(&timeout)
+        || !matches!(reviewer.as_str(), "codex" | "claude" | "antigravity")
+    {
+        return Err("Confirm trusted executables and enter a title, public brief, reviewer, and 1–300 second timeout.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let checked_runner = inspect_benchmark_file(&runner.path)?;
+        let checked_auditor = inspect_benchmark_file(&auditor.path)?;
+        if checked_runner.sha256 != runner.sha256
+            || checked_auditor.sha256 != auditor.sha256
+            || checked_runner.sha256 == checked_auditor.sha256
+            || checked_runner.path == checked_auditor.path
+        {
+            return Err("Use two distinct executables and confirm their current hashes.".into());
+        }
+        let mut db = connect()?;
+        let id = uuid::Uuid::new_v4().to_string();
+        insert_local_benchmark(
+            &mut db,
+            &id,
+            title.trim(),
+            serde_json::json!({
+                "runner": checked_runner.path, "runner_sha256": checked_runner.sha256,
+                "auditor": checked_auditor.path, "auditor_sha256": checked_auditor.sha256,
+                "reviewer": reviewer, "public_brief": public_brief.trim(), "timeout": timeout,
+            })
+            .to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn insert_local_benchmark(
+    db: &mut Connection,
+    id: &str,
+    title: &str,
+    spec: String,
+) -> rusqlite::Result<()> {
+    let tx = db.transaction()?;
+    tx.execute(
+        "INSERT INTO research_loops(id,target,plan,step,status,review_every)
+        VALUES (?,?,'[\"Local evidence\"]',1,'active',1)",
+        rusqlite::params![id, title],
+    )?;
+    tx.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,'Local evidence','Waiting for the managed benchmark worker')",
+        [format!("loop:{id}:1")])?;
+    tx.execute(
+        "INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)",
+        rusqlite::params![id, spec],
+    )?;
+    tx.commit()
+}
+
+fn dismiss_local_checkpoint(db: &Connection, job_id: &str, approved: bool) -> Result<(), String> {
+    let (prefix, _) = job_id
+        .rsplit_once(':')
+        .filter(|(_, step)| *step == "1")
+        .ok_or("Invalid experiment job.")?;
+    let id = prefix
+        .strip_prefix("loop:")
+        .filter(|id| !id.is_empty() && id.len() <= 64)
+        .ok_or("Invalid experiment job.")?;
+    let count = db.execute("UPDATE research_loops SET status=? WHERE id=? AND status='active' AND step=1
+        AND EXISTS (SELECT 1 FROM jobs WHERE id='loop:' || ? || ':1' AND lane='Local evidence' AND state='done')
+        AND (NOT EXISTS (SELECT 1 FROM research_reviewers WHERE loop_id=?)
+             OR EXISTS (SELECT 1 FROM jobs WHERE id='loop:' || ? || ':review' AND state='done'))",
+        rusqlite::params![if approved { "done" } else { "stopped" }, id, id, id, id],
+    ).map_err(|e| e.to_string())?;
+    if count != 1 {
+        return Err("This local experiment is no longer awaiting human review.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn research_decide_local_checkpoint(
+    job_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        dismiss_local_checkpoint(&connect()?, &job_id, approved)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -676,6 +846,27 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_checkpoint_closes_only_a_completed_primary_job() {
+        let mut db = Connection::open_in_memory().unwrap();
+        initialise(&mut db).unwrap();
+        insert_local_benchmark(&mut db, "pilot", "Pilot", "{}".into()).unwrap();
+        assert!(dismiss_local_checkpoint(&db, "loop:pilot:1", true).is_err());
+        db.execute("UPDATE jobs SET state='done' WHERE id='loop:pilot:1'", [])
+            .unwrap();
+        assert!(dismiss_local_checkpoint(&db, "loop:pilot:review", true).is_err());
+        dismiss_local_checkpoint(&db, "loop:pilot:1", true).unwrap();
+        assert!(dismiss_local_checkpoint(&db, "loop:pilot:1", false).is_err());
+        let (status, jobs): (String, i64) = db
+            .query_row(
+                "SELECT status, (SELECT count(*) FROM jobs) FROM research_loops WHERE id='pilot'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((status.as_str(), jobs), ("done", 1));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
