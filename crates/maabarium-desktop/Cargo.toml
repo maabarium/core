@@ -14,6 +14,7 @@ anyhow.workspace = true
 base64 = "0.22"
 chrono.workspace = true
 git2.workspace = true
+rusqlite.workspace = true
 maabarium-core = { path = "../maabarium-core" }
 secrecy.workspace = true
 serde.workspace = true
@@ -29,6 +30,7 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 sysinfo = "0.33"
 url = "2"
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

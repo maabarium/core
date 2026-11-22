@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { ResearchQueue } from "./components/ResearchQueue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -1524,6 +1525,7 @@ export default function App() {
         ) : null}
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+          <ResearchQueue />
           <details id="overview-section" className="workspace-metrics">
             <summary>Run health, analytics and hardware</summary>
           <section

@@ -14,7 +14,23 @@ python3 scripts/subscription_lane.py status
 The same commands work with `--lane antigravity` or `--lane muse`.
 Existing queues migrate in place, with old jobs assigned to Codex. A
 provider-specific job never falls back to another route. These are local
-CLI controls, not desktop UI controls or native workflow history.
+CLI handoff controls, not native workflow history. The macOS desktop
+Research queue lets you choose a lane, enqueue the fixed public task, and
+refresh status and results. The provider setup disclosure explains the
+official sign-in and verification steps; it does not access credentials
+or claim to detect login. Custom `--state` paths are CLI-only.
+
+The proposed continuous research loop also needs a configurable experiment
+target, per-lane capability and billing checks, review and promotion gates,
+and a durable controller that can queue the next step based on verified
+results. The queue does not implement those policies.
+
+For Muse, Lascoria's account coordinator provides a useful boundary:
+it removes `META_API_KEY`, isolates account configuration, and requires the
+native host to confirm account login before starting a subscription session.
+An installed Muse binary and a missing allowance response are not equivalent
+to that contract. Do not copy Lascoria's credential store or enable its
+separate API-key path in this queue.
 
 The experimental sidecar runs one fixed, public synthetic research task
 through the installed Codex CLI. It does not send a checkout, private
