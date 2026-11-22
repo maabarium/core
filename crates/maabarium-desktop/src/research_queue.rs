@@ -117,7 +117,7 @@ async fn muse_account_status(
         Some(state["state"] == "accountLogin")
     }).await;
     Ok(match result {
-        Ok(Some(true)) => "Muse confirms browser-account login with API-key environment variables removed. Unattended billing is not verified; this lane stays manual.",
+        Ok(Some(true)) => "Muse confirms browser-account login with API-key overrides excluded. Verify your active subscription before enabling its local worker.",
         Ok(Some(false)) => "Muse did not confirm browser-account login. Run the official sign-in command, then check again.",
         _ => "The installed Muse client did not return a compatible account status. This lane stays manual.",
     }.into())

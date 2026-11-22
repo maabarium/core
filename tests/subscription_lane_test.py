@@ -16,8 +16,15 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_muse_only_honours_subscription_quota_reset_records(self):
+        reset = runpy.run_path(str(SCRIPT))["muse_quota_reset"]
+        reason = "API error 429: Subscription quota exhausted. Your usage window resets at 2026-11-23T00:00:00Z. (rate_limit_error)"
+        self.assertEqual(reset(json.dumps({"payload_type": "run.terminal.failed", "payload": {"reason": reason}})),
+                         1795392000)
+        self.assertIsNone(reset(json.dumps({"payload_type": "run.terminal.completed", "payload": {"text": reason}})))
+
     def test_opt_in_account_lanes_recover_abandoned_claim_without_fallback(self):
-        for lane in ("claude", "antigravity"):
+        for lane in ("claude", "antigravity", "muse"):
             with self.subTest(lane=lane), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 cli = root / "fake"
@@ -25,8 +32,17 @@ class SubscriptionLaneTest(unittest.TestCase):
                 cli.write_text(f"""#!{sys.executable}
 import json, os, pathlib, sys, time
 assert 'ANTHROPIC_API_KEY' not in os.environ and 'GEMINI_API_KEY' not in os.environ
+assert 'META_API_KEY' not in os.environ and 'MUSE_AUTH_PATH' not in os.environ
 lane = {lane!r}
-if 'auth' in sys.argv:
+if 'serve' in sys.argv:
+    for line in sys.stdin:
+        request = json.loads(line)
+        if 'id' not in request:
+            continue
+        result = (dict(experimentalApi=True, schema=dict(fingerprint='fake'))
+                  if request['method'] == 'initialize' else dict(state='accountLogin'))
+        print(json.dumps(dict(jsonrpc='2.0', id=request['id'], result=result)), flush=True)
+elif 'auth' in sys.argv:
     print(json.dumps(dict(loggedIn=True, authMethod='claude.ai', apiProvider='firstParty', subscriptionType='pro')))
 elif 'models' in sys.argv:
     print('gemini-4-neon-low\\tNeon')
@@ -34,17 +50,24 @@ else:
     if lane == 'antigravity':
         assert json.loads(sys.argv[sys.argv.index('--settings') + 1])['useG1Credits'] is False
         assert '--sandbox' in sys.argv
-    else:
+    elif lane == 'claude':
         assert sys.argv[sys.argv.index('--tools') + 1] == ''
+    else:
+        assert sys.argv[sys.argv.index('--provider') + 1] == 'meta'
+        assert sys.argv[sys.argv.index('--contributor-mode') + 1] == 'off'
     marker = pathlib.Path({str(marker)!r})
     if not marker.exists():
         marker.touch()
         time.sleep(1)
-    print(json.dumps(dict(status='SUCCESS', response='Recovered', subtype='success', is_error=False, result='Recovered')))
+    if lane == 'muse':
+        print(json.dumps(dict(payload_type='run.terminal.completed', payload=dict(terminal='completed', text='Recovered'))))
+    else:
+        print(json.dumps(dict(status='SUCCESS', response='Recovered', subtype='success', is_error=False, result='Recovered')))
 """)
                 cli.chmod(0o700)
                 command = [sys.executable, str(SCRIPT), "--state", str(root / "state"), "--codex", str(cli)]
-                env = {**os.environ, "ANTHROPIC_API_KEY": "excluded", "GEMINI_API_KEY": "excluded"}
+                env = {**os.environ, "ANTHROPIC_API_KEY": "excluded", "GEMINI_API_KEY": "excluded",
+                       "META_API_KEY": "excluded", "MUSE_AUTH_PATH": "/excluded"}
                 subprocess.run([*command, "enqueue", "--id", "job", "--lane", lane], check=True)
                 subprocess.run([*command, "tick"], check=True)
                 self.assertFalse(marker.exists())

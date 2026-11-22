@@ -30,7 +30,7 @@ const setup: Record<Lane, { status: string; steps: string[]; check: string }> = 
     check: "agy models",
   },
   muse: {
-    status: "Manual handoff · unattended billing not verified",
+    status: "Optional local worker · active Muse subscription and browser sign-in required",
     steps: [
       "In Terminal, run muse login and approve the device code in your browser. Do not configure an API key for this lane.",
       "Use Check setup to ask Muse directly whether its browser account is signed in. The allowance check below is separate.",
@@ -100,7 +100,7 @@ export function ResearchQueue() {
   return (
     <section className="workspace-card rounded-xl border p-5" aria-labelledby="research-queue-title">
       <h2 id="research-queue-title" className="text-lg font-semibold">Research queue</h2>
-      <p className="mt-1 text-sm">Queue a public synthetic task. Codex, Claude, and Antigravity can run through the local subscription worker when configured. Muse requires manual handoff.</p>
+      <p className="mt-1 text-sm">Queue a public synthetic task. All four providers can run through the local subscription worker when configured. Unconfigured providers require manual handoff.</p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label htmlFor="research-lane">Provider</label>
         <select className="rounded border bg-transparent p-2" id="research-lane" value={lane}

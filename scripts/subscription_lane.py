@@ -2,11 +2,14 @@
 """Bounded local queue for a ChatGPT-backed public research lane."""
 
 import argparse
+from datetime import datetime
 import fcntl
 import json
 import os
 from pathlib import Path
 import plistlib
+import re
+import select
 import shutil
 import signal
 import sqlite3
@@ -24,6 +27,7 @@ PROMPT = (
 )
 MAX_ATTEMPTS = 4
 LANES = ("codex", "claude", "antigravity", "muse")
+OPT_IN_LANES = ("claude", "antigravity", "muse")
 GUARD = """import os, signal, subprocess, sys
 try:
     child = subprocess.Popen(sys.argv[2:])
@@ -44,6 +48,88 @@ def queue_loop_step(db, loop_id, step, lanes, target):
     )
 
 
+def muse_account_ready(binary, scratch, env):
+    """Ask the vendor host how it will authenticate, without starting a model."""
+    with subprocess.Popen(
+        [binary, "serve", "--provider", "meta", "--no-session-log", "--disable-shell", "--disable-write"],
+        cwd=scratch, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    ) as host:
+        deadline = time.monotonic() + 8
+        buffer = b""
+        remaining = 65536
+
+        def send(method, **fields):
+            host.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, **fields}).encode() + b"\n")
+            host.stdin.flush()
+
+        def receive(request_id):
+            nonlocal buffer, remaining
+            while time.monotonic() < deadline:
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    frame = json.loads(line)
+                    if frame.get("jsonrpc") == "2.0" and frame.get("id") == request_id:
+                        return frame.get("result") or {}
+                if remaining <= 0 or not select.select([host.stdout], [], [], max(0, deadline - time.monotonic()))[0]:
+                    break
+                chunk = os.read(host.stdout.fileno(), min(4096, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                buffer += chunk
+            return {}
+
+        try:
+            send("initialize", id=1, params={
+                "clientInfo": {"name": "maabarium_account", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": True},
+            })
+            reply = receive(1)
+            if reply.get("experimentalApi") is not True or not isinstance(reply.get("schema", {}).get("fingerprint"), str):
+                return False
+            send("initialized")
+            send("account/read", id=2, params={})
+            return receive(2).get("state") == "accountLogin"
+        except (OSError, ValueError, AttributeError):
+            return False
+        finally:
+            if host.poll() is None:
+                try:
+                    os.killpg(host.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+def muse_result(raw):
+    terminals = []
+    for line in raw.splitlines():
+        frame = json.loads(line)
+        if not isinstance(frame, dict):
+            raise ValueError("invalid Muse record")
+        if frame.get("payload_type", "").startswith("run.terminal."):
+            terminals.append(frame)
+    if len(terminals) != 1 or terminals[0]["payload_type"] != "run.terminal.completed":
+        return None
+    payload = terminals[0].get("payload")
+    return payload.get("text") if isinstance(payload, dict) and payload.get("terminal") == "completed" else None
+
+
+def muse_quota_reset(raw):
+    for line in raw.splitlines():
+        frame = json.loads(line)
+        if not isinstance(frame, dict) or frame.get("payload_type") != "run.terminal.failed":
+            continue
+        payload = frame.get("payload")
+        reason = payload.get("reason") if isinstance(payload, dict) else None
+        if isinstance(reason, str):
+            match = re.search(r"Subscription quota exhausted\. Your usage window resets at "
+                              r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\.", reason)
+            if match:
+                return int(datetime.fromisoformat(match[1].replace("Z", "+00:00")).timestamp())
+    return None
+
+
 def worker(db, runners, lock_fd):
     slots = ",".join("?" for _ in runners)
     job = db.execute(
@@ -59,14 +145,18 @@ def worker(db, runners, lock_fd):
         return
     # An allowlist intentionally excludes API keys, identity federation and custom endpoints.
     env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "CODEX_HOME") if k in os.environ}
+    if lane == "muse":
+        env["MUSE_NO_AUTO_UPDATE"] = "1"
     flags = ['-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"']
     with tempfile.TemporaryDirectory(prefix="maabarium-lane-") as scratch:
         check = ([binary, *flags, "login", "status"] if lane == "codex" else
                  [binary, "auth", "status"] if lane == "claude" else [binary, "models"])
         try:
-            auth = subprocess.run(check, cwd=scratch, env=env,
+            auth = None if lane == "muse" else subprocess.run(check, cwd=scratch, env=env,
                                   capture_output=True, text=True, timeout=10, check=False)
-            if lane == "claude":
+            if lane == "muse":
+                ready = muse_account_ready(binary, scratch, env)
+            elif lane == "claude":
                 status = json.loads(auth.stdout)
                 ready = (isinstance(status, dict) and status.get("loggedIn") is True and
                          status.get("authMethod") == "claude.ai" and status.get("apiProvider") == "firstParty" and
@@ -76,7 +166,7 @@ def worker(db, runners, lock_fd):
             else:
                 ready = any(line.strip() == "Logged in using ChatGPT"
                             for line in (auth.stdout + "\n" + auth.stderr).splitlines())
-            ready = ready and auth.returncode == 0
+            ready = ready and (auth is None or auth.returncode == 0)
         except (OSError, ValueError, subprocess.TimeoutExpired):
             ready = False
         if not ready:
@@ -102,6 +192,12 @@ def worker(db, runners, lock_fd):
             cmd = [binary, "--sandbox", "--settings", '{"useG1Credits":false}',
                    "--print-timeout", "90s", "--disable-slash-commands", "--model", "gemini-4-neon-low",
                    "--output-format", "json", "-p", prompt or PROMPT]
+        elif lane == "muse":
+            cmd = [binary, "exec", "--provider", "meta", "--preset", "empty", "--json",
+                   "--contributor-mode", "off", "--no-session-log", "--no-foreign-personal-context",
+                   "--disable-web-tools", "--disable-reminders", "--disable-request-user-input",
+                   "--disable-shell", "--disable-write", "--max-model-steps", "2",
+                   "--approval-mode", "never", "--", prompt or PROMPT]
         process = None
         try:
             # The guardian, not the vendor process, holds the lock and enforces
@@ -111,11 +207,22 @@ def worker(db, runners, lock_fd):
                                            cwd=scratch, env=env, stdin=subprocess.PIPE,
                                            stdout=stdout, stderr=subprocess.DEVNULL,
                                            text=True, start_new_session=True, pass_fds=(lock_fd,))
-                process.communicate("" if lane == "antigravity" else prompt or PROMPT, timeout=125)
-            if process.returncode or not output.is_file() or output.stat().st_size > 65536:
+                process.communicate("" if lane in ("antigravity", "muse") else prompt or PROMPT, timeout=125)
+            if not output.is_file() or output.stat().st_size > 65536:
                 raise ValueError("no bounded reply")
             result = output.read_text(encoding="utf-8").strip()
-            if lane != "codex":
+            if process.returncode:
+                reset = muse_quota_reset(result) if lane == "muse" else None
+                if reset is not None and attempts + 1 < MAX_ATTEMPTS:
+                    db.execute(
+                        "UPDATE jobs SET state='queued',due=?,detail='Muse subscription quota exhausted; waiting for reset' WHERE id=?",
+                        (max(int(time.time()) + 60, reset + 60), job_id),
+                    )
+                    return
+                raise ValueError("provider did not complete")
+            if lane == "muse":
+                result = muse_result(result)
+            elif lane != "codex":
                 data = json.loads(result)
                 if not isinstance(data, dict):
                     raise ValueError("invalid response")
@@ -138,7 +245,8 @@ def worker(db, runners, lock_fd):
                 )
             return
         detail = {"codex": "ChatGPT", "claude": "Claude account; API credentials excluded",
-                  "antigravity": "Antigravity account; AI credits disabled for run"}[lane]
+                  "antigravity": "Antigravity account; AI credits disabled for run",
+                  "muse": "Muse browser account; API-key overrides excluded"}[lane]
         db.execute("UPDATE jobs SET state='done', result=?, detail=? WHERE id=?", (result, detail, job_id))
 
 
@@ -148,6 +256,7 @@ def main():
     parser.add_argument("--codex", default="codex", help="trusted local Codex CLI")
     parser.add_argument("--claude", help="trusted Claude CLI; opt in only after confirming account Usage credits are off")
     parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
+    parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
     parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status"])
     parser.add_argument("--lane", choices=LANES, default="codex")
     parser.add_argument("--result-file", type=Path)
@@ -174,7 +283,7 @@ def main():
             "RunAtLoad": True,
             "StartInterval": 60,
         }
-        for lane in ("claude", "antigravity"):
+        for lane in OPT_IN_LANES:
             path = getattr(args, lane)
             if path:
                 binary = shutil.which(path)
@@ -281,7 +390,7 @@ def main():
                 if not codex:
                     parser.error("Codex CLI not found")
                 runners = {"codex": os.path.abspath(codex)}
-                for lane in ("claude", "antigravity"):
+                for lane in OPT_IN_LANES:
                     path = getattr(args, lane)
                     if path:
                         binary = shutil.which(path)

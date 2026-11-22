@@ -42,7 +42,7 @@ python3 scripts/subscription_lane.py loop-review --id public-example --step 1 --
 
 Use only material safe to disclose to the chosen providers. Each step uses
 the same target, not previous model output. Use `--decision stop` to stop
-the current loop. Other providers remain manual; this is not a scientific
+the current loop. Unconfigured providers remain manual; this is not a scientific
 evaluator, promotion gate, or unattended four-provider pipeline.
 
 For Muse, Lascoria's account coordinator provides a useful boundary:
@@ -79,7 +79,22 @@ doing so. The worker rechecks Claude first-party paid-plan login at each
 attempt, strips API credential environment variables, and forces
 `useG1Credits=false` for Antigravity. It never retries on another provider.
 Antigravity uses Gemini 4 Neon Low, not the desktop Orchestrator pair.
-Muse remains manual.
+
+To enable Muse, verify the active Muse Code subscription in Meta Accounts
+Center, then add `--muse "$HOME/.local/bin/muse"` to the launch-agent
+generator or tick. The worker follows Lascoria's account boundary: remove
+API-key and auth-path overrides, ask the native host for `account/read`,
+and refuse to start the model unless it reports browser-account login.
+It invokes only the official Meta provider with Contributor mode off and
+does not switch providers or supply a pay-as-you-go key on retry.
+Meta documents subscription limits separately from additional API keys:
+[Muse Code subscriptions](https://dev.meta.ai/docs/muse-code/subscriptions).
+When the native Muse CLI returns a subscription-quota terminal error with
+a UTC reset time, the queue waits until one minute after that reset.
+On 22 November 2026, a live browser-account request was rejected for
+subscription quota exhaustion, without a paid fallback. Simulated provider
+tests exercised interrupted-worker recovery; live completion after the
+reported reset was not yet observed.
 
 Local validation on 22 November 2026: verified both account toggles off,
 then stopped the launch agent, queued one public task per lane, and
