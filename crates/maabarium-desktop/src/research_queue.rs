@@ -556,7 +556,7 @@ pub(crate) async fn research_inspect_benchmark_executable(
 pub(crate) async fn research_enqueue_benchmark(
     title: String,
     public_brief: String,
-    reviewer: String,
+    reviewer: Option<String>,
     timeout: u32,
     runner: BenchmarkExecutable,
     auditor: BenchmarkExecutable,
@@ -565,22 +565,31 @@ pub(crate) async fn research_enqueue_benchmark(
     if !confirmed
         || title.trim().is_empty()
         || title.len() > 256
-        || public_brief.trim().is_empty()
         || public_brief.len() > 4096
         || !(1..=300).contains(&timeout)
-        || !matches!(reviewer.as_str(), "codex" | "claude" | "antigravity")
     {
-        return Err("Confirm trusted executables and enter a title, public brief, reviewer, and 1–300 second timeout.".into());
+        return Err("Confirm you trust both programs, name the experiment, and set a time limit of 1–300 seconds.".into());
+    }
+    match reviewer.as_deref() {
+        Some("codex" | "claude" | "antigravity") if !public_brief.trim().is_empty() => {}
+        None if public_brief.is_empty() => {}
+        _ => {
+            return Err(
+                "Choose a supported evaluator and enter a public brief, or turn off sharing."
+                    .into(),
+            )
+        }
     }
     tauri::async_runtime::spawn_blocking(move || {
         let checked_runner = inspect_benchmark_file(&runner.path)?;
         let checked_auditor = inspect_benchmark_file(&auditor.path)?;
-        if checked_runner.sha256 != runner.sha256
-            || checked_auditor.sha256 != auditor.sha256
-            || checked_runner.sha256 == checked_auditor.sha256
+        if checked_runner.sha256 != runner.sha256 || checked_auditor.sha256 != auditor.sha256 {
+            return Err("A selected file changed. Choose it again before queuing.".into());
+        }
+        if checked_runner.sha256 == checked_auditor.sha256
             || checked_runner.path == checked_auditor.path
         {
-            return Err("Use two distinct executables and confirm their current hashes.".into());
+            return Err("Choose a different program to check the results.".into());
         }
         let mut db = connect()?;
         let id = uuid::Uuid::new_v4().to_string();
@@ -591,7 +600,7 @@ pub(crate) async fn research_enqueue_benchmark(
             serde_json::json!({
                 "runner": checked_runner.path, "runner_sha256": checked_runner.sha256,
                 "auditor": checked_auditor.path, "auditor_sha256": checked_auditor.sha256,
-                "reviewer": reviewer, "public_brief": public_brief.trim(), "timeout": timeout,
+                "reviewer": reviewer, "public_brief": public_brief, "timeout": timeout,
             })
             .to_string(),
         )

@@ -268,8 +268,11 @@ oversized, invalid or timed-out benchmark does not advance or automatically
 rerun. When the review finishes, the run stops at human review. Neither
 the local report nor the reviewer can automatically start a follow-up.
 In the desktop research queue, open **Set up a local benchmark** to select the
-trusted runner and auditor, inspect their SHA-256 identities, and preview the
-public brief before queuing. When the benchmark and any requested independent
+trusted runner and auditor. Maabarium checks their file fingerprints automatically.
+Turn on automatic AI evaluation to choose a subscription and preview the public
+brief that will be sent with the local pass/fail result. Leave it off to keep the
+benchmark local. Neither option asks again before the human checkpoint.
+When the benchmark and any requested independent
 review finish, **Approve** records acceptance and **Stop** closes the run.
 Neither decision queues another experiment.
 

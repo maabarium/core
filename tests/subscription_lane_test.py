@@ -18,7 +18,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
-    def managed_benchmark(self, live=False, damage=None):
+    def managed_benchmark(self, live=False, damage=None, local_only=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = root / "runner"
@@ -77,6 +77,17 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                        "--runner-sha256", hashlib.sha256(fixture.read_bytes()).hexdigest(),
                        "--auditor", str(auditor),
                        "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest())
+            if local_only:
+                # Exercise the same persisted spec that desktop setup writes.
+                with sqlite3.connect(state / "queue.db") as db:
+                    db.execute("UPDATE local_benchmarks SET spec=json_set(spec, '$.reviewer', NULL, '$.public_brief', '')")
+                successful("tick")
+                successful("tick")
+                status = json.loads(successful("loop-status", "--id", "fresh-public-check"))
+                self.assertEqual(status["phase"], "awaiting_review")
+                self.assertEqual([(job["lane"], job["state"]) for job in json.loads(successful("status"))],
+                                 [("Local evidence", "done")])
+                return
             if damage is not None:
                 if damage == "identity":
                     fixture.write_text("Changed after enqueue")
@@ -104,6 +115,9 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
 
     def test_managed_local_benchmark_reaches_human_checkpoint(self):
         self.managed_benchmark()
+
+    def test_managed_local_only_benchmark_never_queues_ai_review(self):
+        self.managed_benchmark(local_only=True)
 
     def test_managed_local_benchmark_rejects_changed_identity(self):
         self.managed_benchmark(damage="identity")

@@ -79,6 +79,9 @@ def process_local_benchmark(db, lock_fd, state):
             raise ValueError
         stage = "executable identity check"
         spec = json.loads(raw_spec)
+        reviewer_lane = spec["reviewer"]
+        if reviewer_lane is not None and reviewer_lane not in ("codex", "claude", "antigravity"):
+            raise ValueError("unsupported benchmark evaluator")
         directory = state / "local-evidence" / loop_id
         if db.execute("UPDATE jobs SET state='running', attempts=attempts+1,detail=? "
                       "WHERE id=? AND state='queued' AND EXISTS "
@@ -141,9 +144,13 @@ def process_local_benchmark(db, lock_fd, state):
         db.execute("BEGIN IMMEDIATE")
         db.execute("UPDATE local_benchmarks SET outcome=? WHERE loop_id=?", (report["outcome"], loop_id))
         db.execute("UPDATE jobs SET state='done',finished_at=unixepoch(),detail=?,result=? WHERE id=?",
-                   ("Local audit complete; independent review required",
+                   ("Local check complete; waiting for AI evaluation" if reviewer_lane
+                    else "Local check complete; waiting for human review",
                     f"Finding: **Local gate {report['outcome']}**\n\n" + report["report"].strip(), job))
-        reviewer = {"lane": spec["reviewer"], "model": None, "effort": None}
+        if reviewer_lane is None:
+            db.commit()
+            return True
+        reviewer = {"lane": reviewer_lane, "model": None, "effort": None}
         db.execute("INSERT INTO research_reviewers(loop_id,selection) VALUES (?,?)",
                    (loop_id, json.dumps(reviewer)))
         brief = json.dumps({"public_brief": spec["public_brief"], "local_gate": report["outcome"]})
