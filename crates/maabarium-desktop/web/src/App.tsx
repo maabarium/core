@@ -153,6 +153,7 @@ export default function App() {
     latestPromotedExperimentId: null,
   });
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
+  const [explicitWorkflowDiff, setExplicitWorkflowDiff] = useState(false);
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
   const [branchInspection, setBranchInspection] = useState<{ key: string; inventory: ExperimentBranchInventory } | null>(null);
   const experimentJobs = researchJobs.filter(job => job.id.startsWith("loop:"));
@@ -1967,12 +1968,13 @@ export default function App() {
                 activeTab={activeTab}
                 history={history}
                 researchJobs={experimentJobs}
+                currentResearchJob={showResearch && !explicitWorkflowDiff ? featuredResearch : undefined}
                 latestProposal={latestProposal}
                 winnerProposal={winnerProposal}
                 selectedWinnerProposal={selectedRetainedWinnerProposal}
                 logs={state?.logs ?? []}
                 logPath={state?.logPath ?? "loading"}
-                onChangeTab={setActiveTab}
+                onChangeTab={(tab) => { setExplicitWorkflowDiff(false); setActiveTab(tab); }}
                 onOpenLogFile={() => void openLogFile()}
               />
 
@@ -1988,6 +1990,7 @@ export default function App() {
                 }
                 onSelectExperimentId={(experimentId) => {
                   setSelectedRetainedWinnerId(experimentId);
+                  setExplicitWorkflowDiff(true);
                   setActiveTab("diff");
                 }}
                 onExportFiles={async (entry) => {

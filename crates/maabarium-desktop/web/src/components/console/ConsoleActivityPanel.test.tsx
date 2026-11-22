@@ -34,6 +34,18 @@ function buildProposal(
 }
 
 describe("ConsoleActivityPanel", () => {
+  it("uses the current research report in Diff View without a nested vertical scroll box", async () => {
+    render(<ConsoleActivityPanel activeTab="diff" history={[]}
+      currentResearchJob={{ id: "loop:pilot:1", lane: "Local evidence", state: "done", attempts: 0,
+        detail: null, result: "## Both exact baselines passed", experiment_title: "CODA pilot", review_pending: true }}
+      latestProposal={buildProposal(20, "An unrelated workflow", "src/old.rs", 1)}
+      winnerProposal={null} selectedWinnerProposal={null}
+      logs={[]} logPath="test.log" onChangeTab={() => undefined} onOpenLogFile={() => undefined} />);
+    expect(await screen.findByRole("heading", { name: "Both exact baselines passed" })).toBeTruthy();
+    expect(screen.queryByText("An unrelated workflow")).toBeNull();
+    expect(screen.getByTestId("console-activity-content").className).not.toMatch(/max-h-|overflow-y-auto/);
+  });
+
   it("shows a separately labelled local checkpoint in the existing console history", () => {
     render(<ConsoleActivityPanel activeTab="history" history={[]}
       researchJobs={[{ id: "loop:pilot:1", lane: "Local evidence", state: "done", attempts: 0,

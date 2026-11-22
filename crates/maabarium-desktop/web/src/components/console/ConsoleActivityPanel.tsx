@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Activity, History, Terminal } from "lucide-react";
 import { buildPatchPreview } from "../../lib/analytics";
 import type {
@@ -8,6 +8,8 @@ import type {
 } from "../../types/console";
 import { Badge } from "../ui/Badge";
 import { ResearchRunHistory, type ResearchJob } from "../ResearchQueue";
+
+const ResearchOutput = lazy(() => import("../ResearchOutput"));
 
 const historyBadge: Record<
   HistoryRow["status"],
@@ -25,6 +27,7 @@ export function ConsoleActivityPanel({
   activeTab,
   history,
   researchJobs = [],
+  currentResearchJob,
   latestProposal,
   winnerProposal,
   selectedWinnerProposal,
@@ -36,6 +39,7 @@ export function ConsoleActivityPanel({
   activeTab: ConsoleTab;
   history: HistoryRow[];
   researchJobs?: ResearchJob[];
+  currentResearchJob?: ResearchJob;
   latestProposal: PersistedProposal | null;
   winnerProposal: PersistedProposal | null;
   selectedWinnerProposal: PersistedProposal | null;
@@ -152,7 +156,7 @@ export function ConsoleActivityPanel({
           </button>
         ))}
       </div>
-      <div className="p-4 max-h-80 overflow-y-auto">
+      <div className="p-4" data-testid="console-activity-content">
         {activeTab === "history" ? (
           <div className="space-y-5">
           <section aria-label="Research history">
@@ -215,7 +219,22 @@ export function ConsoleActivityPanel({
           </section>
           </div>
         ) : activeTab === "diff" ? (
-          activeDiffProposal ? (
+          currentResearchJob ? (
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold">{currentResearchJob.experiment_title ?? "Current research experiment"}</h3>
+                <p className="mt-1 text-sm text-[var(--muted)]">This run recorded evaluation results, not a file patch.</p>
+              </div>
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
+                {currentResearchJob.review_pending && <div className="mb-3"><Badge color="amber">Awaiting human review</Badge></div>}
+                {currentResearchJob.result ? (
+                  <Suspense fallback={<p className="text-sm">Loading report…</p>}>
+                    <ResearchOutput text={currentResearchJob.result} />
+                  </Suspense>
+                ) : <p className="text-sm text-[var(--muted)]">No result has been recorded for this run yet.</p>}
+              </div>
+            </div>
+          ) : activeDiffProposal ? (
             <div className="space-y-4 font-mono text-[11px] text-slate-500 leading-loose">
               {diffOptions.length > 1 ? (
                 <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 p-1">
