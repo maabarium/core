@@ -228,8 +228,8 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
   }
 
   return (
-    <section id="research-queue" className="workspace-card rounded-xl border p-5" aria-labelledby="research-queue-title">
-      <h2 id="research-queue-title" className="text-lg font-semibold">Research queue</h2>
+    <section id="research-queue" className="workspace-card rounded-xl" aria-label="Research queue">
+      <Disclosure title="Research queue" defaultExpanded contentClassName="p-5">
       <p className="mt-1 text-sm">Queue a test task using public information. Providers you’ve set up can run in the background. For the others, run the task yourself and import the result.</p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label htmlFor="research-lane">Provider</label>
@@ -382,6 +382,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
           {group.entries.map(job => <QueueEntry key={job.id} job={job} />)}
         </ul>
       </div>)}
+      </Disclosure>
     </section>
   );
 }

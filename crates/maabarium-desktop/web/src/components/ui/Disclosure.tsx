@@ -14,16 +14,17 @@ export function CollapseToggle({ title, expanded, controls, onToggle }: {
   </button>;
 }
 
-export function Disclosure({ title, children, className = "", contentClassName = "", id, mountWhenExpanded = false }: {
+export function Disclosure({ title, children, className = "", contentClassName = "", id, mountWhenExpanded = false, defaultExpanded = false }: {
   title: string;
   children: ReactNode;
   className?: string;
   contentClassName?: string;
   id?: string;
   mountWhenExpanded?: boolean;
+  defaultExpanded?: boolean;
 }) {
   const contentId = useId();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return <div id={id} className={`rounded-xl border border-[var(--line)] ${className}`}>
     <div className="flex items-center justify-between gap-3 px-3 py-2">
       <span className="text-sm font-semibold">{title}</span>

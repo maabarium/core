@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ResearchQueue, type ResearchJob } from "./components/ResearchQueue";
+import { ResearchQueue, ResearchRunHistory, type ResearchJob } from "./components/ResearchQueue";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -151,6 +151,11 @@ export default function App() {
   });
   const [activeTab, setActiveTab] = useState<ConsoleTab>("history");
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
+  const [consoleScope, setConsoleScope] = useState<"workflow" | "research" | null>(null);
+  const experimentJobs = researchJobs.filter(job => job.id.startsWith("loop:"));
+  const featuredResearch = experimentJobs.find(job => job.review_pending) ?? experimentJobs[0];
+  const showResearch = consoleScope === "research"
+    || (consoleScope === null && Boolean(featuredResearch?.review_pending || featuredResearch?.experiment_active));
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     try { return localStorage.getItem("maabarium-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
@@ -1923,13 +1928,37 @@ export default function App() {
             className="grid grid-cols-1 gap-6"
           >
             <div className="flex flex-col gap-6 lg:h-full">
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+              {featuredResearch && <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Console data source">
+                {(["research", "workflow"] as const).map(scope => <button type="button" key={scope}
+                  aria-pressed={showResearch === (scope === "research")} onClick={() => setConsoleScope(scope)}
+                  className={`min-h-10 rounded-md border border-[var(--line)] px-3 text-sm font-semibold ${showResearch === (scope === "research") ? "bg-[var(--accent)] text-[var(--on-accent)]" : "bg-[var(--surface)] text-[var(--ink)]"}`}>
+                  {scope === "research" ? "Research experiment" : "Selected workflow"}
+                </button>)}
+              </div>}
+              {showResearch && featuredResearch ? (
+                <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+                  <GlassCard title="Research experiment results" icon={Activity} className="xl:col-span-2">
+                    <ResearchRunHistory jobs={[featuredResearch]} />
+                  </GlassCard>
+                  <GlassCard title="How this experiment ran">
+                    {featuredResearch.lane === "Local evidence" ? <>
+                      <p className="font-semibold">Local benchmark and independent audit</p>
+                      <p className="mt-2 text-sm text-[var(--muted)]">
+                        The local runner produced the evidence. No council, model provider, or paid API was used.
+                      </p>
+                    </> : <>
+                      <p className="font-semibold">{featuredResearch.lane}</p>
+                      <p className="mt-2 text-sm text-[var(--muted)]">This is the provider assigned to the displayed research step, not the selected workflow’s council.</p>
+                    </>}
+                  </GlassCard>
+                </div>
+              ) : <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
                 <MetricPanelCard metricPanel={metricPanel} />
                 <CouncilRosterCard
                   councilEntries={councilEntries}
                   engineRunning={Boolean(state?.engineRunning)}
                 />
-              </div>
+              </div>}
 
               {researchJobs.some(job => job.id.startsWith("loop:")) && (
                 <GlassCard title="Research experiment activity" icon={Activity}>
@@ -1950,7 +1979,7 @@ export default function App() {
               <ConsoleActivityPanel
                 activeTab={activeTab}
                 history={history}
-                researchJobs={researchJobs.filter(job => job.id.startsWith("loop:"))}
+                researchJobs={experimentJobs}
                 latestProposal={latestProposal}
                 winnerProposal={winnerProposal}
                 selectedWinnerProposal={selectedRetainedWinnerProposal}
