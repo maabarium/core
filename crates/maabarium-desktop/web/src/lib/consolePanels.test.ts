@@ -20,14 +20,18 @@ describe("consolePanels", () => {
   it("persists and restores collapsed panel state", () => {
     saveCollapsedConsolePanels({
       analytics: true,
+      activeBlueprint: false,
       evidence: false,
+      runGroups: true,
       workflowLibrary: true,
       maintenance: false,
     });
 
     expect(loadCollapsedConsolePanels()).toEqual({
       analytics: true,
+      activeBlueprint: false,
       evidence: false,
+      runGroups: true,
       workflowLibrary: true,
       maintenance: false,
     });
@@ -41,7 +45,9 @@ describe("consolePanels", () => {
 
     expect(loadCollapsedConsolePanels()).toEqual({
       analytics: false,
+      activeBlueprint: false,
       evidence: false,
+      runGroups: false,
       workflowLibrary: false,
       maintenance: true,
     });

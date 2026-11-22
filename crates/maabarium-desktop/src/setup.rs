@@ -462,7 +462,7 @@ pub fn build_readiness_items(
         RuntimeStrategy::Remote => "remote",
         RuntimeStrategy::Mixed => "mixed",
     });
-    let shared_report = ReadinessScanner::scan(workspace_path, strategy_label);
+    let shared_report = ReadinessScanner::scan_passive(workspace_path, strategy_label);
     let mut items = shared_report
         .items
         .into_iter()

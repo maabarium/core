@@ -50,6 +50,10 @@ pub enum BlueprintError {
 
 #[derive(Debug, Error)]
 pub enum PersistError {
+    #[error("Cannot delete a workflow group while a run is pending or active")]
+    GroupActive,
+    #[error("Could not access the Telegram credential in the system keychain")]
+    TelegramKeychain(#[source] keyring::Error),
     #[error("SQLite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("Serialization error: {0}")]

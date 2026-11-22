@@ -1,6 +1,3 @@
-@import "@fontsource/m-plus-rounded-1c/latin-500.css";
-@import "@fontsource/m-plus-rounded-1c/latin-700.css";
-@import "@fontsource/m-plus-rounded-1c/latin-800.css";
 @import "@fontsource/azeret-mono/latin-500.css";
 @import "@fontsource/azeret-mono/latin-700.css";
 
@@ -10,13 +7,14 @@
 
 :root {
   --font-ui:
-    "M PLUS Rounded 1c", ui-sans-serif, system-ui, -apple-system,
+    ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-data:
     "Azeret Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     "Liberation Mono", monospace;
   color: #f8fafc;
   background: #0b1220;
+  color-scheme: dark;
   font-family: var(--font-ui);
 }
 
@@ -48,35 +46,349 @@ body {
   box-sizing: border-box;
 }
 
-code,
-pre,
-kbd,
-samp {
-  font-family: var(--font-data);
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid #a4f1df;
+  outline-offset: 3px;
 }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+.console-navigation button {
+  padding: 0.55rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
 }
 
-::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.55);
+.workspace-shell {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  min-height: 100vh;
+  background: #11171d;
 }
 
-::-webkit-scrollbar-thumb {
-  background: linear-gradient(
-    180deg,
-    rgba(45, 212, 191, 0.45),
-    rgba(251, 191, 36, 0.38)
-  );
+.workspace-rail {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  align-self: start;
+  min-height: 100vh;
+  border-right: 1px solid #303c47;
+  background: #18212a;
+}
+
+.workspace-rail-content {
+  display: grid;
+  gap: 1.3rem;
+  padding: 1.25rem;
+}
+
+.console-navigation {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.console-navigation button {
+  color: #c2cfdb;
+  text-align: left;
+  border-radius: 0.5rem;
+}
+
+.console-navigation button:hover,
+.console-navigation button:focus-visible {
+  background: #2a3946;
+  color: white;
+}
+
+.workspace-actions {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.workspace-actions button {
+  justify-content: center;
+  background-image: none;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.workspace-actions button[data-run-state="idle"]:not(:disabled) {
+  background-color: #99e4cf;
+  color: #122e2a;
+}
+
+.workspace-actions button:not(:first-child):not(:disabled) {
+  border-color: #435666;
+  background-color: #263440;
+  color: #edf5fa;
+}
+
+.workspace-main {
+  width: min(100%, 92rem);
+  min-width: 0;
+  margin-inline: auto;
+  padding: clamp(1rem, 3vw, 3rem);
+}
+
+.workspace-heading {
+  margin-bottom: 1.5rem;
+  padding: clamp(1.25rem, 4vw, 3.25rem);
+  border-radius: 0.85rem;
+  background: #e9f3ef;
+  color: #17302d;
+  color-scheme: light;
+}
+
+.workspace-heading p {
+  color: #42645b;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.workspace-heading h1 {
+  margin-block: 0.35rem;
+  font-size: clamp(2rem, 4vw, 3.6rem);
+  font-weight: 630;
+  letter-spacing: -0.05em;
+  line-height: 1.04;
+  overflow-wrap: anywhere;
+}
+
+.workspace-heading span {
+  color: #395951;
+}
+
+.workspace-heading button {
+  display: block;
+  margin-top: 1.1rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 0.45rem;
+  background: #21574c;
+  color: white;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.workspace-heading button:focus-visible {
+  outline-color: #21574c;
+}
+
+.workspace-metrics summary {
+  padding: 0.75rem 1rem;
+  border: 1px solid #34434e;
+  border-radius: 0.6rem;
+  background: #1a222b;
+  color: #d9e5ec;
+  cursor: pointer;
+}
+
+.workspace-main section[id] {
+  scroll-margin-top: 1rem;
+}
+
+.workspace-main .workspace-card {
+  border-color: #34434e;
+  background: #1a222b;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.workspace-card::before,
+.workspace-card::after {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .workspace-shell { display: block; }
+  .workspace-rail { position: static; min-height: 0; border: 0; border-bottom: 1px solid #303c47; }
+  .workspace-rail-content { gap: 0.75rem; padding: 1rem; }
+  .console-navigation { display: flex; flex-wrap: wrap; }
+  .workspace-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .workspace-actions button { padding-inline: 0.25rem; }
+}
+
+.maabarium-app {
+  --canvas: #f7f8f5;
+  --surface: #fff;
+  --subtle: #edf2ee;
+  --line: #d9e1db;
+  --ink: #182622;
+  --muted: #4c5e56;
+  --accent: #205b4e;
+  --on-accent: #fff;
+  --danger: #9c2636;
+  color-scheme: light;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.maabarium-app[data-theme="dark"] {
+  --canvas: #131a19;
+  --surface: #1b2523;
+  --subtle: #263330;
+  --line: #3a4a44;
+  --ink: #edf5f0;
+  --muted: #b8c8c0;
+  --accent: #9be1cb;
+  --on-accent: #142f28;
+  --danger: #ffb5be;
+  color-scheme: dark;
+}
+
+.maabarium-app .workspace-shell { background: var(--canvas); }
+.maabarium-app .workspace-rail {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.maabarium-app .console-navigation button { color: var(--muted); }
+.maabarium-app .console-navigation button:hover,
+.maabarium-app .console-navigation button:focus-visible { background: var(--subtle); color: var(--ink); }
+.maabarium-app .workspace-actions button:not(:disabled) {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+.workspace-theme { border-radius: 0.5rem; padding: 0.55rem; font-size: 0.8rem; font-weight: 650; }
+.workspace-theme[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+
+.workspace-switch {
+  appearance: none;
+  flex: none;
+  width: 2.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--muted, #64748b);
   border-radius: 999px;
+  background: var(--subtle, #334155);
+  cursor: pointer;
+  display: inline-grid;
+  align-items: center;
+  padding: 2px;
+}
+.workspace-switch::before {
+  content: "";
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--muted, #cbd5e1);
+}
+.workspace-switch:checked { background: var(--accent, #0f766e); }
+.workspace-switch:checked::before {
+  justify-self: end;
+  background: var(--on-accent, #fff);
+}
+.workspace-switch:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.research-trend-card {
+  --trend-secondary: #5152a0;
+  border-color: var(--line);
+  background: radial-gradient(ellipse at top right, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%), var(--surface);
+}
+.maabarium-app[data-theme="dark"] .research-trend-card { --trend-secondary: #c1b4ff; }
+
+.maabarium-app .workspace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0 0 1.25rem;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  color-scheme: inherit;
+}
+.maabarium-app .workspace-heading h1 { font-size: clamp(1.75rem, 3vw, 2rem); letter-spacing: -0.035em; }
+.maabarium-app .workspace-heading :is(p, span) { color: var(--muted); }
+.workspace-heading-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.maabarium-app .workspace-heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  margin: 0;
+  border: 1px solid var(--line);
+}
+.maabarium-app .workspace-primary { background: var(--accent); color: var(--on-accent); }
+.maabarium-app .workspace-secondary { background: var(--surface); color: var(--ink); }
+.maabarium-app .workspace-primary[data-run-state="running"] { background: var(--surface); color: var(--danger); }
+.workspace-heading button:disabled { opacity: 0.55; cursor: not-allowed; }
+.maabarium-app :is(button, a, input, select, textarea, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.maabarium-app .workspace-metrics summary,
+.maabarium-app .workspace-card { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.workspace-metrics > section { margin-top: 0.75rem; }
+
+/* Page background and native controls follow the theme outside the app root. */
+html[data-theme="light"],
+html[data-theme="light"] body {
+  background: #f7f8f5;
+  color-scheme: light;
+}
+html[data-theme="dark"],
+html[data-theme="dark"] body {
+  background: #131a19;
+  color-scheme: dark;
+}
+.workspace-run-status {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+.maabarium-app .workspace-heading .workspace-run-status[data-run-state="running"] { color: var(--accent); }
+.maabarium-app .workspace-heading .workspace-run-status[data-run-state="stopping"] { color: var(--danger); }
+
+/* Compatibility for existing slate-based panels while they adopt surface tokens.
+   Class selectors match a whole class token ([class^=…] or [class*=" …"]),
+   so variants such as hover:bg-white/10 are not restyled permanently. */
+.maabarium-app[data-theme="light"] :is(.text-white,.text-slate-50,.text-slate-100,.text-slate-200) { color: var(--ink); }
+.maabarium-app[data-theme="light"] :is(.text-slate-300,.text-slate-400,.text-slate-500,.text-slate-600,[class^="text-white/"],[class*=" text-white/"]) { color: var(--muted); }
+.maabarium-app[data-theme="light"] :is(.text-teal-200,.text-teal-300,.text-teal-400,.text-emerald-300,.text-emerald-400,[class^="text-teal-300/"],[class*=" text-teal-300/"]) { color: var(--accent); }
+.maabarium-app[data-theme="light"] :is(.text-rose-100,.text-rose-200,.text-rose-300,.text-rose-400,.text-red-400) { color: var(--danger); }
+.maabarium-app[data-theme="light"] :is(.text-yellow-300,.text-amber-200,.text-amber-300,.text-amber-400) { color: #74461a; }
+.maabarium-app[data-theme="light"] :is(.text-blue-300,.text-blue-400,.text-sky-300,.text-cyan-300) { color: #255885; }
+.maabarium-app[data-theme="light"] :is(.bg-slate-800,.bg-slate-900,.bg-slate-950,[class^="bg-slate-800/"],[class*=" bg-slate-800/"],[class^="bg-slate-900/"],[class*=" bg-slate-900/"],[class^="bg-slate-950/"],[class*=" bg-slate-950/"],[class^="bg-white/"],[class*=" bg-white/"]) { background-color: var(--subtle); }
+.maabarium-app[data-theme="light"] :is([class^="border-white/"],[class*=" border-white/"],[class^="border-slate-800"],[class*=" border-slate-800"]) { border-color: var(--line); }
+.maabarium-app[data-theme="light"] [class*="fixed inset-0"][class*="bg-slate-950/"] { background-color: rgb(24 38 34 / 50%); }
+.maabarium-app[data-theme="light"] .workspace-card > div:first-child { background-image: none; }
+.maabarium-app[data-theme="light"] :is([class*="hover:bg-white/"]):hover { background-color: var(--subtle); }
+
+/* Dark: lift small muted labels and translucent text to at least 4.5:1. */
+.maabarium-app[data-theme="dark"] :is(.text-slate-500,.text-slate-600) { color: #9fb1a9; }
+.maabarium-app[data-theme="dark"] :is([class^="text-white/"],[class*=" text-white/"]) { color: var(--muted); }
+
+/* Respect the system's Reduce motion setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(
-    180deg,
-    rgba(45, 212, 191, 0.65),
-    rgba(251, 191, 36, 0.55)
+/* Evidence selector: three equal-height cards when there is room, otherwise
+   one stacked column. The column minimum is a third of the row above the
+   threshold and the full row below it, so the cards never form a 2 + 1 grid. */
+.evidence-selector {
+  display: grid;
+  gap: 0.5rem;
+  align-items: stretch;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, max(calc((100% - 1rem) / 3), calc((36rem - 100%) * 999))), 1fr)
   );
+}
+
+/* Each card spans three shared rows (label, summary, badge), so labels,
+   summaries and badges line up across the row even when one label wraps. */
+.evidence-card {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0.25rem;
+  justify-items: start;
 }

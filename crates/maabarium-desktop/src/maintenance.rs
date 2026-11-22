@@ -83,7 +83,7 @@ pub fn inspect_experiment_branch_inventory(
         .head()
         .ok()
         .filter(|head| head.is_branch())
-        .and_then(|head| head.shorthand().map(str::to_owned));
+        .and_then(|head| head.shorthand().ok().map(str::to_owned));
     let mut branches = Vec::new();
     for branch in repo
         .branches(Some(BranchType::Local))

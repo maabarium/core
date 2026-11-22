@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { researchStepLabel } from "../../lib/titles";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Activity, History, Terminal } from "lucide-react";
 import { buildPatchPreview } from "../../lib/analytics";
 import type {
@@ -7,6 +8,9 @@ import type {
   PersistedProposal,
 } from "../../types/console";
 import { Badge } from "../ui/Badge";
+import { ResearchRunHistory, type ResearchJob } from "../ResearchQueue";
+
+const ResearchOutput = lazy(() => import("../ResearchOutput"));
 
 const historyBadge: Record<
   HistoryRow["status"],
@@ -20,9 +24,18 @@ const historyBadge: Record<
   failed: { color: "rose", label: "Failed" },
 };
 
+const ACTIVITY_TABS = [
+  { id: "history" as const, label: "History", icon: History },
+  { id: "diff" as const, label: "Diff View", icon: Terminal },
+  { id: "logs" as const, label: "Logs", icon: Activity },
+];
+
 export function ConsoleActivityPanel({
   activeTab,
   history,
+  researchJobs = [],
+  reportingJob,
+  currentResearchJob,
   latestProposal,
   winnerProposal,
   selectedWinnerProposal,
@@ -33,6 +46,9 @@ export function ConsoleActivityPanel({
 }: {
   activeTab: ConsoleTab;
   history: HistoryRow[];
+  researchJobs?: ResearchJob[];
+  reportingJob?: ResearchJob;
+  currentResearchJob?: ResearchJob;
   latestProposal: PersistedProposal | null;
   winnerProposal: PersistedProposal | null;
   selectedWinnerProposal: PersistedProposal | null;
@@ -130,17 +146,30 @@ export function ConsoleActivityPanel({
   const truncatedPatchPreview = activePatchPreview.slice(0, 40);
 
   return (
-    <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
-      <div className="flex border-b border-slate-800">
-        {[
-          { id: "history" as const, label: "History", icon: History },
-          { id: "diff" as const, label: "Diff View", icon: Terminal },
-          { id: "logs" as const, label: "Logs", icon: Activity },
-        ].map(({ id, label, icon: Icon }) => (
+    <div id="console-activity" className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden shadow-inner">
+      <div className="flex overflow-x-auto border-b border-slate-800" role="tablist" aria-label="Console activity">
+        {ACTIVITY_TABS.map(({ id, label, icon: Icon }, index) => (
           <button
             key={id}
+            id={`console-tab-${id}`}
+            role="tab"
+            aria-selected={activeTab === id}
+            aria-controls="console-activity-content"
+            tabIndex={activeTab === id ? 0 : -1}
             onClick={() => onChangeTab(id)}
-            className={`px-6 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all flex items-center gap-2 ${activeTab === id ? "text-teal-300 bg-white/5 border-b border-amber-400" : "text-slate-500 hover:text-slate-300"}`}
+            onKeyDown={(event) => {
+              // Arrow keys, Home and End move between tabs (WAI-ARIA tabs pattern).
+              const last = ACTIVITY_TABS.length - 1;
+              const target = event.key === "ArrowRight" ? (index === last ? 0 : index + 1)
+                : event.key === "ArrowLeft" ? (index === 0 ? last : index - 1)
+                : event.key === "Home" ? 0 : event.key === "End" ? last : null;
+              if (target === null) return;
+              event.preventDefault();
+              const next = ACTIVITY_TABS[target].id;
+              onChangeTab(next);
+              document.getElementById(`console-tab-${next}`)?.focus();
+            }}
+            className={`flex shrink-0 items-center gap-2 px-3 py-3 text-xs font-black uppercase tracking-[0.2em] transition-all sm:px-6 ${activeTab === id ? "text-teal-300 bg-white/5 border-b border-amber-400" : "text-slate-500 hover:text-slate-300"}`}
             type="button"
           >
             <Icon size={12} />
@@ -148,9 +177,17 @@ export function ConsoleActivityPanel({
           </button>
         ))}
       </div>
-      <div className="p-4 max-h-80 overflow-y-auto">
+      <div className="p-4" id="console-activity-content" data-testid="console-activity-content"
+        role="tabpanel" aria-labelledby={`console-tab-${activeTab}`} tabIndex={0}>
         {activeTab === "history" ? (
-          history.length > 0 ? (
+          <div className="space-y-5">
+          {researchJobs.length > 0 && <section aria-label="Research history">
+            <h3 className="mb-2 font-semibold">Research queue experiments</h3>
+            <ResearchRunHistory jobs={researchJobs} />
+          </section>}
+          {!reportingJob && <section aria-label="Workflow history">
+            <h3 className="mb-2 font-semibold">Workflow engine runs</h3>
+          {history.length > 0 ? (
             <table className="w-full text-left text-xs">
               <tbody className="divide-y divide-white/5">
                 {history.map((entry) => (
@@ -200,9 +237,26 @@ export function ConsoleActivityPanel({
               No persisted experiments yet. Start the engine to populate real
               history rows.
             </div>
-          )
+          )}
+          </section>}
+          </div>
         ) : activeTab === "diff" ? (
-          activeDiffProposal ? (
+          currentResearchJob ? (
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold">{currentResearchJob.experiment_title ?? "Current research experiment"}</h3>
+                <p className="mt-1 text-sm text-[var(--muted)]">This run recorded evaluation results, not a file patch.</p>
+              </div>
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
+                {currentResearchJob.review_pending && <div className="mb-3"><Badge color="amber">Awaiting human review</Badge></div>}
+                {currentResearchJob.result ? (
+                  <Suspense fallback={<p className="text-sm">Loading report…</p>}>
+                    <ResearchOutput text={currentResearchJob.result} />
+                  </Suspense>
+                ) : <p className="text-sm text-[var(--muted)]">No result has been recorded for this run yet.</p>}
+              </div>
+            </div>
+          ) : activeDiffProposal ? (
             <div className="space-y-4 font-mono text-[11px] text-slate-500 leading-loose">
               {diffOptions.length > 1 ? (
                 <div className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 p-1">
@@ -231,7 +285,7 @@ export function ConsoleActivityPanel({
               </div>
 
               {activeDiffProposal.file_patches.length === 0 ? (
-                <div>Waiting for persisted proposal patch data.</div>
+                <div>No saved changes to show yet.</div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-[15rem_minmax(0,1fr)]">
                   <div className="max-h-64 space-y-2 overflow-y-auto rounded-xl border border-white/10 bg-slate-950/60 p-3">
@@ -298,6 +352,25 @@ export function ConsoleActivityPanel({
               Waiting for persisted proposal patch data in SQLite.
             </div>
           )
+        ) : reportingJob ? (
+          <div className="space-y-2">
+            <h3 className="font-semibold">{reportingJob.experiment_title ?? "Current experiment"}</h3>
+            <p className="text-sm text-[var(--muted)]">Only activity recorded for this research run is shown here.</p>
+            {researchJobs.length ? <ol className="divide-y divide-[var(--line)]">
+              {[...researchJobs].reverse().map((job) => {
+                const step = job.id.endsWith(":review") ? "AI review"
+                  : job.lane === "Local evidence" ? "Local benchmark and audit" : researchStepLabel(job.id);
+                const status = ({ done: "Completed", failed: "Failed", running: "Running", queued: "Waiting to run" } as Record<string, string>)[job.state] ?? job.state;
+                const provider = job.lane === "codex" ? "Codex" : job.lane;
+                return <li key={job.id} className="py-2 text-sm">
+                  <p className="font-semibold">{step} · {status}</p>
+                  <p className="text-[var(--muted)]">{provider} · {job.attempts} {job.attempts === 1 ? "attempt" : "attempts"}</p>
+                  {job.detail && (job.state !== "done" || job.lane === "Local evidence") &&
+                    <p className="break-words text-sm">{job.detail}</p>}
+                </li>;
+              })}
+            </ol> : <p className="text-sm">No research activity was recorded.</p>}
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="flex items-center gap-3">
@@ -319,7 +392,7 @@ export function ConsoleActivityPanel({
                     <div key={`${line}-${index}`}>{line}</div>
                   ))
               ) : (
-                <div>Waiting for tracing output in {logPath}</div>
+                <div>Waiting for activity in {logPath}</div>
               )}
             </div>
           </div>

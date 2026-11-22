@@ -142,11 +142,8 @@ impl GitManager {
             let checked_out_branch = repo
                 .head()
                 .ok()
-                .and_then(|head| {
-                    head.is_branch()
-                        .then(|| head.shorthand().map(str::to_owned))
-                })
-                .flatten();
+                .filter(|head| head.is_branch())
+                .and_then(|head| head.shorthand().ok().map(str::to_owned));
             let checkout_was_clean = workdir
                 .as_ref()
                 .map(|workdir| is_checkout_clean(workdir))

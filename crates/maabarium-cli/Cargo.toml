@@ -1,6 +1,6 @@
 [package]
 name = "maabarium-cli"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 license = "Apache-2.0"
 build = "build.rs"
@@ -21,6 +21,7 @@ tracing-appender = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 secrecy = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "maabarium-desktop"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
@@ -10,10 +10,12 @@ base64 = "0.22"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+sha2.workspace = true
 anyhow.workspace = true
 base64 = "0.22"
 chrono.workspace = true
 git2.workspace = true
+rusqlite.workspace = true
 maabarium-core = { path = "../maabarium-core" }
 secrecy.workspace = true
 serde.workspace = true
@@ -29,6 +31,10 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 sysinfo = "0.33"
 url = "2"
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }

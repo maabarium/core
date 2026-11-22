@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::error::UpdaterError;
+use maabarium_core::telegram::TelegramConfig;
 use maabarium_core::{
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EngineTimingSummary, EvaluatorRegistry,
     ExportFormat, GitDependencyEnsureOutcome, Persistence, PromotionOutcome, ReadinessLevel,
@@ -8,11 +9,13 @@ use maabarium_core::{
     ensure_git_dependency, install_cli_update,
 };
 use secrecy::{ExposeSecret, SecretString};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+mod render;
 use tracing_subscriber::prelude::*;
 
 #[derive(Parser)]
@@ -71,6 +74,12 @@ enum Commands {
         #[command(subcommand)]
         action: SelfAction,
     },
+    /// Manage workflow run groups
+    #[command(subcommand)]
+    Group(GroupCommands),
+    /// Configure Telegram notifications
+    #[command(subcommand)]
+    Telegram(TelegramCommands),
 }
 
 #[derive(Subcommand)]
@@ -99,6 +108,113 @@ enum SelfAction {
     Check,
     /// Download and install the newest CLI release for this platform
     Update,
+}
+
+#[derive(Subcommand)]
+enum GroupCommands {
+    /// Create a new workflow run group
+    Create {
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Add a blueprint to a group
+    Add {
+        name: String,
+        #[arg(value_name = "BLUEPRINT_PATH")]
+        blueprint_path: PathBuf,
+        #[arg(long)]
+        blueprint_name: Option<String>,
+    },
+    /// List all run groups
+    List,
+    /// Show details for a group
+    Show { name: String },
+    /// Remove a group (or a blueprint from a group)
+    Remove {
+        name: String,
+        #[arg(long)]
+        blueprint: Option<String>,
+    },
+    /// Run all workflows in a group
+    Run {
+        name: String,
+        #[arg(long)]
+        db: Option<String>,
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run every configured group
+    RunAll {
+        #[arg(long)]
+        db: Option<String>,
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run groups whose schedules are currently due
+    RunDue {
+        #[arg(long)]
+        db: Option<String>,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Show latest status for a group
+    Status {
+        name: String,
+        #[arg(long, default_value = "data/maabarium.db")]
+        db: String,
+    },
+    /// Show group run results
+    Results {
+        name: String,
+        #[arg(long, default_value = "data/maabarium.db")]
+        db: String,
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        live: bool,
+    },
+    /// Inspect a specific group run in detail
+    Inspect {
+        name: String,
+        #[arg(long, default_value = "data/maabarium.db")]
+        db: String,
+        #[arg(long)]
+        run: Option<String>,
+    },
+    /// Set or update a group's schedule
+    Schedule {
+        name: String,
+        #[arg(long)]
+        cron: Option<String>,
+        #[arg(long)]
+        at: Option<String>,
+        #[arg(long)]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum TelegramCommands {
+    /// Configure Telegram bot token and chat ID
+    Setup {
+        #[arg(long)]
+        chat_id: String,
+    },
+    /// Send a test notification
+    Test,
+    /// Show current Telegram configuration
+    Status,
+    /// Disable all Telegram notifications
+    Disable,
+    /// Enable all Telegram notifications
+    Enable,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -309,6 +425,8 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         },
+        Commands::Group(ref cmd) => handle_group_command(cmd).await?,
+        Commands::Telegram(ref cmd) => handle_telegram_command(cmd).await?,
     }
 
     Ok(())
@@ -484,6 +602,521 @@ fn mask_secret(value: &str) -> String {
     }
 
     format!("****{}", visible)
+}
+
+// ============== Group Command Handlers ==============
+
+/// Close group runs left active by a process that no longer exists.
+fn reconcile_interrupted_runs(persistence: &Persistence) {
+    let none_here = std::collections::HashSet::new();
+    match persistence.reconcile_interrupted_group_runs(
+        &none_here,
+        &maabarium_core::group_runner::process_is_alive,
+    ) {
+        Ok(0) => {}
+        Ok(closed) => eprintln!("Marked {closed} interrupted group run(s) as failed."),
+        Err(error) => eprintln!("Could not check for interrupted group runs: {error}"),
+    }
+}
+
+async fn handle_group_command(cmd: &GroupCommands) -> anyhow::Result<()> {
+    match cmd {
+        GroupCommands::Create { name, description } => {
+            if name.trim().is_empty() {
+                anyhow::bail!("Group name cannot be empty");
+            }
+            let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            let now = chrono::Utc::now().to_rfc3339();
+            let group = maabarium_core::run_groups::RunGroup {
+                name: name.clone(),
+                description: description.clone().unwrap_or_default(),
+                created_at: now,
+                blueprints: vec![],
+                execution_mode: maabarium_core::run_groups::ExecutionMode::Sequential,
+                schedule: None,
+                telegram_enabled: true,
+            };
+            persistence.create_group(&group)?;
+            println!("Created run group: {name}");
+            println!("{}", crate::render::render_group_card(&group));
+            Ok(())
+        }
+        GroupCommands::Add {
+            name,
+            blueprint_path,
+            blueprint_name,
+        } => {
+            let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            let group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+
+            // Derive blueprint name from path or use provided name
+            let bp_name = blueprint_name.clone().unwrap_or_else(|| {
+                blueprint_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("blueprint")
+                    .to_owned()
+            });
+
+            let next_order = group.blueprints.len() as u32;
+            let entry = maabarium_core::run_groups::GroupBlueprintEntry {
+                blueprint_name: bp_name.clone(),
+                blueprint_path: blueprint_path.display().to_string(),
+                sort_order: next_order,
+                notifications_enabled: true,
+            };
+            persistence.add_blueprint_to_group(name, &entry)?;
+            println!(
+                "Added '{}' -> {} (order: {})",
+                bp_name,
+                blueprint_path.display(),
+                next_order
+            );
+            Ok(())
+        }
+        GroupCommands::List => {
+            let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            let groups = persistence.list_groups()?;
+            if groups.is_empty() {
+                println!("No run groups configured.");
+                println!("  Create one with: maabarium group create <name>");
+                return Ok(());
+            }
+            for group in &groups {
+                println!("{}", crate::render::render_group_card(group));
+                println!();
+            }
+            Ok(())
+        }
+        GroupCommands::Show { name } => {
+            let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            let group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+            println!("{}", crate::render::render_group_card(&group));
+
+            // Show recent runs
+            let runs = persistence.list_group_runs(name, 5)?;
+            if !runs.is_empty() {
+                println!("\nRecent runs:");
+                println!("{}", crate::render::render_recent_group_runs(&runs));
+            }
+            Ok(())
+        }
+        GroupCommands::Remove { name, blueprint } => {
+            let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            reconcile_interrupted_runs(&persistence);
+            if let Some(bp_name) = blueprint {
+                persistence.remove_blueprint_from_group(name, bp_name)?;
+                println!("Removed blueprint '{bp_name}' from group '{name}'");
+            } else {
+                persistence.delete_group(name)?;
+                println!("Deleted group '{name}'");
+            }
+            Ok(())
+        }
+        GroupCommands::Run {
+            name,
+            db,
+            mode,
+            yes,
+        } => {
+            let db_path = db
+                .clone()
+                .unwrap_or_else(|| default_db_path().display().to_string());
+            let persistence = Arc::new(Persistence::open(&db_path)?);
+            let group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+
+            let cancel = CancellationToken::new();
+            let cancel_clone = cancel.clone();
+            tokio::spawn(async move {
+                if let Ok(()) = tokio::signal::ctrl_c().await {
+                    eprintln!("\nReceived Ctrl-C, shutting down...");
+                    cancel_clone.cancel();
+                }
+            });
+
+            // Determine execution mode
+            let mut force_mode = mode
+                .as_deref()
+                .map(maabarium_core::run_groups::ExecutionMode::from_str)
+                .flatten();
+
+            if force_mode.is_none() {
+                let hp = maabarium_core::run_groups::HardwareProfile::detect();
+                if hp.parallel_feasible(group.blueprints.len()) {
+                    println!("Hardware profile suggests parallel execution is feasible.");
+                    println!(
+                        "  CPUs: {} | Memory: {:.1} GB | GPU: {}",
+                        hp.logical_cpus,
+                        hp.total_memory_gb,
+                        if hp.gpu_available { "yes" } else { "no" }
+                    );
+                    if !yes {
+                        eprint!("Run in parallel mode? [y/N]: ");
+                        std::io::stdout().flush()?;
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input)?;
+                        if input.trim().eq_ignore_ascii_case("y") {
+                            println!("Running in parallel mode.");
+                            force_mode = Some(maabarium_core::run_groups::ExecutionMode::Parallel);
+                        } else {
+                            println!("Falling back to sequential mode.");
+                            force_mode =
+                                Some(maabarium_core::run_groups::ExecutionMode::Sequential);
+                        }
+                    } else {
+                        println!("Running in parallel mode (auto-confirmed).");
+                        force_mode = Some(maabarium_core::run_groups::ExecutionMode::Parallel);
+                    }
+                } else {
+                    println!(
+                        "Running in sequential mode (parallel not feasible on this hardware)."
+                    );
+                    force_mode = Some(maabarium_core::run_groups::ExecutionMode::Sequential);
+                }
+            }
+
+            let runner = maabarium_core::group_runner::GroupRunner::new(
+                persistence.clone(),
+                db_path,
+                cancel,
+            );
+
+            match runner.run_group(&group, force_mode).await {
+                Ok(run) => {
+                    println!("\nGroup run completed:");
+                    println!("  Run ID: {}", run.id);
+                    println!("  Status: {:?}", run.status);
+                    if let Some(summary) = &run.summary {
+                        println!("  Summary: {summary}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Group run failed: {e}");
+                }
+            }
+            Ok(())
+        }
+        GroupCommands::RunAll { db, mode, yes: _ } => {
+            let db_path = db
+                .clone()
+                .unwrap_or_else(|| default_db_path().display().to_string());
+            let persistence = Arc::new(Persistence::open(&db_path)?);
+            let groups = persistence.list_groups()?;
+            if groups.is_empty() {
+                println!("No run groups configured.");
+                return Ok(());
+            }
+            let force_mode = mode
+                .as_deref()
+                .and_then(maabarium_core::run_groups::ExecutionMode::from_str);
+            for group in groups {
+                if group.blueprints.is_empty() {
+                    println!("Skipping '{}' because it has no blueprints.", group.name);
+                    continue;
+                }
+                let runner = maabarium_core::group_runner::GroupRunner::new(
+                    persistence.clone(),
+                    db_path.clone(),
+                    CancellationToken::new(),
+                );
+                let run = runner
+                    .run_group(&group, force_mode)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                println!(
+                    "Ran '{}' -> {:?}{}",
+                    group.name,
+                    run.status,
+                    run.summary
+                        .as_ref()
+                        .map(|summary| format!(" ({summary})"))
+                        .unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        GroupCommands::RunDue { db, yes: _ } => {
+            let db_path = db
+                .clone()
+                .unwrap_or_else(|| default_db_path().display().to_string());
+            let persistence = Arc::new(Persistence::open(&db_path)?);
+            reconcile_interrupted_runs(&persistence);
+            let now = chrono::Utc::now();
+            let due_groups = persistence
+                .list_groups()?
+                .into_iter()
+                .filter(|group| {
+                    group
+                        .schedule
+                        .as_ref()
+                        .is_some_and(|schedule| schedule.is_due(&now))
+                })
+                .collect::<Vec<_>>();
+            if due_groups.is_empty() {
+                println!("No scheduled run groups are due.");
+                return Ok(());
+            }
+            for group in due_groups {
+                if group.blueprints.is_empty() {
+                    println!(
+                        "Skipping due group '{}' because it has no blueprints.",
+                        group.name
+                    );
+                    continue;
+                }
+                let runner = maabarium_core::group_runner::GroupRunner::new(
+                    persistence.clone(),
+                    db_path.clone(),
+                    CancellationToken::new(),
+                );
+                let run = runner
+                    .triggered_by_schedule()
+                    .run_group(&group, None)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                println!(
+                    "Ran due group '{}' -> {:?}{}",
+                    group.name,
+                    run.status,
+                    run.summary
+                        .as_ref()
+                        .map(|summary| format!(" ({summary})"))
+                        .unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        GroupCommands::Status { name, db } => {
+            let persistence = Persistence::open(db)?;
+            reconcile_interrupted_runs(&persistence);
+            let group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+            println!("{}", crate::render::render_group_card(&group));
+            let runs = persistence.list_group_runs(name, 1)?;
+            if let Some(run) = runs.first() {
+                let experiments = persistence.list_group_run_experiments(&run.id)?;
+                println!("\nLatest run:");
+                println!(
+                    "{}",
+                    crate::render::render_group_run_details(run, &experiments)
+                );
+            } else {
+                println!("\nNo runs recorded yet.");
+            }
+            Ok(())
+        }
+        GroupCommands::Results {
+            name,
+            db,
+            run,
+            live: _,
+        } => {
+            let persistence = Persistence::open(db)?;
+            let _group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+
+            let runs = if let Some(run_id) = run {
+                vec![
+                    persistence
+                        .get_group_run(run_id)?
+                        .ok_or_else(|| anyhow::anyhow!("Run '{run_id}' not found"))?,
+                ]
+            } else {
+                persistence.list_group_runs(name, 5)?
+            };
+
+            for run_entry in &runs {
+                let experiments = persistence.list_group_run_experiments(&run_entry.id)?;
+                println!(
+                    "{}",
+                    crate::render::render_group_run_details(run_entry, &experiments)
+                );
+                println!();
+            }
+            Ok(())
+        }
+        GroupCommands::Inspect { name, db, run } => {
+            let persistence = Persistence::open(db)?;
+            let group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+
+            let runs = if let Some(run_id) = run {
+                vec![
+                    persistence
+                        .get_group_run(run_id)?
+                        .ok_or_else(|| anyhow::anyhow!("Run '{run_id}' not found"))?,
+                ]
+            } else {
+                persistence.list_group_runs(name, 3)?
+            };
+
+            println!("{}", crate::render::header(&group.name));
+            for run_entry in &runs {
+                let experiments = persistence.list_group_run_experiments(&run_entry.id)?;
+                println!(
+                    "{}",
+                    crate::render::render_group_run_details(run_entry, &experiments)
+                );
+                println!();
+
+                // Show detailed experiment info for each completed experiment
+                for exp in &experiments {
+                    if let Some(exp_id) = exp.experiment_id {
+                        if let Some(persisted) = persistence.experiment_by_id(exp_id)? {
+                            println!(
+                                "  Experiment #{}: score={:.3} duration={}ms outcome={:?}",
+                                persisted.id,
+                                persisted.weighted_total,
+                                persisted.duration_ms,
+                                persisted.promotion_outcome,
+                            );
+                            for metric in &persisted.metrics {
+                                println!(
+                                    "    {} = {:.3} (w={})",
+                                    metric.name, metric.value, metric.weight
+                                );
+                            }
+                            if let Some(branch) = &persisted.promoted_branch_name {
+                                println!("    Branch: {branch}");
+                            }
+                            println!();
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        GroupCommands::Schedule {
+            name,
+            cron,
+            enable: _,
+            disable,
+            at,
+        } => {
+            use maabarium_core::run_groups::{ScheduleKind, ScheduledRun};
+
+            let persistence = Persistence::open(&default_db_path().display().to_string())?;
+            let _group = persistence
+                .get_group(name)?
+                .ok_or_else(|| anyhow::anyhow!("Group '{name}' not found"))?;
+            let enabled = if *disable { false } else { true };
+
+            let kind = if let Some(cron_expr) = cron {
+                ScheduleKind::Cron {
+                    expression: cron_expr.trim().to_owned(),
+                }
+            } else if let Some(dt) = at {
+                ScheduleKind::OneShot {
+                    datetime: dt.trim().to_owned(),
+                }
+            } else {
+                anyhow::bail!("Must specify --cron <expr> or --at <datetime>");
+            };
+            let schedule = ScheduledRun::new_validated(kind, enabled, &chrono::Utc::now())
+                .map_err(|e| anyhow::anyhow!(e))?;
+            persistence.update_group_schedule(name, &schedule)?;
+            println!(
+                "Updated schedule for group '{name}': {}",
+                schedule.kind.describe()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn handle_telegram_command(cmd: &TelegramCommands) -> anyhow::Result<()> {
+    let persistence = Persistence::open(&default_db_path().display().to_string())?;
+    match cmd {
+        TelegramCommands::Setup { chat_id } => {
+            let mut token = String::new();
+            io::stdin().take(4096).read_to_string(&mut token)?;
+            let bot_token = token.trim();
+            if bot_token.trim().is_empty() || chat_id.trim().is_empty() {
+                anyhow::bail!("Bot token and chat ID cannot be empty");
+            }
+            let config = TelegramConfig {
+                bot_token: bot_token.to_owned(),
+                chat_id: chat_id.clone(),
+                enabled: true,
+                notify_on_start: true,
+                notify_on_complete: true,
+                notify_on_error: true,
+                notify_on_promotion: true,
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            persistence.telegram_set_config(&config)?;
+            println!("Telegram notifications configured.");
+            println!("  Chat ID: {chat_id}");
+            println!("  Notifications are enabled.");
+            println!("  Use 'maabarium telegram test' to send a test message.");
+            Ok(())
+        }
+        TelegramCommands::Test => {
+            let config = persistence.telegram_get_config()?.ok_or_else(|| {
+                anyhow::anyhow!("Telegram not configured. Use 'maabarium telegram setup' first.")
+            })?;
+            let notifier = maabarium_core::telegram::TelegramNotifier::new(&config);
+            match notifier
+                .send_message("Hello from Maabarium! This is a test notification.")
+                .await
+            {
+                Ok(true) => println!("Test notification sent successfully!"),
+                Ok(false) => eprintln!("Telegram notifier is not enabled."),
+                Err(e) => eprintln!("Failed to send test notification: {e}"),
+            }
+            Ok(())
+        }
+        TelegramCommands::Status => {
+            match persistence.telegram_get_config()? {
+                Some(config) => {
+                    println!("Telegram Configuration:");
+                    println!("  Chat ID: {}", config.chat_id);
+                    println!("  Enabled: {}", config.enabled);
+                    println!("  Notify on start: {}", config.notify_on_start);
+                    println!("  Notify on complete: {}", config.notify_on_complete);
+                    println!("  Notify on error: {}", config.notify_on_error);
+                    println!("  Notify on promotion: {}", config.notify_on_promotion);
+                    println!("  Last updated: {}", config.updated_at);
+                }
+                None => {
+                    println!("Telegram is not configured.");
+                    println!(
+                        "  Pipe the token into 'maabarium telegram setup --chat-id <id>' to configure."
+                    );
+                }
+            }
+            Ok(())
+        }
+        TelegramCommands::Disable => {
+            let mut config = persistence
+                .telegram_get_config()?
+                .ok_or_else(|| anyhow::anyhow!("Telegram not configured."))?;
+            config.enabled = false;
+            config.updated_at = chrono::Utc::now().to_rfc3339();
+            persistence.telegram_set_config(&config)?;
+            println!("Telegram notifications disabled.");
+            Ok(())
+        }
+        TelegramCommands::Enable => {
+            let mut config = persistence
+                .telegram_get_config()?
+                .ok_or_else(|| anyhow::anyhow!("Telegram not configured."))?;
+            config.enabled = true;
+            config.updated_at = chrono::Utc::now().to_rfc3339();
+            persistence.telegram_set_config(&config)?;
+            println!("Telegram notifications enabled.");
+            Ok(())
+        }
+    }
 }
 
 fn render_get_key_message(

@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Default capability set for the Maabarium desktop console.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "updater:default"]
+  "permissions": ["core:default", "dialog:allow-open", "updater:default", "core:webview:allow-set-webview-zoom"]
 }

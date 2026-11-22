@@ -65,6 +65,7 @@ export function ConsoleMaintenancePanel({
   onStartOllama,
   onApplyFixes,
   onPreviewBranchCleanup,
+  onInspectBranches,
   onCleanupBranches,
   onCheckForUpdates,
   onInstallUpdate,
@@ -96,6 +97,7 @@ export function ConsoleMaintenancePanel({
   onPreviewBranchCleanup: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
+  onInspectBranches?: () => Promise<void>;
   onCleanupBranches: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
@@ -151,7 +153,7 @@ export function ConsoleMaintenancePanel({
     {
       id: "stack",
       label: "Persisted Stack",
-      detail: `${experimentCount} experiments`,
+      detail: `${experimentCount} workflow experiments`,
       ready: experimentCount > 0 || proposalCount > 0 || logCount > 0,
       icon: Layers,
     },
@@ -227,6 +229,7 @@ export function ConsoleMaintenancePanel({
             onStartOllama={onStartOllama}
             onApplyFixes={onApplyFixes}
             onPreviewBranchCleanup={onPreviewBranchCleanup}
+            onInspectBranches={onInspectBranches}
             onCleanupBranches={onCleanupBranches}
             embedded
           />

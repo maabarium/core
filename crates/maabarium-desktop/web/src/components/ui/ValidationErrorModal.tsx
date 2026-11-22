@@ -1,3 +1,4 @@
+import { ModalDialog } from "./ModalDialog";
 import { AlertCircle } from "lucide-react";
 
 type ValidationErrorModalProps = {
@@ -20,7 +21,7 @@ export function ValidationErrorModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+    <ModalDialog label={heading} role="alertdialog" onCancel={onClose} className="items-center justify-center open:flex">
       <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-rose-500/30 bg-slate-950/95 shadow-2xl shadow-rose-950/40">
         <div className="border-b border-white/5 bg-rose-500/10 px-6 py-4">
           <div className="flex items-start gap-3">
@@ -55,6 +56,6 @@ export function ValidationErrorModal({
           </div>
         </div>
       </div>
-    </div>
+    </ModalDialog>
   );
 }

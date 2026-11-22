@@ -1,3 +1,4 @@
+import { ModalDialog } from "../ui/ModalDialog";
 import { useEffect, useMemo, useState } from "react";
 import {
   GitBranch,
@@ -39,6 +40,7 @@ export function ReadinessCenterCard({
   onInstallOllama,
   onStartOllama,
   onApplyFixes,
+  onInspectBranches,
   onPreviewBranchCleanup,
   onCleanupBranches,
   embedded = false,
@@ -52,6 +54,7 @@ export function ReadinessCenterCard({
   onInstallOllama: () => void;
   onStartOllama: () => void;
   onApplyFixes: () => Promise<FixOutcome[] | null>;
+  onInspectBranches?: () => Promise<void>;
   onPreviewBranchCleanup: (
     thresholdMonths: number,
   ) => Promise<ExperimentBranchCleanupResult | null>;
@@ -67,7 +70,7 @@ export function ReadinessCenterCard({
     useState<ExperimentBranchCleanupResult | null>(null);
   const [cleanupConfirmOpen, setCleanupConfirmOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<
-    "preview" | "cleanup" | "fix_all" | null
+    "preview" | "cleanup" | "fix_all" | "inspect" | null
   >(null);
   const [fixResults, setFixResults] = useState<FixOutcome[] | null>(null);
   const requiredItems = readinessItems.filter(
@@ -262,7 +265,7 @@ export function ReadinessCenterCard({
                 <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
                   {experimentBranchInventory
                     ? "Track stale experiment branches in the current workspace repository before they accumulate across repeated runs."
-                    : "Choose a git-backed workspace to surface stale experiment branches and maintenance actions."}
+                    : "Branch checks run only when you ask to inspect the workspace."}
                 </div>
               </div>
               <div className="flex-none self-start">
@@ -277,11 +280,18 @@ export function ReadinessCenterCard({
                 >
                   {experimentBranchInventory
                     ? `${experimentBranchInventory.totalBranches} tracked`
-                    : "Unavailable"}
+                    : "Not checked"}
                 </Badge>
               </div>
             </div>
 
+            {onInspectBranches && <button type="button" disabled={pendingAction !== null}
+              className="min-h-10 self-start rounded-md border border-[var(--line)] px-3 text-sm"
+              onClick={async () => {
+                setPendingAction("inspect");
+                setCleanupPreview(null);
+                try { await onInspectBranches(); } finally { setPendingAction(null); }
+              }}>{pendingAction === "inspect" ? "Checking…" : "Inspect workspace branches"}</button>}
             {experimentBranchInventory ? (
               <>
                 <div className="grid grid-cols-3 gap-2">
@@ -488,7 +498,7 @@ export function ReadinessCenterCard({
       </div>
 
       {cleanupConfirmOpen ? (
-        <div className="fixed inset-0 z-[160] flex items-center justify-center bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+        <ModalDialog label="Confirm cleanup" role="alertdialog" onCancel={() => setCleanupConfirmOpen(false)} className="items-center justify-center open:flex">
           <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-rose-500/30 bg-slate-950/95 shadow-2xl shadow-rose-950/30">
             <div className="border-b border-white/5 bg-rose-500/10 px-6 py-5">
               <div className="flex items-start gap-3">
@@ -555,7 +565,7 @@ export function ReadinessCenterCard({
               </div>
             </div>
           </div>
-        </div>
+        </ModalDialog>
       ) : null}
     </>
   );

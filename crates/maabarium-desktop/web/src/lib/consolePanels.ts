@@ -1,6 +1,8 @@
 export type CollapsibleConsolePanel =
   | "analytics"
+  | "activeBlueprint"
   | "evidence"
+  | "runGroups"
   | "workflowLibrary"
   | "maintenance";
 
@@ -15,7 +17,9 @@ export const CONSOLE_PANEL_COLLAPSE_STORAGE_KEY =
 export const DEFAULT_COLLAPSIBLE_CONSOLE_PANELS: CollapsibleConsolePanelState =
   {
     analytics: false,
+    activeBlueprint: false,
     evidence: false,
+    runGroups: false,
     workflowLibrary: false,
     maintenance: false,
   };
@@ -43,10 +47,18 @@ export function loadCollapsedConsolePanels(): CollapsibleConsolePanelState {
         typeof parsed.analytics === "boolean"
           ? parsed.analytics
           : DEFAULT_COLLAPSIBLE_CONSOLE_PANELS.analytics,
+      activeBlueprint:
+        typeof parsed.activeBlueprint === "boolean"
+          ? parsed.activeBlueprint
+          : DEFAULT_COLLAPSIBLE_CONSOLE_PANELS.activeBlueprint,
       evidence:
         typeof parsed.evidence === "boolean"
           ? parsed.evidence
           : DEFAULT_COLLAPSIBLE_CONSOLE_PANELS.evidence,
+      runGroups:
+        typeof parsed.runGroups === "boolean"
+          ? parsed.runGroups
+          : DEFAULT_COLLAPSIBLE_CONSOLE_PANELS.runGroups,
       workflowLibrary:
         typeof parsed.workflowLibrary === "boolean"
           ? parsed.workflowLibrary

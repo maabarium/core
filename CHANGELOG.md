@@ -6,17 +6,47 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+The local research queue supports ordered subscription-provider plans with
+an optional automatic run window and mandatory human review checkpoints.
+
 ### Added
 
-- None.
+- A trusted local benchmark can be queued with pinned runner and auditor executables, then reviewed through a subscription lane before a human checkpoint.
+
+- The macOS application menu can check for updates in a compact panel and install only after the user chooses a release.
+
+- Research experiments can lock a local exact-answer and work-saving rule, queue a separate AI reviewer, or use both. DeepSeek is available as an opt-in paid API route for research and review, without automatic billing fallback. AI advice cannot change the local verdict.
+
+- Workflow groups with sequential or parallel runs, schedules, history, and optional Telegram notifications.
+- An experimental local ChatGPT subscription lane with a durable queue and a macOS launch agent configuration.
 
 ### Changed
 
-- None.
+- The research queue separates experiments from provider checks, shows the next action first, and formats Markdown and math while keeping raw reports under Technical details.
+
+- Updated the Maabarium identity for 0.5.0 with the Specimen mark, a lowercase wordmark, and matching desktop and browser icons.
+
+- Rebuilt the console around the active workflow, with a light default, a remembered dark option, and run controls beside the workflow status. Moved analytics and hardware metrics behind a disclosure. Workflow groups keep inline deletion confirmation.
+- Updated Rust and desktop web dependencies, including patched Wasmtime, Git and SQLite libraries.
+- Telegram reads bot tokens from the OS keychain, not from SQLite or the browser. For an unreleased development build that previously stored a token, rotate it and reconfigure with the token on stdin. Any plain-text copy left by such a build is cleared when the database opens.
+- Workflow group cron schedules use local wall-clock time and are validated when saved. Group schedules are checked by the desktop app in the background, not by the console window.
+- OpenAI-compatible providers report their own provider id in metrics, request JSON mode when a JSON response is wanted, and report empty replies as invalid responses.
 
 ### Fixed
 
-- None.
+- Opening the app no longer inspects saved workspaces. Git branch inspection is an explicit action, and the existing console metrics and roster reflect the active research experiment without a separate tab.
+
+- Desktop readiness no longer reads Keychain secrets in the background. About uses the active theme and native modal focus handling. Charts align with the rest of their card, disclosures share a control, and evidence import supports dropping or browsing for a file.
+
+- Group cron schedules now honour day-of-month and month, treat both `0` and `7` as Sunday, and support stepped ranges.
+- Group runs interrupted by a crash or quit are closed on the next start, so the group can be run or deleted again.
+- Each workflow in a group links to the experiments it recorded, not the newest experiment in the database.
+- Manual group runs no longer consume a one-time schedule or skip the next recurring run.
+- Workflow start times in group history are recorded correctly.
+- Parallel group runs execute workflows concurrently and follow the Telegram event preferences.
+- Telegram messages escape names and errors, omit local repository paths, and time out instead of stalling a run.
+- The subscription lane stops a Codex child that outlived its worker and keeps scratch files in its private state directory.
+- Light theme contrast for workflow groups, phone-width group rows, keyboard handling of group deletion, and run-status announcements.
 
 ### Breaking Changes
 

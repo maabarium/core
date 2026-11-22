@@ -10,7 +10,13 @@ use maabarium_core::blueprint::{
 };
 use maabarium_core::error::EngineError;
 use maabarium_core::git_manager::GitManager;
+use maabarium_core::group_runner::{process_is_alive, GroupRunner};
 use maabarium_core::persistence::PersistedExperiment;
+use maabarium_core::run_groups::{
+    ExecutionMode, GroupBlueprintEntry, GroupRun, GroupRunExperiment, RunGroup, ScheduleKind,
+    ScheduledRun,
+};
+use maabarium_core::telegram::TelegramConfig;
 use maabarium_core::{
     default_db_path, ensure_git_dependency, git_dependency_status, read_recent_log_lines_from_path,
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EnginePhase, EngineProgressUpdate,
@@ -19,7 +25,7 @@ use maabarium_core::{
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +41,8 @@ use tracing_subscriber::prelude::*;
 use url::Url;
 
 mod maintenance;
+mod research_evaluator;
+mod research_queue;
 mod setup;
 
 use crate::maintenance::{
@@ -45,7 +53,7 @@ use crate::setup::{
     build_ollama_status, build_readiness_items, install_ollama as install_ollama_runtime,
     load_desktop_setup, pull_recommended_ollama_models as pull_recommended_ollama_models_runtime,
     save_desktop_setup as persist_desktop_setup, start_ollama as start_ollama_runtime,
-    DesktopSetupState, OllamaStatus, ReadinessItem, ResearchSearchMode,
+    DesktopSetupState, InterruptedRunNotice, OllamaStatus, ReadinessItem, ResearchSearchMode,
 };
 
 const RELEASE_DESKTOP_RUNTIME_ID: &str = "com.maabarium.console";
@@ -55,8 +63,12 @@ const BLUEPRINTS_DIR_NAME: &str = "blueprints";
 const DEFAULT_BLUEPRINT_FILE_NAME: &str = "example.toml";
 const APP_DISPLAY_NAME: &str = "Maabarium";
 const ABOUT_MENU_ID: &str = "about_maabarium";
+const CHECK_UPDATES_MENU_ID: &str = "check_for_updates_menu";
 const LICENSE_MENU_ID: &str = "open_repository_license";
 const ABOUT_MENU_EVENT: &str = "maabarium://open-about";
+const CHECK_UPDATES_MENU_EVENT: &str = "maabarium://open-updates";
+/// Emitted when a close or quit is held back because work is running.
+const CLOSE_BLOCKED_EVENT: &str = "maabarium://close-blocked";
 const CONSOLE_EXPERIMENT_LIMIT: usize = 12;
 const CONSOLE_PROPOSAL_LIMIT: usize = 5;
 const RETAINED_WINNER_LIMIT: usize = 3;
@@ -70,6 +82,7 @@ struct AppState {
     log_path: PathBuf,
     cli_path: PathBuf,
     engine_cancel: Mutex<Option<CancellationToken>>,
+    group_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
     engine_running: Arc<AtomicBool>,
     run_state: Arc<Mutex<MutableRunState>>,
 }
@@ -294,6 +307,14 @@ struct DesktopRuntimePaths {
     cli_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupRunWithExperiments {
+    #[serde(flatten)]
+    group_run: GroupRun,
+    experiments: Vec<GroupRunExperiment>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConsoleState {
@@ -319,6 +340,9 @@ struct ConsoleState {
     experiments: Vec<PersistedExperiment>,
     proposals: Vec<PersistedProposal>,
     logs: Vec<String>,
+    run_groups: Vec<RunGroup>,
+    group_runs: Vec<GroupRunWithExperiments>,
+    telegram_config: Option<TelegramConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -509,14 +533,61 @@ fn main() {
     tauri::Builder::default()
         .menu(build_app_menu)
         .on_menu_event(handle_menu_event)
+        .on_window_event(|window, event| {
+            // Close the main window (and exit) when idle. While a flow or a
+            // workflow group is running, hold the close and let the console
+            // ask; it never swallows the click silently.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    if let Some(work) = window.try_state::<AppState>().and_then(|s| active_work(&s))
+                    {
+                        api.prevent_close();
+                        let _ = window.emit(CLOSE_BLOCKED_EVENT, work);
+                    }
+                }
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             let state = initialize_app_state(app.handle(), &runtime_paths)?;
+            let db_path = state.db_path.display().to_string();
+            let group_cancels = state.group_cancels.clone();
             app.manage(state);
+            // Runs left active by a crash or quit can never finish; close them
+            // so their groups can be run or deleted again.
+            reconcile_group_runs(&db_path, &group_cancels);
+            #[cfg(debug_assertions)]
+            if let Some(name) = std::env::var_os("MAABARIUM_QA_SIMULATE_ACTIVE_GROUP") {
+                // Debug builds only: pretend a workflow group is running so the
+                // close confirmation can be checked without starting real work.
+                if let Ok(mut active) = group_cancels.lock() {
+                    active.insert(
+                        name.to_string_lossy().into_owned(),
+                        CancellationToken::new(),
+                    );
+                }
+            }
+            start_group_scheduler(db_path, group_cancels);
+            #[cfg(target_os = "macos")]
+            if let Err(error) = install_menu_bar_item(app.handle()) {
+                warn!(%error, "Could not create the Maabarium menu bar item");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            research_queue::research_queue_list,
+            research_queue::research_queue_report,
+            research_queue::research_muse_allowance,
+            research_queue::research_queue_enqueue,
+            research_queue::research_subscription_check,
+            research_queue::research_loop_start,
+            research_queue::research_inspect_benchmark_executable,
+            research_queue::research_enqueue_benchmark,
+            research_queue::research_decide_local_checkpoint,
+            research_evaluator::research_evaluation_preview,
+            research_evaluator::research_evaluation_check,
+            research_evaluator::research_evaluation_read,
             get_console_state,
             save_desktop_setup,
             set_provider_api_key,
@@ -527,6 +598,7 @@ fn main() {
             install_cli_link,
             remove_cli_link,
             cleanup_experiment_branches_command,
+            inspect_experiment_branches_command,
             start_engine,
             stop_engine,
             open_log_file,
@@ -549,15 +621,130 @@ fn main() {
             get_recommended_profile_command,
             apply_profile_command,
             apply_fixes_command,
+            get_run_groups,
+            get_group_runs,
+            create_run_group_command,
+            add_blueprint_to_group_command,
+            delete_run_group_command,
+            set_run_group_schedule_command,
+            run_group_command,
+            stop_group_command,
+            run_due_groups_command,
+            get_telegram_config_command,
+            confirm_quit_with_active_work,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Quit (Command-Q) gets the same protection as the close button.
+            // An exit the console confirmed arrives with an explicit code.
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
+                if let Some(work) = app.try_state::<AppState>().and_then(|s| active_work(&s)) {
+                    api.prevent_exit();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.emit(CLOSE_BLOCKED_EVENT, work);
+                    }
+                }
+            }
+        });
+}
+
+#[cfg(target_os = "macos")]
+fn install_menu_bar_item(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let menu = tauri::menu::MenuBuilder::new(app)
+        .text("status_open", "Open Maabarium")
+        .separator()
+        .text("status_quit", "Quit Maabarium")
+        .build()?;
+    let mut item = tauri::tray::TrayIconBuilder::with_id("maabarium-status")
+        .menu(&menu)
+        .tooltip("Maabarium");
+    if let Some(icon) = app.default_window_icon() {
+        item = item.icon(icon.clone());
+    }
+    item.build(app)?;
+    Ok(())
+}
+
+/// Work that closing the app would interrupt.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ActiveWork {
+    flow: Option<String>,
+    groups: Vec<String>,
+}
+
+fn active_work(state: &AppState) -> Option<ActiveWork> {
+    let flow = state.engine_running.load(Ordering::SeqCst).then(|| {
+        state
+            .run_state
+            .lock()
+            .ok()
+            .and_then(|run| run.blueprint_name.clone())
+            .unwrap_or_else(|| "Active workflow".to_owned())
+    });
+    let mut groups: Vec<String> = state
+        .group_cancels
+        .lock()
+        .map(|active| active.keys().cloned().collect())
+        .unwrap_or_default();
+    groups.sort();
+    (flow.is_some() || !groups.is_empty()).then_some(ActiveWork { flow, groups })
+}
+
+/// The user chose to stop running work and quit. Record the interrupted flow
+/// so the next launch explains it, cancel everything, then exit.
+#[tauri::command]
+fn confirm_quit_with_active_work(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    if state.engine_running.load(Ordering::SeqCst) {
+        let mut setup = load_desktop_setup(&state.settings_path);
+        let run = state.run_state.lock().ok().map(|run| {
+            (
+                run.blueprint_name.clone(),
+                run.workspace_path.clone(),
+                matches!(run.status, RunStatus::Stopping),
+            )
+        });
+        let (name, workspace, stopping) = run.unwrap_or((None, None, false));
+        setup.interrupted_run_notice = Some(InterruptedRunNotice {
+            blueprint_name: name.unwrap_or_else(|| "Active workflow".to_owned()),
+            workspace_path: workspace
+                .or_else(|| setup.workspace_path.clone())
+                .unwrap_or_else(|| ".".to_owned()),
+            interrupted_at: chrono::Utc::now().to_rfc3339(),
+            reason: Some(if stopping {
+                "Maabarium was closed while the flow was already stopping.".to_owned()
+            } else {
+                "Maabarium was closed while the flow was still running.".to_owned()
+            }),
+        });
+        if let Err(error) = persist_desktop_setup(&state.settings_path, &setup) {
+            warn!(%error, "Could not record the interrupted run before quitting");
+        }
+    }
+    if let Ok(mut engine_cancel) = state.engine_cancel.lock() {
+        if let Some(cancel) = engine_cancel.take() {
+            cancel.cancel();
+        }
+    }
+    if let Ok(groups) = state.group_cancels.lock() {
+        for cancel in groups.values() {
+            cancel.cancel();
+        }
+    }
+    app.exit(0);
 }
 
 #[cfg(target_os = "macos")]
 fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
     let app_menu = SubmenuBuilder::new(app, APP_DISPLAY_NAME)
         .text(ABOUT_MENU_ID, "About Maabarium")
+        .text(CHECK_UPDATES_MENU_ID, "Check for Updates…")
         .separator()
         .services()
         .separator()
@@ -634,8 +821,28 @@ fn build_app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result
 
 fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
     match event.id().as_ref() {
+        #[cfg(target_os = "macos")]
+        "status_open" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        "status_quit" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.close();
+            }
+        }
         ABOUT_MENU_ID => {
             let _ = app.emit(ABOUT_MENU_EVENT, ());
+        }
+        CHECK_UPDATES_MENU_ID => {
+            let _ = app.emit(CHECK_UPDATES_MENU_EVENT, ());
         }
         LICENSE_MENU_ID => {
             let _ = open_repository_license_path(app);
@@ -666,6 +873,7 @@ fn initialize_app_state(
         log_path: runtime_paths.log_path.clone(),
         cli_path: runtime_paths.cli_path.clone(),
         engine_cancel: Mutex::new(None),
+        group_cancels: Arc::new(Mutex::new(HashMap::new())),
         engine_running: Arc::new(AtomicBool::new(false)),
         run_state: Arc::new(Mutex::new(MutableRunState::default())),
     })
@@ -675,7 +883,8 @@ fn restored_blueprint_path(blueprints_dir: &Path, settings_path: &Path) -> PathB
     let stored_path = load_desktop_setup(settings_path)
         .selected_blueprint_path
         .map(PathBuf::from)
-        .filter(|path| path.exists())
+        .filter(|path| path.parent() == Some(blueprints_dir))
+        .filter(|path| std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()))
         .filter(|path| BlueprintFile::load(path).is_ok());
 
     stored_path.unwrap_or_else(|| default_blueprint_path(blueprints_dir))
@@ -1470,10 +1679,14 @@ fn build_console_state(state: &AppState) -> ConsoleState {
     let cli_link = describe_cli_link_state(&state.cli_path);
     let hardware_telemetry = sample_hardware_telemetry(state);
     let blueprint_result = BlueprintFile::load(&blueprint_path);
-    let plugin_runtime = blueprint_result
-        .as_ref()
-        .ok()
-        .and_then(describe_plugin_runtime);
+    let plugin_runtime = if matches!(run_state.status, RunStatus::Running | RunStatus::Stopping) {
+        blueprint_result
+            .as_ref()
+            .ok()
+            .and_then(describe_plugin_runtime)
+    } else {
+        None
+    };
     let available_blueprints =
         discover_available_blueprints(&state.blueprints_dir, &blueprint_path);
     let desktop_setup = hydrated_desktop_setup(state);
@@ -1587,18 +1800,43 @@ fn build_console_state(state: &AppState) -> ConsoleState {
         &state.db_path,
         &state.log_path,
     );
-    let experiment_branch_inventory = resolved_console_workspace_path(
-        &run_state,
-        blueprint_result.as_ref().ok(),
-        &desktop_setup,
-    )
-    .and_then(|workspace_path| match inspect_experiment_branch_inventory(&workspace_path) {
-        Ok(inventory) => Some(inventory),
-        Err(error) => {
-            warn!(workspace = %workspace_path.display(), %error, "Failed to inspect experiment branch inventory");
-            None
-        }
-    });
+    // Inventory is acquired only when the operator explicitly inspects branches.
+    let experiment_branch_inventory = None;
+
+    // Load run groups, group runs, and telegram config for the console
+    let persistence_handle = Persistence::open(&state.db_path.display().to_string()).ok();
+    let run_groups: Vec<RunGroup> = persistence_handle
+        .as_ref()
+        .and_then(|p| p.list_groups().ok())
+        .unwrap_or_default();
+    let group_runs: Vec<GroupRunWithExperiments> = persistence_handle
+        .as_ref()
+        .map(|p| {
+            run_groups
+                .iter()
+                .flat_map(|g| {
+                    p.list_group_runs(&g.name, 5)
+                        .ok()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(move |run| {
+                            let experiments = p
+                                .list_group_run_experiments(&run.id)
+                                .ok()
+                                .unwrap_or_default();
+                            GroupRunWithExperiments {
+                                group_run: run,
+                                experiments,
+                            }
+                        })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let telegram_config: Option<TelegramConfig> = persistence_handle
+        .as_ref()
+        .and_then(|p| p.telegram_get_settings().ok())
+        .flatten();
 
     match blueprint_result {
         Ok(blueprint) => ConsoleState {
@@ -1624,6 +1862,9 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             experiments,
             proposals,
             logs,
+            run_groups: run_groups.clone(),
+            group_runs: group_runs.clone(),
+            telegram_config: telegram_config.clone(),
         },
         Err(error) => ConsoleState {
             engine_running: state.engine_running.load(Ordering::SeqCst),
@@ -1648,6 +1889,9 @@ fn build_console_state(state: &AppState) -> ConsoleState {
             experiments,
             proposals,
             logs,
+            run_groups,
+            group_runs,
+            telegram_config,
         },
     }
 }
@@ -1946,6 +2190,313 @@ fn empty_run_analytics() -> RunAnalytics {
         weekly: Vec::new(),
         monthly: Vec::new(),
     }
+}
+
+// ============== Group Management Tauri Commands ==============
+
+#[tauri::command]
+fn get_run_groups(state: tauri::State<'_, AppState>) -> Result<Vec<RunGroup>, String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .list_groups()
+        .map_err(|e| format!("List groups error: {e}"))
+}
+
+#[tauri::command]
+fn get_group_runs(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+) -> Result<Vec<GroupRunWithExperiments>, String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    let runs = persistence
+        .list_group_runs(&group_name, 10)
+        .map_err(|e| format!("List runs error: {e}"))?;
+    let with_experiments: Vec<GroupRunWithExperiments> = runs
+        .into_iter()
+        .map(|run| {
+            let experiments = persistence
+                .list_group_run_experiments(&run.id)
+                .unwrap_or_default();
+            GroupRunWithExperiments {
+                group_run: run,
+                experiments,
+            }
+        })
+        .collect();
+    Ok(with_experiments)
+}
+
+#[tauri::command]
+fn create_run_group_command(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    description: String,
+) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    let name = name.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err("Group names must be 1-80 characters.".to_owned());
+    }
+    let group = RunGroup {
+        name,
+        description: description.trim().to_owned(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        blueprints: vec![],
+        execution_mode: ExecutionMode::Sequential,
+        schedule: None,
+        telegram_enabled: true,
+    };
+    persistence
+        .create_group(&group)
+        .map_err(|e| format!("Create group error: {e}"))
+}
+
+#[tauri::command]
+fn add_blueprint_to_group_command(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+    blueprint_name: String,
+    blueprint_path: String,
+) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    let group = persistence
+        .get_group(&group_name)
+        .map_err(|e| format!("Get group error: {e}"))?
+        .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+    let entry = GroupBlueprintEntry {
+        blueprint_name,
+        blueprint_path,
+        sort_order: group.blueprints.len() as u32,
+        notifications_enabled: true,
+    };
+    persistence
+        .add_blueprint_to_group(&group_name, &entry)
+        .map_err(|e| format!("Add blueprint error: {e}"))
+}
+
+#[tauri::command]
+fn delete_run_group_command(state: tauri::State<'_, AppState>, name: String) -> Result<(), String> {
+    reconcile_group_runs(&state.db_path.display().to_string(), &state.group_cancels);
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .delete_group(&name)
+        .map_err(|e| format!("Delete group error: {e}"))
+}
+
+#[tauri::command]
+fn set_run_group_schedule_command(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+    schedule_type: String,
+    value: Option<String>,
+    enabled: bool,
+) -> Result<(), String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .get_group(&group_name)
+        .map_err(|e| format!("Get group error: {e}"))?
+        .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+
+    let value = value.unwrap_or_default().trim().to_owned();
+    let kind = match schedule_type.as_str() {
+        "none" => ScheduleKind::None,
+        "cron" => ScheduleKind::Cron { expression: value },
+        "one_shot" => ScheduleKind::OneShot { datetime: value },
+        other => return Err(format!("Unsupported schedule type '{other}'")),
+    };
+    let schedule = ScheduledRun::new_validated(kind, enabled, &chrono::Utc::now())?;
+    persistence
+        .update_group_schedule(&group_name, &schedule)
+        .map_err(|e| format!("Update schedule error: {e}"))
+}
+
+fn spawn_group_run(
+    db_path: String,
+    group_name: String,
+    mode: Option<String>,
+    group_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    scheduled: bool,
+) -> Result<(), String> {
+    {
+        let persistence = Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
+        let group = persistence
+            .get_group(&group_name)
+            .map_err(|e| format!("Get group error: {e}"))?
+            .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+        if group.blueprints.is_empty() {
+            return Err(format!("Group '{group_name}' has no blueprints to run"));
+        }
+    }
+    let cancel = CancellationToken::new();
+    {
+        let mut active = group_cancels
+            .lock()
+            .map_err(|_| "Group run tracker is unavailable".to_owned())?;
+        if active.contains_key(&group_name) {
+            return Err(format!("Group '{group_name}' is already running"));
+        }
+        active.insert(group_name.clone(), cancel.clone());
+    }
+
+    let tracker = group_cancels.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let persistence =
+                Persistence::open(&db_path).map_err(|e| format!("DB open error: {e}"))?;
+            let persistence = Arc::new(persistence);
+            let group = persistence
+                .get_group(&group_name)
+                .map_err(|e| format!("Get group error: {e}"))?
+                .ok_or_else(|| format!("Group '{group_name}' not found"))?;
+
+            let force_mode = mode.and_then(|m| ExecutionMode::from_str(&m));
+            let mut runner = GroupRunner::new(persistence, db_path, cancel);
+            if scheduled {
+                runner = runner.triggered_by_schedule();
+            }
+            let rt = tokio::runtime::Runtime::new().map_err(|e| format!("Runtime error: {e}"))?;
+            rt.block_on(async { runner.run_group(&group, force_mode).await })?;
+            Ok(())
+        })();
+
+        if let Ok(mut active) = tracker.lock() {
+            active.remove(&group_name);
+        }
+        if let Err(error) = result {
+            error!(%group_name, %error, "Workflow run group failed");
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn run_group_command(
+    state: tauri::State<'_, AppState>,
+    group_name: String,
+    mode: Option<String>,
+) -> Result<(), String> {
+    spawn_group_run(
+        state.db_path.display().to_string(),
+        group_name,
+        mode,
+        state.group_cancels.clone(),
+        false,
+    )
+}
+
+#[tauri::command]
+fn stop_group_command(state: tauri::State<'_, AppState>, group_name: String) -> Result<(), String> {
+    let cancel = state
+        .group_cancels
+        .lock()
+        .map_err(|_| "Group run tracker is unavailable".to_owned())?
+        .get(&group_name)
+        .cloned();
+    match cancel {
+        Some(cancel) => cancel.cancel(),
+        // Nothing in this process is running it, so a recorded active run
+        // was interrupted earlier; close it so the group is usable again.
+        None => reconcile_group_runs(&state.db_path.display().to_string(), &state.group_cancels),
+    }
+    Ok(())
+}
+
+type GroupCancels = Arc<Mutex<HashMap<String, CancellationToken>>>;
+
+fn reconcile_group_runs(db_path: &str, group_cancels: &GroupCancels) {
+    let active = match group_cancels.lock() {
+        Ok(active) => active.keys().cloned().collect::<HashSet<_>>(),
+        Err(_) => return,
+    };
+    match Persistence::open(db_path)
+        .and_then(|p| p.reconcile_interrupted_group_runs(&active, &process_is_alive))
+    {
+        Ok(0) => {}
+        Ok(closed) => info!(closed, "Closed interrupted workflow group runs"),
+        Err(error) => warn!(%error, "Could not reconcile workflow group runs"),
+    }
+}
+
+/// Start every enabled group whose schedule is due. One group's failure is
+/// logged and does not stop the others.
+fn start_due_groups(db_path: &str, group_cancels: &GroupCancels) -> Vec<String> {
+    let groups = match Persistence::open(db_path).and_then(|p| p.list_groups()) {
+        Ok(groups) => groups,
+        Err(error) => {
+            warn!(%error, "Could not load workflow groups for scheduling");
+            return Vec::new();
+        }
+    };
+    let active = group_cancels
+        .lock()
+        .map(|active| active.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
+    let mut started = Vec::new();
+    for group in groups {
+        if active.contains(&group.name) || group.blueprints.is_empty() {
+            continue;
+        }
+        if !group
+            .schedule
+            .as_ref()
+            .is_some_and(|schedule| schedule.is_due(&now))
+        {
+            continue;
+        }
+        match spawn_group_run(
+            db_path.to_owned(),
+            group.name.clone(),
+            None,
+            group_cancels.clone(),
+            true,
+        ) {
+            Ok(()) => started.push(group.name),
+            Err(error) => warn!(group = %group.name, %error, "Scheduled group did not start"),
+        }
+    }
+    started
+}
+
+/// Check schedules from a background thread so they run while the window is
+/// hidden or its timers are throttled.
+fn start_group_scheduler(db_path: String, group_cancels: GroupCancels) {
+    std::thread::Builder::new()
+        .name("group-scheduler".to_owned())
+        .spawn(move || loop {
+            let started = start_due_groups(&db_path, &group_cancels);
+            if !started.is_empty() {
+                info!(?started, "Started scheduled workflow groups");
+            }
+            std::thread::sleep(std::time::Duration::from_secs(20));
+        })
+        .map(|_| ())
+        .unwrap_or_else(|error| warn!(%error, "Could not start the group scheduler"));
+}
+
+#[tauri::command]
+fn run_due_groups_command(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(start_due_groups(
+        &state.db_path.display().to_string(),
+        &state.group_cancels,
+    ))
+}
+
+#[tauri::command]
+fn get_telegram_config_command(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<TelegramConfig>, String> {
+    let persistence = Persistence::open(&state.db_path.display().to_string())
+        .map_err(|e| format!("DB open error: {e}"))?;
+    persistence
+        .telegram_get_settings()
+        .map_err(|e| format!("Get telegram config error: {e}"))
 }
 
 fn build_run_analytics(experiments: &[PersistedExperiment], log_path: &Path) -> RunAnalytics {
@@ -2582,6 +3133,25 @@ fn remove_cli_link(state: tauri::State<'_, AppState>) -> Result<ConsoleState, St
 }
 
 #[tauri::command]
+async fn inspect_experiment_branches_command(
+    app: tauri::AppHandle,
+) -> Result<ExperimentBranchInventory, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let blueprint = BlueprintFile::load(&current_blueprint_path(&state)).ok();
+        let path = resolved_console_workspace_path(
+            &current_run_state(&state),
+            blueprint.as_ref(),
+            &hydrated_desktop_setup(&state),
+        )
+        .ok_or_else(|| "Choose a Git-backed workspace before inspecting branches.".to_owned())?;
+        inspect_experiment_branch_inventory(&path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 fn cleanup_experiment_branches_command(
     state: tauri::State<'_, AppState>,
     older_than_months: u32,
@@ -2636,8 +3206,14 @@ where
 }
 
 #[tauri::command]
-fn get_console_state(state: tauri::State<'_, AppState>) -> Result<ConsoleState, String> {
-    Ok(build_console_state(&state))
+async fn get_console_state(app: tauri::AppHandle) -> Result<ConsoleState, String> {
+    // Readiness probes can wait for Keychain interaction. Keep the UI responsive.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        build_console_state(&state)
+    })
+    .await
+    .map_err(|error| format!("Could not load console state: {error}"))
 }
 
 #[tauri::command]
@@ -2805,6 +3381,7 @@ async fn check_for_updates(
 async fn install_available_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    expected_version: Option<String>,
 ) -> Result<InstallUpdateResult, String> {
     let setup = hydrated_desktop_setup(&state);
     let (updater, _) = configured_updater(&app, &setup)?;
@@ -2822,6 +3399,14 @@ async fn install_available_update(
     };
 
     let version = update.version.clone();
+    if expected_version
+        .as_ref()
+        .is_some_and(|expected| expected != &version)
+    {
+        return Err(
+            "The available version changed. Check for updates again before installing.".into(),
+        );
+    }
     update
         .download_and_install(|_, _| {}, || {})
         .await
@@ -3363,7 +3948,7 @@ fn run_readiness_scan(
 ) -> Result<maabarium_core::ReadinessReport, String> {
     let workspace_ref = workspace.as_deref();
     let strategy_ref = strategy.as_deref();
-    Ok(maabarium_core::ReadinessScanner::scan(
+    Ok(maabarium_core::ReadinessScanner::scan_passive(
         workspace_ref,
         strategy_ref,
     ))
@@ -3499,9 +4084,39 @@ mod tests {
             log_path: PathBuf::from("data/maabarium.log"),
             cli_path: PathBuf::from("data/bin/maabarium"),
             engine_cancel: Mutex::new(None),
+            group_cancels: Arc::new(Mutex::new(HashMap::new())),
             engine_running: Arc::new(AtomicBool::new(false)),
             run_state: Arc::new(Mutex::new(MutableRunState::default())),
         }
+    }
+
+    #[test]
+    fn idle_app_has_no_active_work_so_close_proceeds() {
+        let state = test_app_state();
+        assert_eq!(active_work(&state), None);
+    }
+
+    #[test]
+    fn running_flow_or_group_holds_close_for_confirmation() {
+        let state = test_app_state();
+        state
+            .group_cancels
+            .lock()
+            .unwrap()
+            .insert("Nightly".to_owned(), CancellationToken::new());
+        assert_eq!(
+            active_work(&state),
+            Some(ActiveWork {
+                flow: None,
+                groups: vec!["Nightly".to_owned()]
+            })
+        );
+        state.engine_running.store(true, Ordering::SeqCst);
+        state.run_state.lock().unwrap().blueprint_name = Some("Synthetic flow".to_owned());
+        assert_eq!(
+            active_work(&state).unwrap().flow.as_deref(),
+            Some("Synthetic flow")
+        );
     }
 
     #[test]
