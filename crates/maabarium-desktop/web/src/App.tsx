@@ -15,6 +15,7 @@ import appLogo from "../../icons/specimen-tile.svg";
 import { MiniSparkline } from "./components/charts/MiniSparkline";
 import { ActiveBlueprintCard } from "./components/console/ActiveBlueprintCard";
 import { AboutModal } from "./components/console/AboutModal";
+import { Disclosure } from "./components/ui/Disclosure";
 import { BlueprintWizardModal } from "./components/console/BlueprintWizardModal";
 import { ConsoleActivityPanel } from "./components/console/ConsoleActivityPanel";
 import { ConsoleEvidencePanel } from "./components/console/ConsoleEvidencePanel";
@@ -1515,8 +1516,7 @@ export default function App() {
 
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <ResearchQueue />
-          <details id="overview-section" className="workspace-metrics">
-            <summary>Run history and system activity</summary>
+          <Disclosure id="overview-section" title="Run history and system activity">
           <section
             className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5"
           >
@@ -1813,7 +1813,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="-mx-5">
+                <div>
                   <Suspense
                     fallback={
                       <div className="rounded-xl border border-white/10 bg-slate-950/60 px-4 py-4">
@@ -1872,7 +1872,7 @@ export default function App() {
             </GlassCard>
           </section>
 
-          </details>
+          </Disclosure>
 
           <section id="active-workflow-card" className="pt-2">
             <ActiveBlueprintCard

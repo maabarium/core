@@ -133,6 +133,23 @@ pub struct ReadinessScanner;
 
 impl ReadinessScanner {
     pub fn scan(workspace: Option<&str>, runtime_strategy: Option<&str>) -> ReadinessReport {
+        let providers = configured_supported_remote_providers(&SecretStore::new());
+        Self::scan_with_providers(workspace, runtime_strategy, Some(&providers))
+    }
+
+    /// Background status refresh must not read credentials or trigger Keychain UI.
+    pub fn scan_passive(
+        workspace: Option<&str>,
+        runtime_strategy: Option<&str>,
+    ) -> ReadinessReport {
+        Self::scan_with_providers(workspace, runtime_strategy, None)
+    }
+
+    fn scan_with_providers(
+        workspace: Option<&str>,
+        runtime_strategy: Option<&str>,
+        providers: Option<&[&str]>,
+    ) -> ReadinessReport {
         let mut items = Vec::new();
 
         // 1. Git
@@ -146,10 +163,10 @@ impl ReadinessScanner {
         items.push(Self::check_local_runtime(is_remote_only));
 
         // 4. Remote providers
-        items.push(Self::check_remote_providers(runtime_strategy));
+        items.push(Self::check_remote_providers(runtime_strategy, providers));
 
         // 5. Models
-        items.push(Self::check_models(runtime_strategy));
+        items.push(Self::check_models(runtime_strategy, providers));
 
         // 6. Database & logs
         items.push(Self::check_diagnostics());
@@ -238,9 +255,20 @@ impl ReadinessScanner {
         }
     }
 
-    fn check_remote_providers(runtime_strategy: Option<&str>) -> ReadinessItem {
-        let secret_store = SecretStore::new();
-        let configured = configured_supported_remote_providers(&secret_store);
+    fn check_remote_providers(
+        runtime_strategy: Option<&str>,
+        providers: Option<&[&str]>,
+    ) -> ReadinessItem {
+        let Some(configured) = providers else {
+            return ReadinessItem {
+                id: "remote_providers".to_owned(),
+                title: "Remote Providers".to_owned(),
+                status: ReadinessLevel::Optional,
+                summary: "Remote credentials are not checked in the background.".to_owned(),
+                fix_label: Some("Configure Provider".to_owned()),
+                fix_hint: None,
+            };
+        };
 
         let level = match runtime_strategy {
             Some("local") => ReadinessLevel::Optional,
@@ -275,16 +303,17 @@ impl ReadinessScanner {
         }
     }
 
-    fn check_models(runtime_strategy: Option<&str>) -> ReadinessItem {
+    fn check_models(runtime_strategy: Option<&str>, providers: Option<&[&str]>) -> ReadinessItem {
         let ollama = ollama_status();
         let has_local = !ollama.models.is_empty();
 
-        let secret_store = SecretStore::new();
-        let has_remote = !configured_supported_remote_providers(&secret_store).is_empty();
+        let has_remote = providers.is_some_and(|providers| !providers.is_empty());
 
         let level = match runtime_strategy {
             Some("local") if !has_local => ReadinessLevel::NeedsAction,
             Some("local") => ReadinessLevel::Ready,
+            Some("remote") if providers.is_none() => ReadinessLevel::Optional,
+            _ if !has_local && providers.is_none() => ReadinessLevel::Optional,
             Some("remote") if !has_remote => ReadinessLevel::NeedsAction,
             Some("remote") => ReadinessLevel::Ready,
             Some("mixed") if !has_local && !has_remote => ReadinessLevel::NeedsAction,
@@ -305,11 +334,15 @@ impl ReadinessScanner {
         if has_remote {
             parts.push("remote API models available".to_owned());
         }
-        let summary = if parts.is_empty() {
-            "No models detected. Install Ollama models or configure a remote provider.".to_owned()
-        } else {
-            parts.join(", ")
-        };
+        let summary =
+            if parts.is_empty() && providers.is_none() && runtime_strategy != Some("local") {
+                "Remote models are not checked in the background.".to_owned()
+            } else if parts.is_empty() {
+                "No models detected. Install Ollama models or configure a remote provider."
+                    .to_owned()
+            } else {
+                parts.join(", ")
+            };
 
         ReadinessItem {
             id: "models".to_owned(),
@@ -343,6 +376,16 @@ impl ReadinessScanner {
             fix_label: None,
             fix_hint: None,
         }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn background_readiness_reports_remote_credentials_as_unchecked() {
+    for strategy in [None, Some("local"), Some("remote"), Some("mixed")] {
+        let item = ReadinessScanner::check_remote_providers(strategy, None);
+        assert_eq!(item.status, ReadinessLevel::Optional);
+        assert!(item.summary.contains("not checked"));
     }
 }
 

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
+import { CollapseToggle } from "./Disclosure";
 import type { LucideIcon } from "lucide-react";
 
 export function GlassCard({
@@ -45,18 +45,7 @@ export function GlassCard({
               <div className="flex items-center gap-3">
                 {headerActions}
                 {collapsible ? (
-                  <button
-                    type="button"
-                    aria-expanded={!collapsed}
-                    aria-label={`${collapsed ? "Expand" : "Collapse"} ${collapseLabel}`}
-                    onClick={onToggleCollapsed}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/5 text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
-                  >
-                    <ChevronDown
-                      size={14}
-                      className={`transition-transform ${collapsed ? "rotate-0" : "rotate-180"}`}
-                    />
-                  </button>
+                  <CollapseToggle title={collapseLabel} expanded={!collapsed} onToggle={onToggleCollapsed} />
                 ) : null}
               </div>
             ) : (

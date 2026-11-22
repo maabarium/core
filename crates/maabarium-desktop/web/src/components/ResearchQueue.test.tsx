@@ -11,7 +11,7 @@ it("queues the selected provider and displays manual handoff without claiming au
   ]);
   render(<ResearchQueue />);
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "muse" } });
-  fireEvent.click(screen.getByText("Set up Muse"));
+  fireEvent.click(screen.getByRole("button", { name: "Expand Set up Muse" }));
   expect(screen.getByText("muse usage")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Queue task" }));
   expect(await screen.findByText("Muse: queued")).toBeTruthy();
@@ -24,6 +24,7 @@ it("locks the local rule and a separate subscription reviewer in Both mode", asy
   vi.mocked(invoke).mockReset().mockResolvedValueOnce("both-loop").mockResolvedValueOnce([]);
   render(<ResearchQueue />);
   fireEvent.change(screen.getByLabelText("Public research target"), { target: { value: "Public fixture" } });
+  fireEvent.click(screen.getByRole("button", { name: "Expand Set up an experiment" }));
   fireEvent.click(screen.getByRole("button", { name: "Add Codex step" }));
   fireEvent.change(screen.getByLabelText("How should we review this experiment?"), { target: { value: "both" } });
   const start = screen.getByRole("button", { name: "Start experiment" }) as HTMLButtonElement;
@@ -45,7 +46,7 @@ it("starts a public experiment with an ordered provider plan", async () => {
   cleanup();
   vi.mocked(invoke).mockReset().mockResolvedValueOnce("example-loop").mockResolvedValueOnce([]);
   render(<ResearchQueue />);
-  fireEvent.click(screen.getByText("Set up an experiment"));
+  fireEvent.click(screen.getByRole("button", { name: "Expand Set up an experiment" }));
   fireEvent.change(screen.getByLabelText("Public research target"), { target: { value: "Compare public rules" } });
   fireEvent.click(screen.getByRole("button", { name: "Add Codex step" }));
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "muse" } });
@@ -68,6 +69,7 @@ it("requires a separate paid opt-in before starting a DeepSeek research step", a
   vi.mocked(invoke).mockReset().mockResolvedValueOnce("paid-loop").mockResolvedValueOnce([]);
   render(<ResearchQueue />);
   fireEvent.change(screen.getByLabelText("Public research target"), { target: { value: "Public fixture" } });
+  fireEvent.click(screen.getByRole("button", { name: "Expand Set up an experiment" }));
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "deepseek" } });
   fireEvent.click(screen.getByRole("button", { name: "Add DeepSeek (paid API) step" }));
   const start = screen.getByRole("button", { name: "Start experiment" }) as HTMLButtonElement;
@@ -79,4 +81,18 @@ it("requires a separate paid opt-in before starting a DeepSeek research step", a
     target: "Public fixture", plan: [{ lane: "deepseek", model: null, effort: null }],
     reviewEvery: 1, allowPaid: true,
   });
+});
+
+it("accepts a dropped JSON evidence file and rejects oversized files", async () => {
+  cleanup();
+  render(<ResearchQueue />);
+  fireEvent.click(screen.getByRole("button", { name: "Expand Check experiment evidence" }));
+  const dropZone = screen.getByRole("button", { name: /Drop a candidate results file/ });
+  fireEvent.drop(dropZone, { dataTransfer: { files: [new File(["x".repeat(65537)], "large.json")] } });
+  expect(screen.getByRole("alert").textContent).toMatch(/64 KiB/);
+  const file = new File(["{}"], "candidate.json");
+  Object.defineProperty(file, "text", { value: async () => "{}" });
+  fireEvent.drop(dropZone, { dataTransfer: { files: [file] } });
+  expect(await screen.findByText("Loaded candidate.json")).toBeTruthy();
+  expect((screen.getByLabelText("Candidate results (JSON)") as HTMLTextAreaElement).value).toBe("{}");
 });

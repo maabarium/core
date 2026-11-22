@@ -1,3 +1,4 @@
+import { Disclosure } from "./ui/Disclosure";
 export type TrendDay = {
   day: string;
   completed: number;
@@ -61,16 +62,14 @@ export function ResearchTrends({ days }: { days: TrendDay[] }) {
   if (!days.length) return null;
   const hasOutcomes = days.some(({ completed, failed }) => completed || failed);
   const hasTokens = days.some(({ input, output }) => input !== null || output !== null);
-  return <details className="mt-3 rounded-xl border p-3">
-    <summary className="cursor-pointer font-medium">14-day trends</summary>
+  return <Disclosure className="mt-3" title="14-day trends">
     <p className="mb-3 mt-2 text-sm">Dates use UTC. Older jobs without a recorded date are only in the summary above. Blank spaces mean no token count was reported.</p>
     {!hasOutcomes && !hasTokens ? <p className="text-sm">New job results will appear here once they finish.</p> : <>
       <div className="grid gap-3 lg:grid-cols-2">
         {hasOutcomes && <TrendCard title="Job outcomes" metrics={outcomes} days={days} />}
         {hasTokens ? <TrendCard title="Reported token usage" metrics={tokens} days={days} /> : <p className="self-center text-sm">No token counters reported for this period.</p>}
       </div>
-      <details className="mt-3">
-        <summary className="cursor-pointer text-sm">View daily values</summary>
+      <Disclosure className="mt-3" title="View daily values">
         <div className="overflow-x-auto">
           <table className="mt-2 w-full text-left text-xs tabular-nums">
             <caption className="sr-only">Daily research queue activity in UTC</caption>
@@ -83,7 +82,7 @@ export function ResearchTrends({ days }: { days: TrendDay[] }) {
             </tr>)}</tbody>
           </table>
         </div>
-      </details>
+      </Disclosure>
     </>}
-  </details>;
+  </Disclosure>;
 }

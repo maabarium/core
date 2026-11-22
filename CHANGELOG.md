@@ -28,6 +28,8 @@ an optional automatic run window and mandatory human review checkpoints.
 
 ### Fixed
 
+- Desktop readiness no longer reads Keychain secrets in the background. About uses the active theme and native modal focus handling. Charts align with the rest of their card, disclosures share a control, and evidence import supports dropping or browsing for a file.
+
 - Group cron schedules now honour day-of-month and month, treat both `0` and `7` as Sunday, and support stepped ranges.
 - Group runs interrupted by a crash or quit are closed on the next start, so the group can be run or deleted again.
 - Each workflow in a group links to the experiments it recorded, not the newest experiment in the database.

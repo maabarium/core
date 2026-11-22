@@ -1,3 +1,4 @@
+import { Disclosure } from "./ui/Disclosure";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
@@ -151,8 +152,7 @@ export function ResearchQueue() {
         <button type="button" className="h-10 rounded-md border px-3" disabled={busy || lane === "deepseek"} onClick={() => void update(true)}>Queue task</button>
         <button type="button" className="h-10 rounded-md border px-3" disabled={busy} onClick={() => void update(false)}>Refresh queue</button>
       </div>
-      <details className="mt-4 rounded border p-3">
-        <summary className="cursor-pointer font-medium">Set up {labels[lane]}</summary>
+      <Disclosure className="mt-4" title={`Set up ${labels[lane]}`}>
         <p className="mt-2 text-sm">{setup[lane].status}</p>
         <ol className="my-2 list-decimal space-y-1 pl-5 text-sm">
           {setup[lane].steps.map((step) => <li key={step}>{step}</li>)}
@@ -163,9 +163,8 @@ export function ResearchQueue() {
             onClick={() => void checkSubscription()}>{checking ? "Checking…" : "Check setup"}</button>
         </div>
         <p role="status" className="mt-2 text-sm">{checks[lane]}</p>
-      </details>
-      <details className="mt-4 rounded border p-3">
-        <summary className="cursor-pointer font-medium">Set up an experiment</summary>
+      </Disclosure>
+      <Disclosure className="mt-4" title="Set up an experiment">
         <form className="mt-3 space-y-3" onSubmit={(event) => { event.preventDefault(); void startLoop(); }}>
           <label className="block" htmlFor="research-target">Public research target</label>
           <textarea id="research-target" className="w-full rounded border bg-transparent p-2"
@@ -281,7 +280,7 @@ export function ResearchQueue() {
           </div>
         </form>
         {loopId && <p className="mt-3 break-all text-sm">Experiment ID: {loopId}. Use the command-line tool to review the result and continue.</p>}
-      </details>
+      </Disclosure>
       <EvidenceCheck experimentId={loopId} />
       <p className="mt-2 break-words text-sm" role="status">{message}</p>
       <ResearchReport />
@@ -296,8 +295,8 @@ export function ResearchQueue() {
               {job.state === "queued" && job.due && job.due > Date.now() / 1000 ? (
                 <p className="text-sm">Next attempt: {new Date(job.due * 1000).toLocaleString()}</p>
               ) : null}
-              {job.usage && <details className="mt-2"><summary>Reported tokens</summary><TokenDetails usage={job.usage} /></details>}
-              {job.result && <details className="mt-2"><summary>Result</summary><p className="whitespace-pre-wrap break-words">{job.result}</p></details>}
+              {job.usage && <Disclosure className="mt-2" title="Reported tokens"><TokenDetails usage={job.usage} /></Disclosure>}
+              {job.result && <Disclosure className="mt-2" title="Result"><p className="whitespace-pre-wrap break-words">{job.result}</p></Disclosure>}
             </li>
           ))}
         </ul>

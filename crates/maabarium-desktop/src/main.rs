@@ -3763,7 +3763,7 @@ fn run_readiness_scan(
 ) -> Result<maabarium_core::ReadinessReport, String> {
     let workspace_ref = workspace.as_deref();
     let strategy_ref = strategy.as_deref();
-    Ok(maabarium_core::ReadinessScanner::scan(
+    Ok(maabarium_core::ReadinessScanner::scan_passive(
         workspace_ref,
         strategy_ref,
     ))
