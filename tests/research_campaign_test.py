@@ -11,6 +11,16 @@ spec.loader.exec_module(campaign)
 
 
 class CampaignTest(unittest.TestCase):
+    def test_adaptive_development_pass_cannot_claim_the_target(self):
+        db = sqlite3.connect(':memory:')
+        campaign.initialize(db)
+        campaign.create(db, 'adaptive', 200, 'Public synthetic research')
+        campaign.record(db, 'adaptive', 'dev', 'pass', 'a' * 64)
+        self.assertEqual(db.execute('SELECT status FROM campaigns').fetchone()[0],
+                         'confirmation_required')
+        with self.assertRaisesRegex(ValueError, 'not active'):
+            campaign.record(db, 'adaptive', 'unexpected', 'pass', 'b' * 64)
+
     def test_full_budget_counts_unique_verdicts_and_rejects_trial_201(self):
         db = sqlite3.connect(':memory:')
         campaign.initialize(db)

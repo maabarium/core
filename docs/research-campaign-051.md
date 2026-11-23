@@ -59,6 +59,11 @@ failure bit and the approved brief go to providers; local evidence stays local.
 Start discovery explicitly with `campaign-start --id <campaign>` or
 **Send public brief to Codex and Antigravity** in Research activity. Repeating
 the request does not create a duplicate round or consume a trial.
+An adaptive development pass stops dispatch at **Sealed confirmation
+required**, not **Target achieved**. This prevents a search over many
+development trials from declaring success on the same evidence it used to
+choose the candidate. The separately pinned confirmation workflow is not
+yet implemented.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.

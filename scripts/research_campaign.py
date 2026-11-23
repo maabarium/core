@@ -51,7 +51,8 @@ def record(db, campaign, identity, outcome, evidence_sha256, *, in_transaction=F
         db.execute('INSERT INTO campaign_trials VALUES (?,?,?,?)',
                    (campaign, identity, outcome, evidence_sha256))
         count = db.execute('SELECT COUNT(*) FROM campaign_trials WHERE campaign=?', (campaign,)).fetchone()[0]
-        status = ('target_achieved' if outcome == 'pass' else
+        adaptive = db.execute('SELECT 1 FROM campaign_adaptive WHERE campaign=?', (campaign,)).fetchone()
+        status = (('confirmation_required' if adaptive else 'target_achieved') if outcome == 'pass' else
                   'human_review' if count >= row[0] or outcome == 'operational_failure' else 'active')
         db.execute('UPDATE campaigns SET status=? WHERE id=?', (status, campaign))
         if not in_transaction:
