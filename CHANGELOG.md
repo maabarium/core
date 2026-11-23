@@ -7,6 +7,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 - Research activity separates audited rejections from operational failures and shows reported suggestion token usage by provider for each campaign.
+- Campaign reports show ordered trial outcomes and identify how the separate final check ended.
 
 ## [0.5.0] - 2026-11-22
 

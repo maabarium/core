@@ -30,8 +30,8 @@ results.
   scientific execution requires review, never a blind automatic rerun.
 - [x] Stop trial dispatch at independently audited success, the configured trial bound, explicit
   user stop, or a safety failure. No work may start after the terminal state.
-- [ ] Display campaign progress, decisions, provider token usage, failures, and final
-  review in the existing reporting surfaces.
+- [x] Display campaign progress, trial decisions, reported proposal token usage,
+  failures, and the final check outcome in Research activity.
 - [ ] Verify restart, quota recovery, cancellation, malformed output, tampering,
   duplicate results, concurrency, paid-fallback exclusion, and native UI behavior.
 - [x] Verify the ready-made beginner campaign in the native app. It records
@@ -82,7 +82,9 @@ audit. Operational failures require review rather than counting as scientific
 verdicts. The desktop Research activity report separates passed trials,
 audited rejections, and trials that could not be checked. Its suggestion
 usage disclosure shows reported input, output, and cache reads per provider
-for that campaign, excluding unrelated jobs.
+for that campaign, excluding unrelated jobs. Trial results appear in recording
+order, and a separate final check shows its saved verdict or that no verdict
+was recorded before review.
 
 The benchmark and auditor must be trusted local executables. Code suggestions
 are not automatically executed. `campaign-propose --campaign <campaign> --id

@@ -235,6 +235,8 @@ struct CampaignReport {
     rejected_trials: i64,
     operational_failures: i64,
     proposal_usage: Vec<ProposalUsage>,
+    trial_outcomes: Vec<String>,
+    confirmation_outcome: Option<String>,
     ready_proposal_rounds: Vec<String>,
     can_start: bool,
 }
@@ -275,11 +277,35 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
             rejected_trials: row.get(4)?,
             operational_failures: row.get(5)?,
             proposal_usage: Vec::new(),
+            trial_outcomes: Vec::new(),
+            confirmation_outcome: None,
             ready_proposal_rounds: Vec::new(),
             can_start: false,
         })
     })?;
     let mut reports = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut outcomes = db.prepare(
+        "SELECT outcome FROM campaign_trials WHERE campaign=?1 ORDER BY rowid LIMIT 200",
+    )?;
+    let has_confirmation: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='campaign_confirmations')",
+        [],
+        |row| row.get(0),
+    )?;
+    for campaign in &mut reports {
+        campaign.trial_outcomes = outcomes
+            .query_map([&campaign.id], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if has_confirmation {
+            campaign.confirmation_outcome = db.query_row(
+                "SELECT (SELECT CASE WHEN outcome IS NULL AND ?2='human_review'
+                    THEN 'operational_failure' ELSE outcome END
+                    FROM campaign_confirmations WHERE campaign=?1)",
+                [&campaign.id, &campaign.status],
+                |row| row.get(0),
+            )?;
+        }
+    }
     if db.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE type='table'
         AND name IN ('campaign_adaptive','campaign_members','campaign_proposals','research_loops')",
@@ -2048,6 +2074,8 @@ mod tests {
         .unwrap();
         let reports = super::campaign_report(&db).unwrap();
         let demo = reports.iter().find(|report| report.id == "demo").unwrap();
+        assert_eq!(demo.trial_outcomes, ["fail", "pass", "operational_failure"]);
+        assert_eq!(demo.confirmation_outcome, None);
         assert_eq!(
             (
                 demo.audited_trials,

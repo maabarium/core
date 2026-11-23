@@ -9,7 +9,7 @@ type Lane = TokenUsage & {
   pending: number; attempts: number; observed_jobs: number;
 };
 type ProposalUsage = TokenUsage & { lane: string; jobs: number; observed_jobs: number };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[] };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[]; trial_outcomes?: string[]; confirmation_outcome?: string | null };
 type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
 type Starter = { stage: string; first: PracticeResult | null; final_result: PracticeResult | null };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
@@ -218,6 +218,17 @@ export function ResearchReport() {
                 <div><dt>Did not meet the target</dt><dd className="font-semibold">{campaign.rejected_trials}</dd></div>
                 <div><dt>Could not be checked</dt><dd className="font-semibold">{campaign.operational_failures}</dd></div>
               </dl>
+              {campaign.confirmation_outcome === "pass" && <p className="mt-2">Final check passed on the separate test panel.</p>}
+              {campaign.confirmation_outcome === "fail" && <p className="mt-2">Final check did not meet the target. No further trials will start.</p>}
+              {campaign.confirmation_outcome === "operational_failure" && <p className="mt-2">The final check did not record a verdict. This campaign has paused for review.</p>}
+              {!!campaign.trial_outcomes?.length && <details className="mt-3">
+                <summary className="cursor-pointer font-semibold">Trial results</summary>
+                <ol className="mt-1 list-decimal pl-5">
+                  {campaign.trial_outcomes.map((outcome, index) => <li key={index}>
+                    {outcome === "pass" ? "Passed" : outcome === "fail" ? "Did not meet the target" : "Could not be checked"}
+                  </li>)}
+                </ol>
+              </details>}
               {!!campaign.proposal_usage?.length && <details className="mt-3">
                 <summary className="cursor-pointer font-semibold">Token usage for suggestions</summary>
                 <p className="mt-1">Local benchmark checks don’t use model tokens. Cache reads may already be included in input.</p>

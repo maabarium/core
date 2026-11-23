@@ -71,15 +71,18 @@ it("shows audited campaigns separately from provider jobs", async () => {
     experiments: 8,
     lanes: [],
     campaigns: [{ id: "coda-demo", status: "target_achieved", limit: 200, audited_trials: 3, rejected_trials: 2, operational_failures: 1,
-      proposal_usage: [{ lane: "codex", jobs: 3, observed_jobs: 2, input: 120, output: 0 }] }],
+      proposal_usage: [{ lane: "codex", jobs: 3, observed_jobs: 2, input: 120, output: 0 }],
+      trial_outcomes: ["fail", "fail", "pass"], confirmation_outcome: "pass" }],
   });
   render(<ResearchReport />);
   fireEvent.click(screen.getByRole("button", { name: "Load report" }));
   expect(await screen.findByText("3 of 200 audited trials · Target achieved")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Research campaigns" })).toBeTruthy();
   for (const [label, count] of [["Passed", "1"], ["Did not meet the target", "2"], ["Could not be checked", "1"]]) {
-    expect(screen.getByText(label).nextElementSibling?.textContent).toBe(count);
+    expect(screen.getByText(label, { selector: "dt" }).nextElementSibling?.textContent).toBe(count);
   }
+  expect(screen.getByText("Final check passed on the separate test panel.")).toBeTruthy();
+  expect(screen.getByText("Trial results").closest("details")?.open).toBe(false);
   expect(screen.getByText("Token usage for suggestions").closest("details")?.open).toBe(false);
   expect(screen.getByText("Usage reported for 2 of 3 jobs.")).toBeTruthy();
   expect(screen.getByText("Output").nextElementSibling?.textContent).toBe("0");
