@@ -69,6 +69,28 @@ class SubscriptionLaneTest(unittest.TestCase):
                                   "--fixture", str(fixture)], capture_output=True)
             self.assertNotEqual(bad.returncode, 0)
             self.assertFalse((base / "bad").exists())
+
+    def test_prepares_and_audits_exact_membership_fixture(self):
+        preparer = SCRIPT.with_name("adaptive_app_smoke.py")
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            fixture = base / "member.json"
+            fixture.write_text(json.dumps({"family": "membership", "rows": [1024, 1024, 7],
+                                           "queries": [1024, 42, 7, 42]}))
+            cmd = [sys.executable, str(preparer), str(base / "package")]
+            package = json.loads(subprocess.check_output([*cmd, "--fixture", str(fixture)]))
+            review = json.loads(subprocess.check_output([*cmd, "--review"]))
+            self.assertEqual(review["family"], "membership")
+            evidence = subprocess.check_output([package["runner"]])
+            self.assertEqual(json.loads(evidence), {
+                "mode": "custom", "baseline": [True, False, True, False],
+                "indexed": [True, False, True, False], "scan_work": 10, "index_work": 7,
+            })
+            verdict = json.loads(subprocess.check_output([package["auditor"]], input=evidence))
+            self.assertEqual(verdict["outcome"], "pass")
+            corrupt = subprocess.run([package["auditor"]], input=evidence.replace(b'"scan_work": 10', b'"scan_work": 9'),
+                                     capture_output=True)
+            self.assertNotEqual(corrupt.returncode, 0)
     def test_completed_non_codex_followup_round_is_not_enqueued_again(self):
         advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
         with sqlite3.connect(":memory:", isolation_level=None) as db:

@@ -48,8 +48,54 @@ print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
     report=f"Public app fixture {mode}: {len(queries)} exact answers; indexed work {index}, direct scan work {scan}.")))
 """
 
+MEMBERSHIP_RUNNER = """
+import json
+index = set(rows)
+baseline, scan = [], 0
+for query in queries:
+    for row in rows:
+        scan += 1
+        if row == query:
+            baseline.append(True)
+            break
+    else:
+        baseline.append(False)
+print(json.dumps(dict(mode=mode, baseline=baseline, indexed=[q in index for q in queries],
+                      scan_work=scan, index_work=len(rows) + len(queries))))
+"""
+
+MEMBERSHIP_AUDITOR = """
+import bisect, hashlib, json, sys
+raw = sys.stdin.buffer.read(8193)
+if len(raw) > 8192:
+    raise ValueError("oversized evidence")
+ordered = sorted(rows)
+positions = {}
+for i, row in enumerate(rows, 1):
+    positions.setdefault(row, i)
+def contains(query):
+    i = bisect.bisect_left(ordered, query)
+    return i < len(ordered) and ordered[i] == query
+expected = list(map(contains, queries))
+scan = sum(positions.get(query, len(rows)) for query in queries)
+indexed = len(rows) + len(queries)
+if json.loads(raw) != dict(mode=mode, baseline=expected, indexed=expected,
+                          scan_work=scan, index_work=indexed):
+    raise ValueError("membership answers or work counts differ")
+print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
+    outcome="pass" if indexed < scan else "fail",
+    report=f"Public membership fixture: {len(queries)} exact answers; indexed work {indexed}, scan work {scan}.")))
+"""
+
+FAMILIES = {
+    "subset": (7, RUNNER, AUDITOR),
+    "membership": (65535, MEMBERSHIP_RUNNER, MEMBERSHIP_AUDITOR),
+}
+
 
 def bounded_json(path, limit):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{path.name} must be a regular file")
     with path.open("rb") as handle:
         raw = handle.read(limit + 1)
     if len(raw) > limit:
@@ -58,14 +104,23 @@ def bounded_json(path, limit):
 
 
 def validate_fixture(fixture):
-    if not isinstance(fixture, dict) or set(fixture) != {"rows", "queries"}:
-        raise ValueError("provide rows and queries")
+    if not isinstance(fixture, dict) or set(fixture) not in ({"rows", "queries"}, {"family", "rows", "queries"}):
+        raise ValueError("provide rows and queries with an optional family")
+    family = fixture.get("family", "subset")
+    if not isinstance(family, str) or family not in FAMILIES:
+        raise ValueError("choose subset or membership")
+    maximum, _, _ = FAMILIES[family]
     rows, queries = fixture["rows"], fixture["queries"]
     if any(not isinstance(values, list) or not 1 <= len(values) <= limit
-           or any(type(value) is not int or not 0 <= value < 8 for value in values)
+           or any(type(value) is not int or not 0 <= value <= maximum for value in values)
            for values, limit in ((rows, 64), (queries, 512))):
-        raise ValueError("use 1–64 rows and 1–512 queries, each an integer from 0 to 7")
-    return rows, queries
+        raise ValueError(f"use 1–64 rows and 1–512 queries, each an integer from 0 to {maximum}")
+    return family, rows, queries
+
+
+def templates(family):
+    _, runner, auditor = FAMILIES[family]
+    return (("runner", runner), ("auditor", auditor))
 
 
 def executable_bytes(mode, rows, queries, code):
@@ -77,9 +132,9 @@ def review_package(directory):
     manifest = bounded_json(directory / "review.json", 8192)
     if not isinstance(manifest, dict) or set(manifest) != {"schema", "fixture", "pins"} or manifest["schema"] != 1:
         raise ValueError("unrecognized benchmark package")
-    rows, queries = validate_fixture(manifest["fixture"])
+    family, rows, queries = validate_fixture(manifest["fixture"])
     expected_pins = {}
-    for role, code in (("runner", RUNNER), ("auditor", AUDITOR)):
+    for role, code in templates(family):
         expected = executable_bytes("custom", rows, queries, code)
         path = directory / f"custom-{role}"
         if path.is_symlink() or not path.is_file():
@@ -90,7 +145,7 @@ def review_package(directory):
         expected_pins[role] = hashlib.sha256(expected).hexdigest()
     if manifest["pins"] != expected_pins:
         raise ValueError("recorded pins do not match the trusted files")
-    return {"review": "verified without executing either program", "rows": len(rows),
+    return {"review": "verified without executing either program", "family": family, "rows": len(rows),
             "queries": len(queries), "pins": expected_pins}
 
 
@@ -102,13 +157,14 @@ def main():
     mode.add_argument("--review", action="store_true", help="verify prepared files without executing them")
     args = parser.parse_args()
     fixtures = FIXTURES
+    family = "subset"
     if args.review or args.fixture:
         try:
             if args.review:
                 print(json.dumps(review_package(args.out), sort_keys=True))
                 return
             fixture = bounded_json(args.fixture, 8192)
-            rows, queries = validate_fixture(fixture)
+            family, rows, queries = validate_fixture(fixture)
             fixtures = {"custom": (rows, queries)}
         except (ValueError, OSError, RecursionError) as error:
             parser.error(str(error))
@@ -116,7 +172,7 @@ def main():
     packages = {}
     for mode, (rows, queries) in fixtures.items():
         info = {"title": f"Adaptive app pilot · {mode} fixture"}
-        for role, code in (("runner", RUNNER), ("auditor", AUDITOR)):
+        for role, code in templates(family):
             path = args.out.resolve() / f"{mode}-{role}"
             contents = executable_bytes(mode, rows, queries, code)
             path.write_bytes(contents)

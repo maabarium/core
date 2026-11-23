@@ -89,9 +89,11 @@ from the campaign. A reservation is not refunded after an interrupted
 attempt. This does not cap provider tokens, charges, or elapsed queue time.
 Use the matching updated worker with the desktop build.
 
-For new public synthetic subset-test workloads, run
+For new public synthetic workloads, run
 `python3 scripts/adaptive_app_smoke.py OUTPUT --fixture FIXTURE.json`.
-Supply a JSON object with integer arrays `rows` and `queries`. The tool
+Supply a JSON object with integer arrays `rows` and `queries`. Set
+`"family": "membership"` to compare exact membership with a direct scan,
+or leave it out to use subset existence. The tool
 prepares separately pinned executables from fixed trusted templates; it does
 not queue or run the benchmark, accept generated source, or produce CODA evidence.
 Run the same tool with `OUTPUT --review` to reconstruct the exact expected
