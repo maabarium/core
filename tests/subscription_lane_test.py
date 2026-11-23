@@ -18,6 +18,8 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_audited_failure_queues_one_adaptive_proposal_pair(self):
+        self.managed_benchmark(campaign=True, decision="adaptive")
     def test_staged_campaign_stops_after_first_win(self):
         self.managed_benchmark(campaign=True, decision="stage")
 
@@ -161,7 +163,7 @@ print(json.dumps(dict(contract_sha256="a"*64,
     baseline_teaching_sha256="b"*64, candidate_total_work=report["index_work"],
     baseline_total_work=report["scan_work"], strongest_comparator=True, complete=True)))
 """)
-                if decision == "limit":
+                if decision in ("limit", "adaptive"):
                     auditor.write_text(auditor.read_text().replace('wrong_answers=0', 'wrong_answers=1'))
                 if decision == "stage-next":
                     auditor.write_text(auditor.read_text().replace(
@@ -196,7 +198,8 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             adaptive_args = ()
             limit = 1 if decision == "limit" else 2
             if campaign:
-                successful("campaign-create", "--id", "demo", "--trial-limit", str(limit))
+                create_args = ("--public-target", "Public adaptive brief") if decision == "adaptive" else ()
+                successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
                     adaptive_args += ("--stage",)
@@ -240,6 +243,18 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                                      {"status": "stopped", "limit": 2, "audited_trials": 0})
                     return
                 successful("tick")
+                if decision == "adaptive":
+                    db = sqlite3.connect(state / "queue.db")
+                    pairs = db.execute("SELECT lane,prompt FROM jobs WHERE id LIKE 'proposal:demo:auto-after-1:%'").fetchall()
+                    self.assertEqual({lane for lane, _ in pairs}, {"codex", "antigravity"})
+                    for _, prompt in pairs:
+                        self.assertIn("Public adaptive brief", prompt)
+                        self.assertNotIn("PRIVATE-TITLE", prompt)
+                        self.assertNotIn("Matched-learner audit", prompt)
+                    self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
+                                     {"status": "active", "limit": 2, "audited_trials": 1})
+                    db.close()
+                    return
                 if decision == "stage-next":
                     self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
                                      {"status": "active", "limit": 2, "audited_trials": 1})

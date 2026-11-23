@@ -52,6 +52,10 @@ Add `--stage` to reserve a slot for an approved trial. The worker dispatches
 staged trials in submission order after audited failures. A pass, resource
 or execution failure, explicit stop, or exhausted budget prevents remaining
 staged trials from launching. The worker never executes provider text.
+For adaptive discovery, include an approved public brief via `--public-target`
+when creating the campaign from the CLI. An audited failure with no staged
+trial queues one deterministic Codex/Antigravity proposal pair. Only the
+failure bit and the approved brief go to providers; local evidence stays local.
 The desktop can create campaigns and display counts; approving and attaching
 a frozen trial is still a CLI step. Automatic proposal-to-trial coordination
 and native release verification remain open.

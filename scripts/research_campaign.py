@@ -21,6 +21,8 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_proposals (
             job_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id));
         CREATE INDEX IF NOT EXISTS campaign_proposals_by_campaign ON campaign_proposals(campaign);
+        CREATE TABLE IF NOT EXISTS campaign_adaptive (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id), public_brief TEXT NOT NULL);
     """)
 
 
@@ -60,13 +62,18 @@ def record(db, campaign, identity, outcome, evidence_sha256, *, in_transaction=F
         raise
 
 
-def create(db, campaign, limit):
+def create(db, campaign, limit, public_brief=None):
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
         raise ValueError('trial limit must be between 1 and 200')
     if not isinstance(campaign, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", campaign):
         raise ValueError('invalid campaign identity')
+    if public_brief is not None and not 1 <= len(public_brief.encode()) <= 4096:
+        raise ValueError('adaptive public brief must be 1–4096 bytes')
+    db.execute('BEGIN IMMEDIATE')
     with db:
         db.execute('INSERT INTO campaigns(id,trial_limit) VALUES (?,?)', (campaign, limit))
+        if public_brief is not None:
+            db.execute('INSERT INTO campaign_adaptive VALUES (?,?)', (campaign, public_brief))
 
 
 def verified_verdict(report, evidence, contract):
