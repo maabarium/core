@@ -12,7 +12,8 @@ results.
   resource limits, and human review policy through the desktop app.
 - [x] Preserve proposals, executable candidates, operational failures, and audited
   scientific trials as distinct records. Provider messages cannot declare success.
-- [ ] Carry the prior result and rejected-mechanism history into the next proposal.
+- [x] Carry prior failure and bounded rejected public catalog IDs into the next
+  proposal. Raw evidence and private trial identifiers stay local.
 - [x] Keep provider jobs constrained to advisory output. Only explicitly approved,
   pinned runners and auditors may execute locally. The app does not auto-author
   executable code from provider replies.
@@ -39,8 +40,12 @@ results.
 - [x] Walk through the offline practice exercise in the native app using an
   isolated profile: first test, separate final check, and finish. Zero jobs
   were created.
-- [ ] Complete the live-provider pilot and final native visual, security, and
-  performance release checks before publishing.
+- [ ] Finish native visual, security, and performance release checks on the
+  final build before publishing.
+- [x] Complete one isolated live adaptive catalog pilot with Codex and
+  Antigravity: first candidate rejected, second selected with agreed bounded
+  settings, development audit passed, and separate sealed confirmation passed.
+  Two synthetic trials counted; no authentic CODA evidence was opened.
 - [x] Verify isolated live subscription handoffs: Codex and Antigravity each
   returned a public synthetic proposal on their first attempt with no paid
   fallback. A separate locally audited benchmark completed live Codex review.

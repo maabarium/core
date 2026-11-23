@@ -275,9 +275,18 @@ def advance_campaigns(db):
                 round_id = f"auto-after-{ordinal}"
                 if not db.execute("SELECT 1 FROM campaign_proposals WHERE job_id=?",
                                   (f"proposal:{campaign}:{round_id}:codex",)).fetchone():
+                    rejected = [candidate for (candidate,) in db.execute("""SELECT m.loop_id
+                        FROM campaign_members m JOIN campaign_trials t ON t.campaign=m.campaign
+                            AND t.identity=m.loop_id AND t.outcome='fail'
+                        JOIN local_benchmarks b ON b.loop_id=m.loop_id
+                        WHERE m.campaign=? AND json_extract(b.spec,'$.selected_round') IS NOT NULL
+                        ORDER BY m.ordinal DESC LIMIT 20""", (campaign,))]
+                    history = ("Previously rejected public candidate IDs: " + json.dumps(rejected) + "\n"
+                               if rejected else "")
                     queue_campaign_proposals(db, campaign, round_id,
                         "The last independently audited trial failed its gate. Propose a distinct "
-                        "approach; do not weaken the gate. No benchmark result is supplied.\n" + brief)
+                        "approach; do not weaken the gate. No raw benchmark evidence is supplied.\n"
+                        + history + brief)
         db.commit()
     except Exception:
         db.rollback()

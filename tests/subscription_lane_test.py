@@ -18,6 +18,10 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    @unittest.skipUnless(os.getenv("MAABARIUM_LIVE_ADAPTIVE_PILOT") == "1",
+                         "uses live Codex and Antigravity subscriptions")
+    def test_live_adaptive_catalog_and_sealed_confirmation(self):
+        self.managed_benchmark(live=True, campaign=True, decision="catalog-flow")
     def test_preapproved_confirmation_runs_after_restart(self):
         self.managed_benchmark(campaign=True, decision="confirm-auto")
 
@@ -271,8 +275,9 @@ else:
     antigravity = '-p' in args
     prompt = args[args.index('-p')+1] if antigravity else sys.stdin.read()
     assert 'PRIVATE-TITLE' not in prompt and 'Matched-learner audit' not in prompt
-    answer = ('fresh-public-check' if 'fresh-public-check' in prompt else
-              json.dumps(dict(id='second',parameters=dict(width=4)))) if 'Approved IDs:' in prompt else 'Review complete'
+    choices = json.JSONDecoder().raw_decode(prompt.split('Approved IDs: ', 1)[1])[0] if 'Approved IDs: ' in prompt else []
+    answer = ('fresh-public-check' if 'fresh-public-check' in choices else
+              json.dumps(dict(id='second',parameters=dict(width=4)))) if choices else 'Review complete'
     if antigravity:
         assert json.loads(args[args.index('--settings')+1])['useG1Credits'] is False
         print(json.dumps(dict(status='SUCCESS', response=answer)))
@@ -288,7 +293,7 @@ else:
             base = [sys.executable, str(SCRIPT), "--state", str(state),
                     "--codex", "codex" if live else str(fake)]
             if decision == "catalog-flow":
-                base += ["--antigravity", str(fake)]
+                base += ["--antigravity", os.getenv("MAABARIUM_AGY", "agy") if live else str(fake)]
             def run(*args):
                 return subprocess.run([*base, *args], capture_output=True, text=True,
                                       timeout=135 if live else 10)
@@ -300,6 +305,11 @@ else:
             limit = 1 if decision == "limit" else 2
             if campaign:
                 create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper", "confirm-auto", "confirm-auto-tamper", "catalog", "catalog-flow") else ()
+                if live and decision == "catalog-flow":
+                    create_args = ("--public-target",
+                        "Public synthetic release test. Prefer the smallest first: when fresh-public-check "
+                        "is an available ID, select it. Otherwise select second with width exactly 4. "
+                        "Use the stated reply format and do not use tools.")
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
@@ -384,6 +394,9 @@ else:
                         self.assertEqual(db.execute("SELECT identity,outcome FROM campaign_trials ORDER BY rowid").fetchall(),
                                          [("fresh-public-check", "fail"), ("second", "pass")])
                         digest, = db.execute("SELECT evidence_sha256 FROM campaign_trials WHERE outcome='pass'").fetchone()
+                        prompt, = db.execute("SELECT prompt FROM jobs WHERE id='proposal:demo:auto-after-1:codex'").fetchone()
+                        self.assertIn('Previously rejected public candidate IDs: ["fresh-public-check"]', prompt)
+                        self.assertNotIn("PRIVATE-TITLE", prompt)
                     sealed = root / "confirmation"
                     sealed.write_text(second.read_text().replace("successor=True", "successor=True, sealed_fixture=True"))
                     sealed.chmod(0o700)
