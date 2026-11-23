@@ -18,6 +18,42 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_catalog_trial_runs_after_agreement_in_restarted_worker(self):
+        self.managed_benchmark(campaign=True, decision="catalog")
+    def test_catalog_selection_is_closed_to_unapproved_or_disagreeing_ids(self):
+        advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
+        for answers, expected in [(("pick", "pick"), "active"), (("pick", "other"), "stopped"),
+                                  (("unknown", "unknown"), "stopped")]:
+            with self.subTest(answers=answers):
+                db = sqlite3.connect(":memory:", isolation_level=None)
+                db.executescript("""CREATE TABLE campaigns(id TEXT,status TEXT);
+                    CREATE TABLE campaign_members(loop_id TEXT,campaign TEXT,ordinal INTEGER);
+                    CREATE TABLE research_loops(id TEXT,status TEXT);
+                    CREATE TABLE campaign_trials(campaign TEXT,identity TEXT,outcome TEXT);
+                    CREATE TABLE campaign_proposals(job_id TEXT,campaign TEXT);
+                    CREATE TABLE jobs(id TEXT,lane TEXT,state TEXT,detail TEXT,result TEXT,finished_at INTEGER);
+                    CREATE TABLE local_benchmarks(loop_id TEXT,spec TEXT);
+                    INSERT INTO campaigns VALUES ('demo','active');
+                    INSERT INTO campaign_members VALUES ('pick','demo',1);
+                    INSERT INTO research_loops VALUES ('pick','catalog');
+                    INSERT INTO local_benchmarks VALUES ('pick','{}');
+                    INSERT INTO jobs(id,state) VALUES ('loop:pick:1','queued');""")
+                for lane, answer, detail in zip(("codex", "antigravity"), answers,
+                        ("ChatGPT", "Antigravity account; AI credits disabled for run")):
+                    job = f"proposal:demo:initial:{lane}"
+                    db.execute("INSERT INTO campaign_proposals VALUES (?,'demo')", (job,))
+                    db.execute("INSERT INTO jobs(id,lane,state,detail,result) VALUES (?,?,'done',?,?)",
+                               (job, lane, detail, answer))
+                for _ in range(2):
+                    advance(db)
+                self.assertEqual(db.execute("SELECT status FROM research_loops").fetchone()[0], expected)
+                if expected == "active":
+                    self.assertEqual(json.loads(db.execute("SELECT spec FROM local_benchmarks").fetchone()[0]),
+                                     {"selected_round": "initial"})
+                else:
+                    self.assertEqual(db.execute("SELECT status FROM campaigns").fetchone()[0], "human_review")
+                db.close()
+
     def test_adaptive_success_requires_separate_confirmation(self):
         self.managed_benchmark(campaign=True, decision="confirm")
 
@@ -218,11 +254,13 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             adaptive_args = ()
             limit = 1 if decision == "limit" else 2
             if campaign:
-                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper") else ()
+                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper", "catalog") else ()
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
                     adaptive_args += ("--stage",)
+                if decision == "catalog":
+                    adaptive_args += ("--stage", "--select-by-proposal")
             if adaptive:
                 branches = {}
                 for outcome in ("pass", "fail"):
@@ -243,6 +281,23 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                        "--auditor", str(auditor),
                        "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
             if campaign:
+                if decision == "catalog":
+                    successful("campaign-start", "--id", "demo")
+                    successful("campaign-start", "--id", "demo")
+                    with sqlite3.connect(state / "queue.db") as db:
+                        self.assertEqual(db.execute("SELECT status FROM research_loops").fetchone()[0], "catalog")
+                        for lane, detail in (("codex", "ChatGPT"),
+                            ("antigravity", "Antigravity account; AI credits disabled for run")):
+                            prompt, = db.execute("SELECT prompt FROM jobs WHERE id=?",
+                                                 (f"proposal:demo:initial:{lane}",)).fetchone()
+                            self.assertIn('Approved IDs: ["fresh-public-check"]', prompt)
+                            self.assertNotIn(str(fixture), prompt)
+                            db.execute("UPDATE jobs SET state='done',detail=?,result='fresh-public-check' WHERE id=?",
+                                       (detail, f"proposal:demo:initial:{lane}"))
+                    successful("tick")
+                    self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
+                                     {"status": "confirmation_required", "limit": 2, "audited_trials": 1})
+                    return
                 if decision in ("stage", "stage-next"):
                     second = root / "runner-two"
                     second.write_text(fixture.read_text().replace(

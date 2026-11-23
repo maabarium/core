@@ -59,6 +59,14 @@ failure bit and the approved brief go to providers; local evidence stays local.
 Start discovery explicitly with `campaign-start --id <campaign>` or
 **Send public brief to Codex and Antigravity** in Research activity. Repeating
 the request does not create a duplicate round or consume a trial.
+For an unattended search over a vetted catalog, add
+`--stage --select-by-proposal` when submitting each approved benchmark
+before starting discovery. Use public-safe trial IDs: providers receive
+the IDs and approved brief, never executable paths or benchmark output.
+The worker dispatches a catalog trial only when both subscription results
+return the same available ID. Disagreement, invalid IDs, or failed proposals
+stop at review. After an audited failure it requests another selection from
+the remaining catalog, unless the trial limit has been reached.
 An adaptive development pass stops dispatch at **Sealed confirmation
 required**, not **Target achieved**. This prevents a search over many
 development trials from declaring success on the same evidence it used to
@@ -74,8 +82,9 @@ identity; different file hashes alone do not prove those properties.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
-Automatically preparing a benchmark from a proposal and native release
-verification remain open.
+Catalog configuration is currently CLI-only. Preparing new benchmark
+executables from free-form proposals and native release verification remain
+open.
 
 Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
 acceptance requirements are implemented and verified.
