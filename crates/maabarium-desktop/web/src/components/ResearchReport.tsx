@@ -9,6 +9,7 @@ type Lane = TokenUsage & {
   pending: number; attempts: number; observed_jobs: number;
 };
 type Campaign = { id: string; status: string; limit: number; audited_trials: number; ready_proposal_rounds?: string[]; can_start?: boolean };
+type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
@@ -39,6 +40,15 @@ export function ResearchReport() {
   const [publicBrief, setPublicBrief] = useState("");
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [practice, setPractice] = useState<PracticeResult>();
+  const [practicing, setPracticing] = useState(false);
+  async function runPractice() {
+    setPracticing(true);
+    setError("");
+    try { setPractice(await invoke<PracticeResult>("research_campaign_practice")); }
+    catch (failure) { setError(String(failure)); }
+    finally { setPracticing(false); }
+  }
   const [stopRequested, setStopRequested] = useState<string>();
   const [stopping, setStopping] = useState(false);
   async function stopCampaign(id: string) {
@@ -99,6 +109,20 @@ export function ResearchReport() {
           onClick={() => void refresh()}>{busy ? "Loading…" : report ? "Refresh report" : "Load report"}</button>
       </div>
       {error && <p role="status" className="mt-2 text-sm">{error}</p>}
+      <details className="mt-3 rounded border p-3">
+        <summary className="cursor-pointer font-semibold">Try a practice experiment</summary>
+        <p className="mt-2 text-sm">Can you check whether a number is on a sorted list without looking at every number? Compare two ways to check. No sign-in, files, or internet needed.</p>
+        <button type="button" className="mt-2 min-h-10 rounded border px-3 text-sm" disabled={practicing}
+          onClick={() => void runPractice()}>{practicing ? "Running…" : "Run practice experiment"}</button>
+        {practice && <div className="mt-2 space-y-1 text-sm" role="status">
+          <p>Both methods gave the expected answer on {practice.matches} of {practice.questions} questions.</p>
+          <ul className="list-disc pl-5">
+            <li>Check one number at a time: {practice.scan_checks} comparisons</li>
+            <li>Keep splitting the list in half: {practice.lookup_checks} comparisons</li>
+          </ul>
+          <p>This comparison starts with an already sorted list. It does not count the work of sorting, and it does not use a campaign trial.</p>
+        </div>}
+      </details>
       {report && <>
         <details className="mt-3 rounded border p-3">
           <summary className="cursor-pointer font-semibold">Create a research campaign</summary>

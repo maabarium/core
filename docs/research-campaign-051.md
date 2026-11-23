@@ -29,6 +29,10 @@ Status: incomplete development, not a released capability.
 
 ## Current implementation
 
+**Try a practice experiment** in Research activity runs a small built-in
+comparison locally, without files, an account, or any campaign jobs. It teaches
+correctness and work accounting; it is not CODA evidence.
+
 The worker supports `campaign-create` and `campaign-status` with an experiment
 ID. Submit a frozen trial through `local-benchmark-enqueue` with `--campaign`
 and `--contract-sha256`; the first trial binds the contract for that campaign.

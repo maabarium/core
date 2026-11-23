@@ -408,6 +408,43 @@ pub(crate) async fn research_queue_report() -> Result<QueueReport, String> {
         .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+pub(crate) struct PracticeResult {
+    questions: usize,
+    matches: usize,
+    scan_checks: usize,
+    lookup_checks: usize,
+}
+
+#[tauri::command]
+pub(crate) fn research_campaign_practice() -> PracticeResult {
+    let numbers = [2, 4, 7, 9, 12];
+    let questions = [2, 5, 9, 12, 13];
+    let expected = [true, false, true, true, false];
+    let mut scan_checks = 0;
+    let mut lookup_checks = 0;
+    let mut matches = 0;
+    for (question, answer) in questions.into_iter().zip(expected) {
+        let scanned = numbers.iter().any(|&number| {
+            scan_checks += 1;
+            number == question
+        });
+        let found = numbers
+            .binary_search_by(|number| {
+                lookup_checks += 1;
+                number.cmp(&question)
+            })
+            .is_ok();
+        matches += usize::from(scanned == answer && found == answer);
+    }
+    PracticeResult {
+        questions: questions.len(),
+        matches,
+        scan_checks,
+        lookup_checks,
+    }
+}
+
 fn create_campaign(
     db: &mut Connection,
     id: &str,
@@ -1626,6 +1663,15 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn practice_checks_both_methods_against_known_answers() {
+        let result = super::research_campaign_practice();
+        assert_eq!(
+            (result.questions, result.matches, result.scan_checks),
+            (5, 5, 20)
+        );
+        assert!(result.lookup_checks > 0);
+    }
     #[cfg(unix)]
     #[test]
     fn desktop_preapproval_pins_distinct_local_executables_without_queuing_confirmation() {

@@ -5,6 +5,17 @@ import { ResearchReport } from "./ResearchReport";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+it("runs a local practice experiment without opening the queue or starting a campaign", async () => {
+  vi.mocked(invoke).mockClear();
+  vi.mocked(invoke).mockResolvedValueOnce({ questions: 5, matches: 5, scan_checks: 20, lookup_checks: 15 });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByText("Try a practice experiment"));
+  fireEvent.click(screen.getByRole("button", { name: "Run practice experiment" }));
+  expect(await screen.findByText("Both methods gave the expected answer on 5 of 5 questions.")).toBeTruthy();
+  expect(screen.getByText("Keep splitting the list in half: 15 comparisons")).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls).toEqual([["research_campaign_practice"]]);
+});
+
 it("creates a campaign without queuing a benchmark", async () => {
   vi.mocked(invoke).mockClear();
   vi.mocked(invoke).mockResolvedValueOnce({ experiments: 0, lanes: [] })
