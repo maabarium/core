@@ -2,30 +2,49 @@
 
 Status: incomplete development, not a released capability.
 
-## Acceptance
+## Acceptance checklist
 
-- Configure a target, trial limit up to 200, provider roles, model/effort,
+Checked items apply to the implemented vetted-catalog workflow and its test
+fixtures. They are not claims about live subscriptions or scientific CODA
+results.
+
+- [ ] Configure a target, trial limit up to 200, provider roles, model/effort,
   resource limits, and human review policy through the desktop app.
-- Preserve proposals, executable candidates, operational failures, and audited
+- [x] Preserve proposals, executable candidates, operational failures, and audited
   scientific trials as distinct records. Provider messages cannot declare success.
-- Carry the prior result and rejected-mechanism history into the next proposal.
-- Keep providers read-only by default. Generated code must pass explicit trusted
+- [ ] Carry the prior result and rejected-mechanism history into the next proposal.
+- [x] Keep provider jobs constrained to advisory output. Only explicitly approved,
+  pinned runners and auditors may execute locally. The app does not auto-author
+  executable code from provider replies.
+- [ ] Implement preparation of genuinely new benchmarks. Generated code must pass explicit trusted
   validation and the configured review policy before it becomes an executable.
-- Freeze candidate and independent auditor identities before opening evidence.
-- Verify same teaching evidence, zero wrong answers, no coverage loss, and lower
+- [x] Freeze candidate and independent auditor identities before opening evidence.
+- [ ] Verify same teaching evidence, zero wrong answers, no coverage loss, and lower
   total work than the strongest matched exact comparator. Count all preparation,
   proposals, verification, fallback, and inference costs under a frozen contract.
-- Do not reuse a repeatedly inspected panel as an unbiased success certificate.
+- [x] Do not reuse a repeatedly inspected panel as an unbiased success certificate.
   Separate development feedback from a sealed confirmation panel and preregister
   the campaign-level success rule before trials begin.
-- Persist each audited verdict once across crashes and retries. Interrupted
+- [x] Persist each audited verdict once across crashes and retries. Interrupted
   scientific execution requires review, never a blind automatic rerun.
-- Stop at independently audited success, the configured trial bound, explicit
+- [x] Stop trial dispatch at independently audited success, the configured trial bound, explicit
   user stop, or a safety failure. No work may start after the terminal state.
-- Display campaign progress, decisions, provider token usage, failures, and final
+- [ ] Display campaign progress, decisions, provider token usage, failures, and final
   review in the existing reporting surfaces.
-- Verify restart, quota recovery, cancellation, malformed output, tampering,
+- [ ] Verify restart, quota recovery, cancellation, malformed output, tampering,
   duplicate results, concurrency, paid-fallback exclusion, and native UI behavior.
+- [ ] Verify a ready-made beginner campaign in the native app. The offline
+  practice exercise is implemented, but it is not a real queued campaign.
+- [x] Walk through the offline practice exercise in the native app using an
+  isolated profile: first test, separate final check, and finish. Zero jobs
+  were created.
+- [ ] Complete the live-provider pilot and final native visual, security, and
+  performance release checks before publishing.
+
+The local regression run passed 40 worker tests, seven ledger tests, 52
+desktop Rust tests, and 106 frontend tests. The worker and Rust suites each
+skipped one live-provider test. The production frontend build and Rust
+advisory check passed. These are development checks, not release sign-off.
 
 ## Current implementation
 
