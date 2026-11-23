@@ -8,7 +8,7 @@ type Lane = TokenUsage & {
   lane: string; jobs: number; completed: number; failed: number; stopped: number;
   pending: number; attempts: number; observed_jobs: number;
 };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number; ready_proposal_rounds?: string[] };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; ready_proposal_rounds?: string[]; can_start?: boolean };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
@@ -38,6 +38,16 @@ export function ResearchReport() {
   const [campaignLimit, setCampaignLimit] = useState(200);
   const [publicBrief, setPublicBrief] = useState("");
   const [creating, setCreating] = useState(false);
+  const [starting, setStarting] = useState(false);
+  async function startCampaign(id: string) {
+    setStarting(true);
+    setError("");
+    try {
+      await invoke("research_campaign_start", { id });
+      await refresh();
+    } catch (failure) { setError(String(failure)); }
+    finally { setStarting(false); }
+  }
   async function createCampaign() {
     setCreating(true);
     setError("");
@@ -120,6 +130,10 @@ export function ResearchReport() {
                   {campaign.ready_proposal_rounds.map((round) => <li key={round} className="break-all">{round}</li>)}
                 </ul>
               </div>}
+              {campaign.can_start && <button type="button" className="mt-2 rounded border px-3 py-1"
+                disabled={starting || busy} onClick={() => void startCampaign(campaign.id)}>
+                Send public brief to Codex and Antigravity
+              </button>}
             </li>)}
           </ul>
         </section>}

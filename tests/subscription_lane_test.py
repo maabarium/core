@@ -18,6 +18,21 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_adaptive_start_is_explicit_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = [sys.executable, str(SCRIPT), "--state", tmp]
+            def run(*args):
+                return subprocess.check_output([*base, *args], text=True, timeout=10)
+            run("campaign-create", "--id", "demo", "--public-target", "Public synthetic comparison")
+            self.assertEqual(json.loads(run("status")), [])
+            run("campaign-start", "--id", "demo")
+            run("campaign-start", "--id", "demo")
+            jobs = json.loads(run("status"))
+            self.assertEqual({job["id"] for job in jobs}, {
+                "proposal:demo:initial:codex", "proposal:demo:initial:antigravity",
+            })
+            self.assertEqual(json.loads(run("campaign-status", "--id", "demo"))["audited_trials"], 0)
+
     def test_audited_failure_queues_one_adaptive_proposal_pair(self):
         self.managed_benchmark(campaign=True, decision="adaptive")
     def test_staged_campaign_stops_after_first_win(self):

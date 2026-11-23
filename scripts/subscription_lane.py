@@ -762,7 +762,7 @@ def main():
     parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
     parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
     parser.add_argument("--enable-deepseek", action="store_true", help="allow paid DeepSeek jobs using the macOS Keychain")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status", "campaign-stop", "campaign-propose"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status", "campaign-stop", "campaign-propose", "campaign-start"])
     parser.add_argument("--campaign")
     parser.add_argument("--trial-limit", type=int, default=200)
     parser.add_argument("--contract-sha256")
@@ -860,7 +860,7 @@ def main():
             db.execute("""CREATE TABLE IF NOT EXISTS local_benchmarks (
                 loop_id TEXT PRIMARY KEY, spec TEXT NOT NULL, outcome TEXT)""")
             db.commit()
-            if args.action in ("campaign-create", "campaign-status", "campaign-stop", "campaign-propose") or args.campaign:
+            if args.action in ("campaign-create", "campaign-status", "campaign-stop", "campaign-propose", "campaign-start") or args.campaign:
                 from research_campaign import initialize
                 initialize(db)
             if args.action == "campaign-create":
@@ -870,6 +870,19 @@ def main():
                            args.public_target.strip() if args.public_target is not None else None)
                 except (ValueError, sqlite3.IntegrityError) as error:
                     parser.error(str(error))
+            elif args.action == "campaign-start":
+                db.execute("BEGIN IMMEDIATE")
+                brief = db.execute("""SELECT a.public_brief FROM campaigns c
+                    JOIN campaign_adaptive a ON a.campaign=c.id
+                    WHERE c.id=? AND c.status='active'""", (args.id,)).fetchone()
+                if not brief:
+                    parser.error("an active campaign with an approved public brief is required")
+                existing = db.execute("""SELECT 1 FROM campaign_proposals WHERE campaign=?
+                    UNION ALL SELECT 1 FROM campaign_members WHERE campaign=? LIMIT 1""",
+                    (args.id, args.id)).fetchone()
+                if not existing:
+                    queue_campaign_proposals(db, args.id, "initial", brief[0])
+                db.commit()
             elif args.action == "campaign-propose":
                 public = (args.public_target or "").strip()
                 if (not args.campaign or not public or len(public.encode()) > 4096

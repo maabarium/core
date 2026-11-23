@@ -56,6 +56,9 @@ For adaptive discovery, include an approved public brief via `--public-target`
 when creating the campaign from the CLI. An audited failure with no staged
 trial queues one deterministic Codex/Antigravity proposal pair. Only the
 failure bit and the approved brief go to providers; local evidence stays local.
+Start discovery explicitly with `campaign-start --id <campaign>` or
+**Send public brief to Codex and Antigravity** in Research activity. Repeating
+the request does not create a duplicate round or consume a trial.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
