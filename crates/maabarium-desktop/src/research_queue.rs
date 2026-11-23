@@ -487,6 +487,70 @@ pub(crate) async fn research_campaign_start(id: String) -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub(crate) async fn research_campaign_stop(id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || stop_campaign(&mut connect()?, &id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn stop_campaign(db: &mut Connection, id: &str) -> Result<(), String> {
+    let err = |error: rusqlite::Error| error.to_string();
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS campaign_confirmations (
+        campaign TEXT PRIMARY KEY REFERENCES campaigns(id), loop_id TEXT NOT NULL UNIQUE,
+        outcome TEXT, evidence_sha256 TEXT);",
+    )
+    .map_err(err)?;
+    const JOBS: &str = "SELECT job_id FROM campaign_proposals WHERE campaign=?1
+        UNION ALL SELECT 'loop:' || loop_id || ':1' FROM campaign_members WHERE campaign=?1
+        UNION ALL SELECT 'loop:' || loop_id || ':review' FROM campaign_members WHERE campaign=?1
+        UNION ALL SELECT 'loop:' || loop_id || ':1' FROM campaign_confirmations WHERE campaign=?1";
+    let running: bool = tx
+        .query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM jobs WHERE state='running' AND id IN ({JOBS}))"),
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(err)?;
+    if running {
+        return Err(
+            "A campaign job is running. Stop is available after this attempt finishes.".into(),
+        );
+    }
+    if tx
+        .execute(
+            "UPDATE campaigns SET status='stopped' WHERE id=?
+        AND status IN ('active','confirmation_required','confirming')",
+            [id],
+        )
+        .map_err(err)?
+        != 1
+    {
+        return Err("This campaign is already closed.".into());
+    }
+    tx.execute(
+        &format!(
+            "UPDATE jobs SET state='failed', detail='loop stopped', finished_at=unixepoch()
+        WHERE state='queued' AND id IN ({JOBS})"
+        ),
+        [id],
+    )
+    .map_err(err)?;
+    tx.execute(
+        "UPDATE research_loops SET status='stopped'
+        WHERE status IN ('active','staged','catalog') AND id IN (
+          SELECT loop_id FROM campaign_members WHERE campaign=?1
+          UNION ALL SELECT loop_id FROM campaign_confirmations WHERE campaign=?1)",
+        [id],
+    )
+    .map_err(err)?;
+    tx.commit().map_err(err)
+}
+
 fn start_campaign(db: &mut Connection, id: &str) -> Result<(), String> {
     let err = |error: rusqlite::Error| error.to_string();
     let tx = db
@@ -1432,6 +1496,28 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn desktop_stop_refuses_running_work_then_cancels_queued_work() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::initialise(&mut db).unwrap();
+        super::create_campaign(&mut db, "demo", 2, Some("Public")).unwrap();
+        super::start_campaign(&mut db, "demo").unwrap();
+        db.execute("UPDATE jobs SET state='running' WHERE lane='codex'", [])
+            .unwrap();
+        assert!(super::stop_campaign(&mut db, "demo").is_err());
+        db.execute("UPDATE jobs SET state='done' WHERE lane='codex'", [])
+            .unwrap();
+        super::stop_campaign(&mut db, "demo").unwrap();
+        assert_eq!(super::campaign_report(&db).unwrap()[0].status, "stopped");
+        let row: (String, i64) = db
+            .query_row(
+                "SELECT detail,attempts FROM jobs WHERE lane='antigravity'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("loop stopped".into(), 0));
+    }
     #[test]
     fn desktop_catalog_freezes_on_start_and_shares_only_public_ids() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();

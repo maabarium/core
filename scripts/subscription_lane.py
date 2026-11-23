@@ -353,7 +353,7 @@ def process_local_benchmark(db, lock_fd, state):
         db.execute("BEGIN IMMEDIATE")
         if campaign:
             db.execute("UPDATE campaigns SET status='human_review' WHERE id=? AND status IN ('active','confirming')", (campaign,))
-        db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail=? WHERE id=?",
+        db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail=? WHERE id=? AND state IN ('queued','running')",
                    (f"Operational failure: {stage}. No automatic rerun.", job))
         db.commit()
     return True

@@ -35,6 +35,9 @@ and `--contract-sha256`; the first trial binds the contract for that campaign.
 Only one trial can be pending, and duplicate runner hashes are rejected.
 Use `campaign-stop --id <campaign>` to stop dispatch and cancel its queued work.
 If the worker is in an active attempt, stop is rejected until it releases the lock.
+The desktop Research activity report also offers **Stop campaign**. It preserves
+completed evidence, cancels queued campaign jobs, and refuses to interrupt a
+running campaign attempt.
 Trial outcomes and job completion are committed together after the independent
 audit. Operational failures require review rather than counting as scientific
 verdicts. The desktop Research activity report shows campaign progress.

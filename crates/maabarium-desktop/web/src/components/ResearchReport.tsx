@@ -39,6 +39,18 @@ export function ResearchReport() {
   const [publicBrief, setPublicBrief] = useState("");
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [stopRequested, setStopRequested] = useState<string>();
+  const [stopping, setStopping] = useState(false);
+  async function stopCampaign(id: string) {
+    setStopping(true);
+    setError("");
+    try {
+      await invoke("research_campaign_stop", { id });
+      setStopRequested(undefined);
+      await refresh();
+    } catch (failure) { setError(String(failure)); }
+    finally { setStopping(false); }
+  }
   async function startCampaign(id: string) {
     setStarting(true);
     setError("");
@@ -136,6 +148,15 @@ export function ResearchReport() {
                 disabled={starting || busy} onClick={() => void startCampaign(campaign.id)}>
                 Send public brief to Codex and Antigravity
               </button>}
+              {["active", "confirmation_required", "confirming"].includes(campaign.status) &&
+                (stopRequested === campaign.id ? <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <p className="w-full">Cancel queued work and close this campaign? Completed evidence will be kept.</p>
+                  <button type="button" className="rounded border px-3 py-1" disabled={stopping}
+                    onClick={() => void stopCampaign(campaign.id)}>Stop and cancel queued work</button>
+                  <button type="button" className="rounded border px-3 py-1" disabled={stopping}
+                    onClick={() => setStopRequested(undefined)}>Keep campaign</button>
+                </div> : <button type="button" className="mt-2 rounded border px-3 py-1"
+                  disabled={stopping || busy || starting} onClick={() => setStopRequested(campaign.id)}>Stop campaign</button>)}
             </li>)}
           </ul>
         </section>}
