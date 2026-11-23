@@ -8,7 +8,8 @@ type Lane = TokenUsage & {
   lane: string; jobs: number; completed: number; failed: number; stopped: number;
   pending: number; attempts: number; observed_jobs: number;
 };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean };
+type ProposalUsage = TokenUsage & { lane: string; jobs: number; observed_jobs: number };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[] };
 type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
 type Starter = { stage: string; first: PracticeResult | null; final_result: PracticeResult | null };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
@@ -217,6 +218,17 @@ export function ResearchReport() {
                 <div><dt>Did not meet the target</dt><dd className="font-semibold">{campaign.rejected_trials}</dd></div>
                 <div><dt>Could not be checked</dt><dd className="font-semibold">{campaign.operational_failures}</dd></div>
               </dl>
+              {!!campaign.proposal_usage?.length && <details className="mt-3">
+                <summary className="cursor-pointer font-semibold">Token usage for suggestions</summary>
+                <p className="mt-1">Local benchmark checks don’t use model tokens. Cache reads may already be included in input.</p>
+                <ul className="mt-2 space-y-2">
+                  {campaign.proposal_usage.map(usage => <li key={usage.lane} className="rounded border p-2">
+                    <p className="font-semibold">{providers[usage.lane] ?? usage.lane}</p>
+                    <p>Usage reported for {usage.observed_jobs} of {usage.jobs} jobs.</p>
+                    <TokenDetails usage={usage} />
+                  </li>)}
+                </ul>
+              </details>}
               {!!campaign.ready_proposal_rounds?.length && <div className="mt-2">
                 <p>Ready to review for a local benchmark:</p>
                 <ul className="list-disc pl-5">

@@ -234,8 +234,19 @@ struct CampaignReport {
     audited_trials: i64,
     rejected_trials: i64,
     operational_failures: i64,
+    proposal_usage: Vec<ProposalUsage>,
     ready_proposal_rounds: Vec<String>,
     can_start: bool,
+}
+
+#[derive(Serialize)]
+struct ProposalUsage {
+    lane: String,
+    jobs: i64,
+    observed_jobs: i64,
+    input: Option<i64>,
+    output: Option<i64>,
+    cached: Option<i64>,
 }
 
 fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
@@ -263,6 +274,7 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
             audited_trials: row.get(3)?,
             rejected_trials: row.get(4)?,
             operational_failures: row.get(5)?,
+            proposal_usage: Vec::new(),
             ready_proposal_rounds: Vec::new(),
             can_start: false,
         })
@@ -292,6 +304,40 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
         |row| row.get::<_, i64>(0),
     )? == 4;
     if proposals_available {
+        let has_usage: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jobs') WHERE name='usage_json')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_usage {
+            let mut usage = db.prepare(
+                "WITH observations AS (
+                    SELECT j.lane, CASE WHEN json_valid(j.usage_json) THEN j.usage_json END AS usage
+                    FROM campaign_proposals p JOIN jobs j ON j.id=p.job_id WHERE p.campaign=?1
+                )
+                SELECT lane, COUNT(*), COUNT(*) FILTER (
+                    WHERE json_type(usage,'$.input')='integer' OR json_type(usage,'$.output')='integer'
+                    OR json_type(usage,'$.cached')='integer'),
+                    SUM(CASE WHEN json_type(usage,'$.input')='integer' THEN json_extract(usage,'$.input') END),
+                    SUM(CASE WHEN json_type(usage,'$.output')='integer' THEN json_extract(usage,'$.output') END),
+                    SUM(CASE WHEN json_type(usage,'$.cached')='integer' THEN json_extract(usage,'$.cached') END)
+                FROM observations GROUP BY lane ORDER BY lane",
+            )?;
+            for campaign in &mut reports {
+                campaign.proposal_usage = usage
+                    .query_map([&campaign.id], |row| {
+                        Ok(ProposalUsage {
+                            lane: row.get(0)?,
+                            jobs: row.get(1)?,
+                            observed_jobs: row.get(2)?,
+                            input: row.get(3)?,
+                            output: row.get(4)?,
+                            cached: row.get(5)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+            }
+        }
         let mut ready = db.prepare(
             "WITH proposals AS (
               SELECT j.lane, substr(j.id, length(?1)+11, length(j.id)-length(?1)-11-length(j.lane)) AS round
@@ -2022,6 +2068,21 @@ mod tests {
               ('proposal:demo:auto-after-1:antigravity','antigravity','done','Antigravity account; AI credits disabled for run','two'),
               ('proposal:demo:incomplete:codex','codex','done','ChatGPT','three');
             INSERT INTO campaign_proposals SELECT id,'demo' FROM jobs;").unwrap();
+        db.execute_batch(
+            "UPDATE jobs SET usage_json='{\"input\":12,\"output\":0}' WHERE id='proposal:demo:auto-after-1:codex';
+             UPDATE jobs SET usage_json='invalid' WHERE id='proposal:demo:incomplete:codex';
+             INSERT INTO jobs(id,lane,usage_json) VALUES ('unrelated','codex','{\"input\":99}');",
+        ).unwrap();
+        let report = super::campaign_report(&db).unwrap().remove(0);
+        let codex = report
+            .proposal_usage
+            .iter()
+            .find(|usage| usage.lane == "codex")
+            .unwrap();
+        assert_eq!(
+            (codex.jobs, codex.observed_jobs, codex.input, codex.output),
+            (2, 1, Some(12), Some(0))
+        );
         assert_eq!(
             super::campaign_report(&db).unwrap()[0].ready_proposal_rounds,
             ["auto-after-1"]

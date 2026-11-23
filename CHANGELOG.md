@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Research activity separates audited rejections from operational failures and shows reported suggestion token usage by provider for each campaign.
+
 ## [0.5.0] - 2026-11-22
 
 The local research queue supports ordered subscription-provider plans with

@@ -70,7 +70,8 @@ it("shows audited campaigns separately from provider jobs", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({
     experiments: 8,
     lanes: [],
-    campaigns: [{ id: "coda-demo", status: "target_achieved", limit: 200, audited_trials: 3, rejected_trials: 2, operational_failures: 1 }],
+    campaigns: [{ id: "coda-demo", status: "target_achieved", limit: 200, audited_trials: 3, rejected_trials: 2, operational_failures: 1,
+      proposal_usage: [{ lane: "codex", jobs: 3, observed_jobs: 2, input: 120, output: 0 }] }],
   });
   render(<ResearchReport />);
   fireEvent.click(screen.getByRole("button", { name: "Load report" }));
@@ -79,6 +80,9 @@ it("shows audited campaigns separately from provider jobs", async () => {
   for (const [label, count] of [["Passed", "1"], ["Did not meet the target", "2"], ["Could not be checked", "1"]]) {
     expect(screen.getByText(label).nextElementSibling?.textContent).toBe(count);
   }
+  expect(screen.getByText("Token usage for suggestions").closest("details")?.open).toBe(false);
+  expect(screen.getByText("Usage reported for 2 of 3 jobs.")).toBeTruthy();
+  expect(screen.getByText("Output").nextElementSibling?.textContent).toBe("0");
 });
 
 it("shows terminal rates and reveals provider details only with the switch", async () => {

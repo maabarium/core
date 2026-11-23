@@ -80,7 +80,9 @@ running campaign attempt.
 Trial outcomes and job completion are committed together after the independent
 audit. Operational failures require review rather than counting as scientific
 verdicts. The desktop Research activity report separates passed trials,
-audited rejections, and trials that could not be checked.
+audited rejections, and trials that could not be checked. Its suggestion
+usage disclosure shows reported input, output, and cache reads per provider
+for that campaign, excluding unrelated jobs.
 
 The benchmark and auditor must be trusted local executables. Code suggestions
 are not automatically executed. `campaign-propose --campaign <campaign> --id
