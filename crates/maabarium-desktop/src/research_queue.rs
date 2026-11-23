@@ -264,10 +264,10 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
     let mut reports = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     if db.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE type='table'
-        AND name IN ('campaign_adaptive','campaign_members','campaign_proposals')",
+        AND name IN ('campaign_adaptive','campaign_members','campaign_proposals','research_loops')",
         [],
         |row| row.get::<_, i64>(0),
-    )? == 3
+    )? == 4
     {
         let mut can_start = db.prepare(
             "SELECT EXISTS(SELECT 1 FROM campaign_adaptive WHERE campaign=?1)
