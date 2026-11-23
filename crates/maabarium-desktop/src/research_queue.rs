@@ -232,6 +232,8 @@ struct CampaignReport {
     status: String,
     limit: i64,
     audited_trials: i64,
+    rejected_trials: i64,
+    operational_failures: i64,
     ready_proposal_rounds: Vec<String>,
     can_start: bool,
 }
@@ -248,7 +250,9 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
     }
     let mut statement = db.prepare(
         "SELECT id,status,trial_limit,(SELECT COUNT(*) FROM campaign_trials
-         WHERE campaign=campaigns.id AND outcome IN ('pass','fail'))
+         WHERE campaign=campaigns.id AND outcome IN ('pass','fail')),
+         (SELECT COUNT(*) FROM campaign_trials WHERE campaign=campaigns.id AND outcome='fail'),
+         (SELECT COUNT(*) FROM campaign_trials WHERE campaign=campaigns.id AND outcome='operational_failure')
          FROM campaigns ORDER BY rowid DESC LIMIT 50",
     )?;
     let rows = statement.query_map([], |row| {
@@ -257,6 +261,8 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
             status: row.get(1)?,
             limit: row.get(2)?,
             audited_trials: row.get(3)?,
+            rejected_trials: row.get(4)?,
+            operational_failures: row.get(5)?,
             ready_proposal_rounds: Vec::new(),
             can_start: false,
         })
@@ -1980,6 +1986,30 @@ mod tests {
         let report = super::campaign_report(&db).unwrap();
         assert!(!report[0].can_start);
         assert_eq!(report[0].audited_trials, 0);
+    }
+
+    #[test]
+    fn campaign_report_separates_rejections_from_operational_failures() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::initialise(&mut db).unwrap();
+        super::create_campaign(&mut db, "demo", 3, None).unwrap();
+        super::create_campaign(&mut db, "other", 3, None).unwrap();
+        db.execute_batch(
+            "INSERT INTO campaign_trials VALUES
+            ('demo','one','fail','a'), ('demo','two','pass','b'),
+            ('demo','three','operational_failure','c'), ('other','one','fail','d');",
+        )
+        .unwrap();
+        let reports = super::campaign_report(&db).unwrap();
+        let demo = reports.iter().find(|report| report.id == "demo").unwrap();
+        assert_eq!(
+            (
+                demo.audited_trials,
+                demo.rejected_trials,
+                demo.operational_failures
+            ),
+            (2, 1, 1)
+        );
     }
 
     #[test]

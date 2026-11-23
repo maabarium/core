@@ -79,7 +79,8 @@ completed evidence, cancels queued campaign jobs, and refuses to interrupt a
 running campaign attempt.
 Trial outcomes and job completion are committed together after the independent
 audit. Operational failures require review rather than counting as scientific
-verdicts. The desktop Research activity report shows campaign progress.
+verdicts. The desktop Research activity report separates passed trials,
+audited rejections, and trials that could not be checked.
 
 The benchmark and auditor must be trusted local executables. Code suggestions
 are not automatically executed. `campaign-propose --campaign <campaign> --id

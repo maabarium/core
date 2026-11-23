@@ -47,7 +47,7 @@ it("creates a campaign without queuing a benchmark", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({ experiments: 0, lanes: [] })
     .mockResolvedValueOnce(undefined)
     .mockResolvedValueOnce({ experiments: 0, lanes: [],
-      campaigns: [{ id: "demo", status: "active", limit: 12, audited_trials: 0 }] });
+      campaigns: [{ id: "demo", status: "active", limit: 12, audited_trials: 0, rejected_trials: 0, operational_failures: 0 }] });
   render(<ResearchReport />);
   fireEvent.click(screen.getByRole("button", { name: "Load report" }));
   fireEvent.click(await screen.findByText("Create a research campaign"));
@@ -70,12 +70,15 @@ it("shows audited campaigns separately from provider jobs", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({
     experiments: 8,
     lanes: [],
-    campaigns: [{ id: "coda-demo", status: "target_achieved", limit: 200, audited_trials: 3 }],
+    campaigns: [{ id: "coda-demo", status: "target_achieved", limit: 200, audited_trials: 3, rejected_trials: 2, operational_failures: 1 }],
   });
   render(<ResearchReport />);
   fireEvent.click(screen.getByRole("button", { name: "Load report" }));
   expect(await screen.findByText("3 of 200 audited trials · Target achieved")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Research campaigns" })).toBeTruthy();
+  for (const [label, count] of [["Passed", "1"], ["Did not meet the target", "2"], ["Could not be checked", "1"]]) {
+    expect(screen.getByText(label).nextElementSibling?.textContent).toBe(count);
+  }
 });
 
 it("shows terminal rates and reveals provider details only with the switch", async () => {

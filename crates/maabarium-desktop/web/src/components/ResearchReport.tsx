@@ -8,7 +8,7 @@ type Lane = TokenUsage & {
   lane: string; jobs: number; completed: number; failed: number; stopped: number;
   pending: number; attempts: number; observed_jobs: number;
 };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number; ready_proposal_rounds?: string[]; can_start?: boolean };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean };
 type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
 type Starter = { stage: string; first: PracticeResult | null; final_result: PracticeResult | null };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
@@ -212,6 +212,11 @@ export function ResearchReport() {
                 campaign.status === "human_review" ? "Needs review" :
                 campaign.status === "stopped" ? "Stopped" : "Active"
               }</p>
+              <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
+                <div><dt>Passed</dt><dd className="font-semibold">{campaign.audited_trials - campaign.rejected_trials}</dd></div>
+                <div><dt>Did not meet the target</dt><dd className="font-semibold">{campaign.rejected_trials}</dd></div>
+                <div><dt>Could not be checked</dt><dd className="font-semibold">{campaign.operational_failures}</dd></div>
+              </dl>
               {!!campaign.ready_proposal_rounds?.length && <div className="mt-2">
                 <p>Ready to review for a local benchmark:</p>
                 <ul className="list-disc pl-5">
