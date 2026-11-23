@@ -100,6 +100,14 @@ The app itself was only linker-signed: strict Apple code-sign verification
 failed because the bundle had no resource signature. Developer ID signing,
 notarization, and in-app upgrade remain separate release checks.
 
+A subsequent local build on source `4ae1f40` supplied the existing Developer
+ID Application identity. The app, bundled CLI, and updater archive passed
+independent strict code-sign and Minisign verification. The signed archive's
+SHA-256 is `4390bd47d9fc6d58809a7cb278509996de0b7d731d3c2522cf65bd0fdb5429e1`.
+The production check correctly exited nonzero: Tauri had no notarization
+credentials configured, Gatekeeper rejected the unnotarized bundle, and
+there was no stapled ticket. No artifact was installed or published.
+
 ## Current implementation
 
 Set **Pause for review every** when creating a campaign to hold after that
