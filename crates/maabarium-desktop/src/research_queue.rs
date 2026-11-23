@@ -902,6 +902,15 @@ pub(crate) struct CampaignTrial {
     proposal_round: Option<String>,
     confirmation_panel_sha256: Option<String>,
     public_candidate_id: Option<String>,
+    confirmation_plan: Option<DesktopConfirmationPlan>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopConfirmationPlan {
+    runner: BenchmarkExecutable,
+    auditor: BenchmarkExecutable,
+    panel_sha256: String,
 }
 
 fn stage_campaign_trial(
@@ -918,6 +927,7 @@ fn stage_campaign_trial(
         proposal_round,
         confirmation_panel_sha256,
         public_candidate_id,
+        confirmation_plan,
     } = campaign;
     let valid_id = |id: &str| {
         !id.is_empty()
@@ -948,6 +958,49 @@ fn stage_campaign_trial(
         return Err("Enter a valid campaign, frozen contract hash, and optional proposal round. Campaign reviews use Codex or Antigravity.".into());
     }
     let err = |error: rusqlite::Error| error.to_string();
+    let plan = if let Some(plan) = confirmation_plan {
+        if confirmation_panel_sha256.is_some()
+            || plan.panel_sha256.len() != 64
+            || !plan
+                .panel_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
+        {
+            return Err(
+                "Pre-approval requires a valid sealed panel SHA-256 and a development trial."
+                    .into(),
+            );
+        }
+        let runner = inspect_benchmark_file(&plan.runner.path)?;
+        let auditor = inspect_benchmark_file(&plan.auditor.path)?;
+        let dev_runner = spec["runner_sha256"]
+            .as_str()
+            .ok_or("Missing development runner pin.")?;
+        let dev_auditor = spec["auditor_sha256"]
+            .as_str()
+            .ok_or("Missing development auditor pin.")?;
+        let hashes = [
+            dev_runner,
+            dev_auditor,
+            runner.sha256.as_str(),
+            auditor.sha256.as_str(),
+        ];
+        if runner.sha256 != plan.runner.sha256
+            || auditor.sha256 != plan.auditor.sha256
+            || hashes
+                .iter()
+                .enumerate()
+                .any(|(index, hash)| hashes[..index].contains(hash))
+        {
+            return Err("Confirmation needs separate pinned executables. If a file changed, select it again.".into());
+        }
+        Some(serde_json::json!({
+            "panel_sha256": plan.panel_sha256, "runner": runner.path, "runner_sha256": runner.sha256,
+            "auditor": auditor.path, "auditor_sha256": auditor.sha256,
+        }))
+    } else {
+        None
+    };
     let tx = db
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
@@ -1028,6 +1081,22 @@ fn stage_campaign_trial(
             rusqlite::Error::QueryReturnedNoRows => "No active campaign with that ID.".into(),
             _ => err(error),
         })?;
+    if let Some(plan) = plan {
+        let adaptive: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM campaign_adaptive WHERE campaign=?)",
+                [&campaign],
+                |row| row.get(0),
+            )
+            .map_err(err)?;
+        if !adaptive {
+            return Err(
+                "Pre-approved confirmation requires an adaptive campaign with a public brief."
+                    .into(),
+            );
+        }
+        spec["confirmation_plan"] = plan;
+    }
     let (count, conflicts): (i64, i64) = tx.query_row("SELECT COUNT(*),COUNT(*) FILTER (WHERE
         json_extract(b.spec,'$.contract_sha256') != ?2 OR json_extract(b.spec,'$.runner_sha256') = ?3
         OR json_extract(b.spec,'$.proposal_round') = ?4)
@@ -1496,6 +1565,57 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn desktop_preapproval_pins_distinct_local_executables_without_queuing_confirmation() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let executable = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n# {name}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            super::inspect_benchmark_file(path.to_str().unwrap()).unwrap()
+        };
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::initialise(&mut db).unwrap();
+        super::create_campaign(&mut db, "demo", 1, Some("Public")).unwrap();
+        let runner = executable("sealed-runner");
+        let digest = runner.sha256.clone();
+        let auditor = executable("sealed-auditor");
+        let campaign = super::CampaignTrial {
+            id: "demo".into(),
+            contract_sha256: "a".repeat(64),
+            proposal_round: None,
+            confirmation_panel_sha256: None,
+            public_candidate_id: None,
+            confirmation_plan: Some(super::DesktopConfirmationPlan {
+                runner,
+                auditor,
+                panel_sha256: "c".repeat(64),
+            }),
+        };
+        super::stage_campaign_trial(
+            &mut db,
+            "trial",
+            "Trial",
+            serde_json::json!({
+                "runner_sha256": "1".repeat(64), "auditor_sha256": "2".repeat(64),
+            }),
+            campaign,
+        )
+        .unwrap();
+        let (spec, jobs): (String, i64) = db
+            .query_row(
+                "SELECT spec,(SELECT COUNT(*) FROM jobs) FROM local_benchmarks",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let spec: serde_json::Value = serde_json::from_str(&spec).unwrap();
+        assert_eq!(spec["confirmation_plan"]["runner_sha256"], digest);
+        assert_eq!(jobs, 1);
+    }
+
     #[test]
     fn desktop_stop_refuses_running_work_then_cancels_queued_work() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();
@@ -1529,6 +1649,7 @@ mod tests {
             proposal_round: None,
             confirmation_panel_sha256: None,
             public_candidate_id: Some(id.into()),
+            confirmation_plan: None,
         };
         let spec =
             serde_json::json!({"runner_sha256": "b".repeat(64), "runner": "/private/runner"});
@@ -1578,6 +1699,7 @@ mod tests {
             proposal_round: None,
             confirmation_panel_sha256: Some("e".repeat(64)),
             public_candidate_id: None,
+            confirmation_plan: None,
         };
         assert!(
             super::stage_campaign_trial(&mut db, "bad", "Bad", winner, confirmation()).is_err()
@@ -1653,6 +1775,7 @@ mod tests {
             proposal_round: None,
             confirmation_panel_sha256: None,
             public_candidate_id: None,
+            confirmation_plan: None,
         };
         let spec = serde_json::json!({"runner_sha256": "b".repeat(64), "reviewer": null});
         super::stage_campaign_trial(&mut db, "trial-1", "One", spec.clone(), campaign()).unwrap();

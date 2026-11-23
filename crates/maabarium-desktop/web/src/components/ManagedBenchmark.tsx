@@ -23,6 +23,9 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [proposalRound, setProposalRound] = useState("");
   const [confirmSealed, setConfirmSealed] = useState(false);
   const [panelHash, setPanelHash] = useState("");
+  const [preApprove, setPreApprove] = useState(false);
+  const [sealedRunner, setSealedRunner] = useState<Executable>();
+  const [sealedAuditor, setSealedAuditor] = useState<Executable>();
   const [catalog, setCatalog] = useState(false);
   const [candidateId, setCandidateId] = useState("");
 
@@ -54,6 +57,9 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
           proposalRound: confirmSealed || catalog ? null : proposalRound.trim() || null,
           confirmationPanelSha256: confirmSealed ? panelHash.trim() : null,
           publicCandidateId: catalog && !confirmSealed ? candidateId.trim() : null,
+          confirmationPlan: preApprove && !confirmSealed ? {
+            runner: sealedRunner, auditor: sealedAuditor, panelSha256: panelHash.trim(),
+          } : null,
         } : null,
       });
       setQueued(id);
@@ -105,6 +111,26 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
               <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={proposalRound}
                 onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
             </label>}
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" role="switch" className="workspace-switch" checked={preApprove}
+                onChange={event => { setPreApprove(event.target.checked); setConfirmed(false); }} />
+              Pre-approve sealed confirmation after a development pass
+            </label>
+            {preApprove && <div className="grid gap-3">
+              <p className="text-sm">Confirmation stays local. Choose two separate trusted programs. They run automatically only after this trial passes its development audit.</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="min-h-10 rounded-md border px-3 text-sm" disabled={busy}
+                  onClick={() => void choose(setSealedRunner)}>Choose confirmation runner</button>
+                <button type="button" className="min-h-10 rounded-md border px-3 text-sm" disabled={busy}
+                  onClick={() => void choose(setSealedAuditor)}>Choose confirmation auditor</button>
+              </div>
+              {sealedRunner && <p className="break-all text-sm">Runner: {sealedRunner.path}</p>}
+              {sealedAuditor && <p className="break-all text-sm">Auditor: {sealedAuditor.path}</p>}
+              <label className="grid gap-1 text-sm">Pre-approved sealed panel SHA-256
+                <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[a-f0-9]{64}"
+                  maxLength={64} value={panelHash} onChange={event => { setPanelHash(event.target.value); setConfirmed(false); }} />
+              </label>
+            </div>}
             </>}
           </>}
         </div>
@@ -154,7 +180,9 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         I trust these two programs to run on this computer.
       </label>
       <button type="submit" className="min-h-10 rounded-md bg-[var(--accent)] px-3 font-semibold text-[var(--on-accent)] disabled:opacity-60"
-        disabled={busy || !runner || !auditor || !confirmed || !title.trim() || (shareAutomatically && (!brief.trim() || (confirmSealed && !!campaignId.trim())))}>
+        disabled={busy || !runner || !auditor || !confirmed || !title.trim()
+          || (!!campaignId.trim() && preApprove && !confirmSealed && (!sealedRunner || !sealedAuditor || !panelHash.trim()))
+          || (shareAutomatically && (!brief.trim() || (confirmSealed && !!campaignId.trim())))}>
         {campaignId.trim() ? (confirmSealed ? "Approve sealed confirmation" : "Approve and stage trial") : "Queue benchmark"}
       </button>
       {queued && <p role="status" className="text-sm">Benchmark submitted. Check its status in Research activity.</p>}
