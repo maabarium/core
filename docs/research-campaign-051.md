@@ -66,6 +66,11 @@ For an unattended search over a vetted catalog, add
 `--stage --select-by-proposal` when submitting each approved benchmark
 before starting discovery. Use public-safe trial IDs: providers receive
 the IDs and approved brief, never executable paths or benchmark output.
+For configurable local templates, add `--parameter-bounds '{"width":[1,8]}'`
+to a catalog entry. Providers must agree on both ID and bounded integer
+values. The trusted runner and auditor receive `parameters.json` in their
+working directory; the selected values also carry forward to confirmation.
+This generates a configuration, not executable source.
 The worker dispatches a catalog trial only when both subscription results
 return the same available ID. Disagreement, invalid IDs, or failed proposals
 stop at review. After an audited failure it requests another selection from

@@ -29,8 +29,12 @@ class SubscriptionLaneTest(unittest.TestCase):
         self.managed_benchmark(campaign=True, decision="catalog")
     def test_catalog_selection_is_closed_to_unapproved_or_disagreeing_ids(self):
         advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
-        for answers, expected in [(("pick", "pick"), "active"), (("pick", "other"), "stopped"),
-                                  (("unknown", "unknown"), "stopped")]:
+        valid = '{"id":"pick","parameters":{"width":4}}'
+        invalid = '{"id":"pick","parameters":{"width":40}}'
+        for answers, bounds, expected in [
+                (("pick", "pick"), None, "active"), (("pick", "other"), None, "stopped"),
+                (("unknown", "unknown"), None, "stopped"), ((valid, valid), [1, 8], "active"),
+                ((invalid, invalid), [1, 8], "stopped"), (("pick", "pick"), [1, 8], "stopped")]:
             with self.subTest(answers=answers):
                 db = sqlite3.connect(":memory:", isolation_level=None)
                 db.executescript("""CREATE TABLE campaigns(id TEXT,status TEXT);
@@ -45,6 +49,9 @@ class SubscriptionLaneTest(unittest.TestCase):
                     INSERT INTO research_loops VALUES ('pick','catalog');
                     INSERT INTO local_benchmarks VALUES ('pick','{}');
                     INSERT INTO jobs(id,state) VALUES ('loop:pick:1','queued');""")
+                if bounds:
+                    db.execute("UPDATE local_benchmarks SET spec=?",
+                               (json.dumps({"parameter_bounds": {"width": bounds}}),))
                 for lane, answer, detail in zip(("codex", "antigravity"), answers,
                         ("ChatGPT", "Antigravity account; AI credits disabled for run")):
                     job = f"proposal:demo:initial:{lane}"
@@ -55,8 +62,11 @@ class SubscriptionLaneTest(unittest.TestCase):
                     advance(db)
                 self.assertEqual(db.execute("SELECT status FROM research_loops").fetchone()[0], expected)
                 if expected == "active":
+                    expected_spec = {"selected_round": "initial"}
+                    if bounds:
+                        expected_spec.update(parameter_bounds={"width": bounds}, parameters={"width": 4})
                     self.assertEqual(json.loads(db.execute("SELECT spec FROM local_benchmarks").fetchone()[0]),
-                                     {"selected_round": "initial"})
+                                     expected_spec)
                 else:
                     self.assertEqual(db.execute("SELECT status FROM campaigns").fetchone()[0], "human_review")
                 db.close()

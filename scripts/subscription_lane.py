@@ -135,6 +135,8 @@ def queue_preapproved_confirmation(db, campaign, loop_id, spec, evidence_digest)
     runner_spec = {key: plan[key] for key in ("runner", "auditor", "runner_sha256", "auditor_sha256")}
     runner_spec.update(campaign=campaign, contract_sha256=spec["contract_sha256"], confirmation=confirmation,
                        timeout=spec["timeout"], reviewer=None, public_brief="")
+    if "parameters" in spec:
+        runner_spec["parameters"] = spec["parameters"]
     db.execute("INSERT INTO campaign_confirmations(campaign,loop_id) VALUES (?,?)", (campaign, successor))
     db.execute("""INSERT INTO research_loops(id,target,plan,step,status,review_every)
         VALUES (?,?,'["Local evidence"]',1,'active',1)""", (successor, "Pre-approved sealed confirmation"))
@@ -146,13 +148,47 @@ def queue_preapproved_confirmation(db, campaign, loop_id, spec, evidence_digest)
                (campaign,))
 
 
+def bounded_parameters(raw):
+    if not isinstance(raw, dict) or not 1 <= len(raw) <= 8:
+        raise ValueError("provide one to eight bounded integer parameters")
+    for key, bounds in raw.items():
+        if (not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key) or not isinstance(bounds, list)
+                or len(bounds) != 2 or any(type(value) is not int for value in bounds)
+                or not -1000000 <= bounds[0] <= bounds[1] <= 1000000):
+            raise ValueError("invalid parameter name or integer bounds")
+    return raw
+
+
+def parse_catalog_choice(response):
+    if not isinstance(response, str) or len(response.encode()) > 2048:
+        return None
+    response = response.strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", response):
+        return response, None
+    try:
+        value = json.loads(response)
+        if (isinstance(value, dict) and set(value) == {"id", "parameters"}
+                and isinstance(value["id"], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value["id"])
+                and isinstance(value["parameters"], dict)
+                and all(type(parameter) is int for parameter in value["parameters"].values())):
+            return value["id"], value["parameters"]
+    except (ValueError, RecursionError):
+        pass
+    return None
+
+
 def queue_campaign_proposals(db, campaign, round_id, public):
-    choices = [row[0] for row in db.execute("""SELECT m.loop_id FROM campaign_members m
-        JOIN research_loops l ON l.id=m.loop_id WHERE m.campaign=? AND l.status='catalog'
-        ORDER BY m.ordinal LIMIT 200""", (campaign,))]
+    choices = db.execute("""SELECT m.loop_id,json_extract(b.spec,'$.parameter_bounds')
+        FROM campaign_members m JOIN research_loops l ON l.id=m.loop_id
+        JOIN local_benchmarks b ON b.loop_id=m.loop_id
+        WHERE m.campaign=? AND l.status='catalog' ORDER BY m.ordinal LIMIT 200""", (campaign,)).fetchall()
     instruction = ("Choose one approved candidate. Reply with only its exact ID, or NONE. "
-                   "Approved IDs: " + json.dumps(choices) if choices else
+                   "Approved IDs: " + json.dumps([id for id, _ in choices]) if choices else
                    "Propose one discriminating experiment, not code or a verdict.")
+    if any(bounds for _, bounds in choices):
+        instruction += (' For candidates with parameters, reply with only JSON '
+                        '{"id":"candidate-id","parameters":{"name":1}}. Bounds: ' +
+                        json.dumps({id: json.loads(bounds) for id, bounds in choices if bounds}))
     for lane in ("codex", "antigravity"):
         job_id = f"proposal:{campaign}:{round_id}:{lane}"
         db.execute("INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
@@ -187,18 +223,27 @@ def advance_campaigns(db):
                 if not row or row[0] not in ("done", "failed"):
                     break
                 response = row[2].strip() if row[0] == "done" and row[1] == detail and row[2] else ""
-                selections.append(response if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", response) else None)
+                selections.append(parse_catalog_choice(response))
             if len(selections) != 2:
                 continue
-            selection = selections[0]
-            allowed = selection and selection != "NONE" and selection == selections[1] and db.execute("""SELECT 1 FROM campaign_members m
-                JOIN research_loops l ON l.id=m.loop_id WHERE m.campaign=? AND m.loop_id=?
-                AND l.status='catalog'""", (campaign, selection)).fetchone()
+            selection, parameters = selections[0] or (None, None)
+            allowed = selection and selection != "NONE" and selections[0] == selections[1] and db.execute(
+                """SELECT json_extract(b.spec,'$.parameter_bounds') FROM campaign_members m
+                JOIN research_loops l ON l.id=m.loop_id JOIN local_benchmarks b ON b.loop_id=m.loop_id
+                WHERE m.campaign=? AND m.loop_id=? AND l.status='catalog'""", (campaign, selection)).fetchone()
+            if allowed:
+                bounds = json.loads(allowed[0]) if allowed[0] else None
+                allowed = ((bounds is None and parameters is None) or
+                           (bounds and parameters is not None and set(bounds) == set(parameters)
+                            and all(lo <= parameters[key] <= hi for key, (lo, hi) in bounds.items())))
             if not allowed:
                 db.execute("UPDATE campaigns SET status='human_review' WHERE id=?", (campaign,))
                 continue
             db.execute("""UPDATE local_benchmarks SET spec=json_set(spec,'$.selected_round',?)
                 WHERE loop_id=?""", (round_id, selection))
+            if parameters is not None:
+                db.execute("""UPDATE local_benchmarks SET spec=json_set(spec,'$.parameters',json(?))
+                    WHERE loop_id=?""", (json.dumps(parameters, sort_keys=True), selection))
             db.execute("UPDATE research_loops SET status='staged' WHERE id=?", (selection,))
         db.execute("""UPDATE research_loops SET status='active' WHERE status='staged' AND id IN (
             SELECT (SELECT m.loop_id FROM campaign_members m JOIN research_loops l ON l.id=m.loop_id
@@ -283,6 +328,9 @@ def process_local_benchmark(db, lock_fd, state):
                 raise ValueError
             copies[role] = copy
         (directory / "spec.json").write_text(raw_spec + "\n", encoding="utf-8")
+        if "parameters" in spec:
+            (directory / "parameters.json").write_text(
+                json.dumps(spec["parameters"], sort_keys=True) + "\n", encoding="utf-8")
         confirmation = spec.get("confirmation") or {}
         if development_id := confirmation.get("development_loop_id"):
             stage = "sealed confirmation development binding"
@@ -345,7 +393,7 @@ def process_local_benchmark(db, lock_fd, state):
                 or len(report["report"].encode()) > 12000):
             raise ValueError
         manifest = {path.name: file_hash(path) for path in sorted(directory.iterdir())
-                    if path.name in {"runner.json", "runner.stderr", "runner.exit", "auditor.json", "auditor.stderr", "auditor.exit", "spec.json", "development.json"}}
+                    if path.name in {"runner.json", "runner.stderr", "runner.exit", "auditor.json", "auditor.stderr", "auditor.exit", "spec.json", "development.json", "parameters.json"}}
         (directory / "hashes.json").write_text(json.dumps(manifest, indent=2) + "\n")
         db.execute("BEGIN IMMEDIATE")
         if campaign and spec.get("confirmation"):
@@ -872,6 +920,7 @@ def main():
     parser.add_argument("--proposal-round", help="Completed campaign proposal round used to design this trusted trial")
     parser.add_argument("--stage", action="store_true", help="Stage a pre-approved campaign trial for automatic dispatch")
     parser.add_argument("--select-by-proposal", action="store_true", help="Require agreeing provider IDs to dispatch a staged candidate")
+    parser.add_argument("--parameter-bounds", help="JSON map of integer ranges for a trusted catalog runner")
     parser.add_argument("--confirm-panel-sha256", help="Approve a separate sealed confirmation panel")
     parser.add_argument("--confirmation-plan", type=Path, help="Pre-approved confirmation executables and sealed panel")
     parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
@@ -897,6 +946,8 @@ def main():
         parser.error("--stage requires a campaign benchmark")
     if args.select_by_proposal and (not args.stage or args.proposal_round or args.id == "NONE"):
         parser.error("catalog entries require --stage and cannot bind a proposal until selected")
+    if args.parameter_bounds is not None and not args.select_by_proposal:
+        parser.error("parameter bounds require a provider-selected catalog entry")
     if args.confirm_panel_sha256 is not None and (
             args.action != "local-benchmark-enqueue" or not args.campaign or args.stage
             or args.proposal_round or args.adaptive_branches
@@ -1097,6 +1148,8 @@ def main():
                             spec.update(campaign=args.campaign, contract_sha256=args.contract_sha256, reviewer=None,
                                         confirmation=dict(panel_sha256=args.confirm_panel_sha256,
                                                           development_evidence_sha256=winner[0]))
+                            if "parameters" in winner_spec:
+                                spec["parameters"] = winner_spec["parameters"]
                         elif args.campaign:
                             if (args.adaptive_branches or not re.fullmatch(r"[0-9a-f]{64}", args.contract_sha256 or "")
                                     or args.reviewer not in ("codex", "antigravity")):
@@ -1120,6 +1173,13 @@ def main():
                             if args.select_by_proposal and db.execute(
                                     "SELECT 1 FROM campaign_proposals WHERE campaign=?", (args.campaign,)).fetchone():
                                 parser.error("the public catalog is frozen once proposal work starts")
+                            if args.parameter_bounds is not None:
+                                try:
+                                    if len(args.parameter_bounds.encode()) > 2048:
+                                        raise ValueError("parameter bounds exceed 2048 bytes")
+                                    spec["parameter_bounds"] = bounded_parameters(json.loads(args.parameter_bounds))
+                                except (ValueError, RecursionError) as error:
+                                    parser.error(str(error))
                             submitted, = db.execute("SELECT COUNT(*) FROM campaign_members WHERE campaign=?",
                                                     (args.campaign,)).fetchone()
                             if submitted >= campaign_row[1]:

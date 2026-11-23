@@ -1066,6 +1066,9 @@ fn stage_campaign_trial(
         spec["confirmation"] = serde_json::json!({
             "panel_sha256": panel, "development_evidence_sha256": winner_evidence,
         });
+        if let Some(parameters) = winner.get("parameters") {
+            spec["parameters"] = parameters.clone();
+        }
         spec["campaign"] = campaign.into();
         spec["contract_sha256"] = contract_sha256.into();
         insert_benchmark_rows(&tx, id, title, &spec.to_string(), "active").map_err(err)?;
