@@ -43,6 +43,8 @@ results.
   without a paid fallback, and reaches independent sealed confirmation.
 - [ ] Verify campaign resumption after a quota reset with the configured
   subscriptions and verify the full campaign flow in the native UI.
+- [x] Verify the native campaign checkpoint and accessible setup labels in a
+  separately identified debug bundle using an isolated profile.
 - [x] Verify the ready-made beginner campaign in the native app. It records
   both checked results and final review in a dedicated local table; it does
   not create provider jobs or consume real research trials.
@@ -64,6 +66,15 @@ The local regression run passed 40 worker tests, seven ledger tests, 52
 desktop Rust tests, and 106 frontend tests. The worker and Rust suites each
 skipped one live-provider test. The production frontend build and Rust
 advisory check passed. These are development checks, not release sign-off.
+
+Native checkpoint smoke on source `a2acd3c`: built the app-only Tauri debug
+bundle with identifier `com.maabarium.console.campaignqa` and updater artifacts
+disabled. Loaded a seeded synthetic checkpoint through Research activity,
+approved it, and verified the displayed and persisted campaign status changed
+to Active with the audited count unchanged and zero jobs created. The native
+accessibility tree exposed the trial limit, review interval, public brief,
+and local benchmark budget. Closed the QA copy; the installed app remained
+running. This does not replace full native visual or release verification.
 
 ## Current implementation
 
