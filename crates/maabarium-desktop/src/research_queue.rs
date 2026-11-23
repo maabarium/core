@@ -232,6 +232,7 @@ struct CampaignReport {
     status: String,
     limit: i64,
     audited_trials: i64,
+    ready_proposal_rounds: Vec<String>,
 }
 
 fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
@@ -255,9 +256,38 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
             status: row.get(1)?,
             limit: row.get(2)?,
             audited_trials: row.get(3)?,
+            ready_proposal_rounds: Vec::new(),
         })
     })?;
-    rows.collect()
+    let mut reports = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let proposals_available = db.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE type='table'
+         AND name IN ('campaign_proposals','campaign_members','local_benchmarks','jobs')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? == 4;
+    if proposals_available {
+        let mut ready = db.prepare(
+            "WITH proposals AS (
+              SELECT j.lane, substr(j.id, length(?1)+11, length(j.id)-length(?1)-11-length(j.lane)) AS round
+              FROM campaign_proposals p JOIN jobs j ON j.id=p.job_id
+              WHERE p.campaign=?1 AND j.state='done' AND length(j.result)>0
+              AND ((j.lane='codex' AND j.detail='ChatGPT') OR
+                   (j.lane='antigravity' AND j.detail='Antigravity account; AI credits disabled for run'))
+             ) SELECT round FROM proposals WHERE NOT EXISTS (
+              SELECT 1 FROM campaign_members m JOIN local_benchmarks b ON b.loop_id=m.loop_id
+              WHERE m.campaign=?1 AND json_extract(b.spec,'$.proposal_round')=proposals.round
+             ) GROUP BY round HAVING COUNT(DISTINCT lane)=2 ORDER BY round LIMIT 20"
+        )?;
+        for campaign in reports
+            .iter_mut()
+            .filter(|campaign| campaign.status == "active")
+        {
+            let rounds = ready.query_map([&campaign.id], |row| row.get(0))?;
+            campaign.ready_proposal_rounds = rounds.collect::<rusqlite::Result<_>>()?;
+        }
+    }
+    Ok(reports)
 }
 
 #[derive(Serialize)]
@@ -1223,6 +1253,29 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn campaign_report_shows_only_complete_unused_subscription_rounds() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::initialise(&mut db).unwrap();
+        super::create_campaign(&mut db, "demo", 3, None).unwrap();
+        db.execute_batch("CREATE TABLE campaign_members(loop_id TEXT, campaign TEXT, ordinal INTEGER);
+            CREATE TABLE campaign_proposals(job_id TEXT, campaign TEXT);
+            INSERT INTO jobs(id,lane,state,detail,result) VALUES
+              ('proposal:demo:auto-after-1:codex','codex','done','ChatGPT','one'),
+              ('proposal:demo:auto-after-1:antigravity','antigravity','done','Antigravity account; AI credits disabled for run','two'),
+              ('proposal:demo:incomplete:codex','codex','done','ChatGPT','three');
+            INSERT INTO campaign_proposals SELECT id,'demo' FROM jobs;").unwrap();
+        assert_eq!(
+            super::campaign_report(&db).unwrap()[0].ready_proposal_rounds,
+            ["auto-after-1"]
+        );
+        db.execute_batch("INSERT INTO campaign_members VALUES ('used','demo',1);
+            INSERT INTO local_benchmarks(loop_id,spec) VALUES ('used','{\"proposal_round\":\"auto-after-1\"}');").unwrap();
+        assert!(super::campaign_report(&db).unwrap()[0]
+            .ready_proposal_rounds
+            .is_empty());
+    }
+
     #[test]
     fn desktop_staging_reserves_a_slot_without_activating_the_trial() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();

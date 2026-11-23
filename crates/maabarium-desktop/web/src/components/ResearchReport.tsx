@@ -8,7 +8,7 @@ type Lane = TokenUsage & {
   lane: string; jobs: number; completed: number; failed: number; stopped: number;
   pending: number; attempts: number; observed_jobs: number;
 };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; ready_proposal_rounds?: string[] };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
@@ -114,6 +114,12 @@ export function ResearchReport() {
                 campaign.status === "human_review" ? "Needs review" :
                 campaign.status === "stopped" ? "Stopped" : "Active"
               }</p>
+              {!!campaign.ready_proposal_rounds?.length && <div className="mt-2">
+                <p>Ready to review for a local benchmark:</p>
+                <ul className="list-disc pl-5">
+                  {campaign.ready_proposal_rounds.map((round) => <li key={round} className="break-all">{round}</li>)}
+                </ul>
+              </div>}
             </li>)}
           </ul>
         </section>}
