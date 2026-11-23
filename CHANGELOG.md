@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Run reviewed synthetic membership packages through the campaign audit contract without treating them as CODA evidence.
+
 - Prepare and independently review exact membership benchmarks as well as subset-existence benchmarks.
 
 - Align the campaign setup fields and offer an explicit reasoning-off setting for DeepSeek.

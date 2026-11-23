@@ -18,6 +18,34 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_prepared_campaign_package_runs_through_worker_and_audit(self):
+        preparer = SCRIPT.with_name("adaptive_app_smoke.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "fixture.json"
+            fixture.write_text(json.dumps({"family": "membership-campaign",
+                                           "rows": [9, 2, 9, 7], "queries": [42, 9, 7, 42, 42]}))
+            package_command = [sys.executable, str(preparer), str(root / "package")]
+            prepared = json.loads(subprocess.check_output([*package_command, "--fixture", str(fixture)], timeout=5))
+            reviewed = json.loads(subprocess.check_output([*package_command, "--review", "--expected-review-sha256",
+                                                           prepared["review_sha256"]], timeout=5))
+            state = root / "state"
+            command = [sys.executable, str(SCRIPT), "--state", str(state), "--codex", sys.executable]
+            def run(*args):
+                return subprocess.check_output([*command, *args], timeout=10)
+            run("campaign-create", "--id", "prepared", "--public-target", "Public synthetic membership test")
+            run("local-benchmark-enqueue", "--id", "membership", "--campaign", "prepared",
+                "--contract-sha256", reviewed["contract_sha256"], "--local-title", "Synthetic membership",
+                "--public-target", "Public synthetic membership test", "--reviewer", "codex",
+                "--runner", prepared["runner"], "--runner-sha256", reviewed["pins"]["runner"],
+                "--auditor", prepared["auditor"], "--auditor-sha256", reviewed["pins"]["auditor"])
+            run("tick")
+            status = json.loads(run("campaign-status", "--id", "prepared"))
+            self.assertEqual((status["audited_trials"], status["status"]), (1, "confirmation_required"))
+            audit = json.loads((state / "local-evidence" / "membership" / "auditor.json").read_bytes())
+            self.assertEqual((audit["candidate_total_work"], audit["baseline_total_work"]), (9, 15))
+            self.assertEqual(audit["wrong_answers"], 0)
+
     def test_campaign_budget_blocks_launch_before_creating_evidence(self):
         process = runpy.run_path(str(SCRIPT))["process_local_benchmark"]
         with tempfile.TemporaryDirectory() as root, sqlite3.connect(":memory:", isolation_level=None) as db:

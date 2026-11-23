@@ -87,9 +87,64 @@ print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
     report=f"Public membership fixture: {len(queries)} exact answers; indexed work {indexed}, scan work {scan}.")))
 """
 
+CAMPAIGN_CONTRACT = (
+    b"maabarium synthetic membership v1: identical integer rows and queries; full exact coverage; "
+    b"candidate insertion attempts plus lookups; exact scan baselines forward and reverse, "
+    b"count every equality probe; strongest is the cheaper of the two frozen scans; no CODA claim"
+)
+CAMPAIGN_CONTRACT_SHA256 = hashlib.sha256(CAMPAIGN_CONTRACT).hexdigest()
+
+CAMPAIGN_RUNNER = """
+import json
+def scan(records):
+    answers, work = [], 0
+    for query in queries:
+        for value in records:
+            work += 1
+            if value == query:
+                answers.append(True)
+                break
+        else:
+            answers.append(False)
+    return answers, work
+index = set(rows)
+forward, forward_work = scan(rows)
+reverse, reverse_work = scan(rows[::-1])
+print(json.dumps(dict(candidate=[q in index for q in queries], forward=forward, reverse=reverse,
+    candidate_work=len(rows)+len(queries), forward_work=forward_work, reverse_work=reverse_work)))
+"""
+
+CAMPAIGN_AUDITOR = f"contract_sha256 = {CAMPAIGN_CONTRACT_SHA256!r}\n" + """
+import bisect, hashlib, json, sys
+raw = sys.stdin.buffer.read(16385)
+if len(raw) > 16384:
+    raise ValueError("oversized evidence")
+ordered = sorted(rows)
+first, last = {}, {}
+for position, row in enumerate(rows):
+    first.setdefault(row, position)
+    last[row] = position
+def contains(query):
+    i = bisect.bisect_left(ordered, query)
+    return i < len(ordered) and ordered[i] == query
+expected = list(map(contains, queries))
+forward_work = sum(first.get(q, len(rows)-1)+1 for q in queries)
+reverse_work = sum(len(rows)-last.get(q, 0) for q in queries)
+candidate_work = len(rows)+len(queries)
+if json.loads(raw) != dict(candidate=expected, forward=expected, reverse=expected,
+    candidate_work=candidate_work, forward_work=forward_work, reverse_work=reverse_work):
+    raise ValueError("answers or frozen work counts differ")
+teaching = hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
+print(json.dumps(dict(contract_sha256=contract_sha256, evidence_sha256=hashlib.sha256(raw).hexdigest(),
+    wrong_answers=0, lost_coverage=0, candidate_coverage=len(queries), baseline_coverage=len(queries),
+    teaching_sha256=teaching, baseline_teaching_sha256=teaching, candidate_total_work=candidate_work,
+    baseline_total_work=min(forward_work, reverse_work), strongest_comparator=True, complete=True)))
+"""
+
 FAMILIES = {
     "subset": (7, RUNNER, AUDITOR),
     "membership": (65535, MEMBERSHIP_RUNNER, MEMBERSHIP_AUDITOR),
+    "membership-campaign": (65535, CAMPAIGN_RUNNER, CAMPAIGN_AUDITOR),
 }
 
 
@@ -112,7 +167,7 @@ def validate_fixture(fixture):
         raise ValueError("provide rows and queries with an optional family")
     family = fixture.get("family", "subset")
     if not isinstance(family, str) or family not in FAMILIES:
-        raise ValueError("choose subset or membership")
+        raise ValueError("choose subset, membership, or membership-campaign")
     maximum, _, _ = FAMILIES[family]
     rows, queries = fixture["rows"], fixture["queries"]
     if any(not isinstance(values, list) or not 1 <= len(values) <= limit
@@ -154,7 +209,8 @@ def review_package(directory, expected_digest=None):
     if manifest["pins"] != expected_pins:
         raise ValueError("recorded pins do not match the trusted files")
     return {"review": "verified without executing either program", "family": family, "rows": len(rows),
-            "queries": len(queries), "pins": expected_pins, "review_sha256": manifest_digest}
+            "queries": len(queries), "pins": expected_pins, "review_sha256": manifest_digest,
+            **({"contract_sha256": CAMPAIGN_CONTRACT_SHA256} if family == "membership-campaign" else {})}
 
 
 def main():
@@ -198,6 +254,8 @@ def main():
         }, sort_keys=True) + "\n").encode("utf-8")
         (args.out / "review.json").write_bytes(manifest_bytes)
         packages["custom"]["review_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+        if family == "membership-campaign":
+            packages["custom"]["contract_sha256"] = CAMPAIGN_CONTRACT_SHA256
         print(json.dumps(packages["custom"]))
     else:
         (args.out / "branches.json").write_text(json.dumps({k: packages[k] for k in ("pass", "fail")}))

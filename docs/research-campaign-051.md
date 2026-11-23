@@ -23,6 +23,8 @@ results.
   executable code from provider replies.
 - [ ] Implement preparation of genuinely new benchmarks. Generated code must pass explicit trusted
   validation and the configured review policy before it becomes an executable.
+- [x] Prepare, review against a saved pin, and independently audit a new
+  template-derived synthetic benchmark through the campaign worker.
 - [x] Freeze candidate and independent auditor identities before opening evidence.
 - [ ] Verify same teaching evidence, zero wrong answers, no coverage loss, and lower
   total work than the strongest matched exact comparator. Count all preparation,
@@ -101,8 +103,11 @@ program bytes from the package fixture and check both pins without executing
 either program. This is a template integrity review, not approval to run.
 Save the printed `review_sha256` outside the package. Repeat review with
 `--expected-review-sha256 DIGEST` to reject a replacement package, even if its
-internal fixture and hashes agree. The public templates do not emit the
-strongest-comparator audit required by the CODA campaign contract.
+internal fixture and hashes agree. The `membership-campaign` family also
+prints a synthetic contract pin. It can be staged through the campaign
+worker and independently checks parity and the cheaper of two frozen exact
+scans. This narrow synthetic comparator set is not the CODA comparator set
+and cannot establish the CODA target.
 
 **Try a practice experiment** in Research activity runs a small built-in
 comparison locally, without files, an account, or any campaign jobs. It guides
