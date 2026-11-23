@@ -5,6 +5,24 @@ import { ResearchReport } from "./ResearchReport";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+it("creates a campaign without queuing a benchmark", async () => {
+  vi.mocked(invoke).mockClear();
+  vi.mocked(invoke).mockResolvedValueOnce({ experiments: 0, lanes: [] })
+    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce({ experiments: 0, lanes: [],
+      campaigns: [{ id: "demo", status: "active", limit: 12, audited_trials: 0 }] });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByRole("button", { name: "Load report" }));
+  fireEvent.click(await screen.findByText("Create a research campaign"));
+  fireEvent.change(screen.getByLabelText("Campaign ID"), { target: { value: "demo" } });
+  fireEvent.change(screen.getByLabelText("Trial limit"), { target: { value: "12" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create campaign" }));
+  expect(await screen.findByText("0 of 12 audited trials · Active")).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+    "research_queue_report", "research_campaign_create", "research_queue_report",
+  ]);
+});
+
 it("shows audited campaigns separately from provider jobs", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({
     experiments: 8,

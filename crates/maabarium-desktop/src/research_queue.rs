@@ -359,6 +359,45 @@ pub(crate) async fn research_queue_report() -> Result<QueueReport, String> {
         .map_err(|e| e.to_string())?
 }
 
+fn create_campaign(db: &Connection, id: &str, limit: u16) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || !(1..=200).contains(&limit)
+    {
+        return Err("Use a campaign ID of 1–64 letters, digits, hyphens or underscores and a limit of 1–200.".into());
+    }
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS campaigns (
+            id TEXT PRIMARY KEY, trial_limit INTEGER NOT NULL CHECK(trial_limit BETWEEN 1 AND 200),
+            status TEXT NOT NULL DEFAULT 'active');
+         CREATE TABLE IF NOT EXISTS campaign_trials (
+            campaign TEXT NOT NULL REFERENCES campaigns(id), identity TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK(outcome IN ('pass','fail','operational_failure')),
+            evidence_sha256 TEXT NOT NULL, PRIMARY KEY(campaign,identity));",
+    )
+    .map_err(|error| error.to_string())?;
+    let inserted = db
+        .execute(
+            "INSERT INTO campaigns(id,trial_limit) VALUES (?,?) ON CONFLICT(id) DO NOTHING",
+            rusqlite::params![id, limit],
+        )
+        .map_err(|error| error.to_string())?;
+    if inserted == 0 {
+        return Err("A campaign with that ID already exists.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn research_campaign_create(id: String, limit: u16) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || create_campaign(&connect()?, &id, limit))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) async fn research_muse_allowance() -> Result<Option<serde_json::Value>, String> {
     let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
@@ -1031,6 +1070,17 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn campaign_creation_is_bounded_and_does_not_replace_existing_campaign() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(super::create_campaign(&db, "../demo", 200).is_err());
+        assert!(super::create_campaign(&db, "demo", 201).is_err());
+        super::create_campaign(&db, "demo", 200).unwrap();
+        assert!(super::create_campaign(&db, "demo", 1).is_err());
+        let rows = super::campaign_report(&db).unwrap();
+        assert_eq!((rows[0].limit, rows[0].audited_trials), (200, 0));
+    }
+
     #[test]
     fn campaign_report_counts_only_scientific_verdicts() {
         let db = rusqlite::Connection::open_in_memory().unwrap();

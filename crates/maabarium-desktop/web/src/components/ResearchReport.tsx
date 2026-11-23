@@ -34,6 +34,19 @@ export function ResearchReport() {
   const [quotaBusy, setQuotaBusy] = useState(false);
   const [quota, setQuota] = useState<Allowance | null>();
   const [quotaError, setQuotaError] = useState("");
+  const [campaignId, setCampaignId] = useState("");
+  const [campaignLimit, setCampaignLimit] = useState(200);
+  const [creating, setCreating] = useState(false);
+  async function createCampaign() {
+    setCreating(true);
+    setError("");
+    try {
+      await invoke("research_campaign_create", { id: campaignId.trim(), limit: campaignLimit });
+      setCampaignId("");
+      await refresh();
+    } catch (failure) { setError(String(failure)); }
+    finally { setCreating(false); }
+  }
   async function refresh() {
     setBusy(true);
     setError("");
@@ -61,6 +74,24 @@ export function ResearchReport() {
       </div>
       {error && <p role="status" className="mt-2 text-sm">{error}</p>}
       {report && <>
+        <details className="mt-3 rounded border p-3">
+          <summary className="cursor-pointer font-semibold">Create a research campaign</summary>
+          <p className="mt-2 text-sm">Set a trial limit. This does not queue or run any benchmark.</p>
+          <form className="mt-2 flex flex-wrap items-end gap-3" onSubmit={(event) => {
+            event.preventDefault();
+            void createCampaign();
+          }}>
+            <label className="grid gap-1 text-sm">Campaign ID
+              <input className="rounded border px-2 py-1" required maxLength={64} pattern="[A-Za-z0-9_\\-]+"
+                value={campaignId} onChange={(event) => setCampaignId(event.target.value)} />
+            </label>
+            <label className="grid gap-1 text-sm">Trial limit
+              <input className="w-24 rounded border px-2 py-1" required type="number" min={1} max={200}
+                value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
+            </label>
+            <button className="rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy}>Create campaign</button>
+          </form>
+        </details>
         {!!report.campaigns?.length && <section className="mt-3" aria-label="Research campaigns">
           <h4 className="font-semibold">Research campaigns</h4>
           <ul className="mt-2 space-y-2">
