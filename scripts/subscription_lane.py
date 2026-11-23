@@ -159,6 +159,15 @@ def bounded_parameters(raw):
     return raw
 
 
+def unique_json_fields(pairs):
+    value = {}
+    for key, field in pairs:
+        if key in value:
+            raise ValueError("duplicate field in candidate selection")
+        value[key] = field
+    return value
+
+
 def parse_catalog_choice(response):
     if not isinstance(response, str) or len(response.encode()) > 2048:
         return None
@@ -166,7 +175,7 @@ def parse_catalog_choice(response):
     if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", response):
         return response, None
     try:
-        value = json.loads(response)
+        value = json.loads(response, object_pairs_hook=unique_json_fields)
         if (isinstance(value, dict) and set(value) == {"id", "parameters"}
                 and isinstance(value["id"], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value["id"])
                 and isinstance(value["parameters"], dict)

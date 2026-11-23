@@ -35,10 +35,14 @@ class SubscriptionLaneTest(unittest.TestCase):
         advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
         valid = '{"id":"pick","parameters":{"width":4}}'
         invalid = '{"id":"pick","parameters":{"width":40}}'
+        duplicate_ids = '{"id":"other","id":"pick","parameters":{"width":4}}'
+        duplicate_parameters = '{"id":"pick","parameters":{"width":40,"width":4}}'
         for answers, bounds, expected in [
                 (("pick", "pick"), None, "active"), (("pick", "other"), None, "stopped"),
                 (("unknown", "unknown"), None, "stopped"), ((valid, valid), [1, 8], "active"),
-                ((invalid, invalid), [1, 8], "stopped"), (("pick", "pick"), [1, 8], "stopped")]:
+                ((invalid, invalid), [1, 8], "stopped"), (("pick", "pick"), [1, 8], "stopped"),
+                ((duplicate_ids, valid), [1, 8], "stopped"),
+                ((duplicate_parameters, valid), [1, 8], "stopped")]:
             with self.subTest(answers=answers):
                 db = sqlite3.connect(":memory:", isolation_level=None)
                 db.executescript("""CREATE TABLE campaigns(id TEXT,status TEXT);

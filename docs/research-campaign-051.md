@@ -32,8 +32,10 @@ results.
   user stop, or a safety failure. No work may start after the terminal state.
 - [x] Display campaign progress, trial decisions, reported proposal token usage,
   failures, and the final check outcome in Research activity.
-- [ ] Verify restart, quota recovery, cancellation, malformed output, tampering,
-  duplicate results, concurrency, paid-fallback exclusion, and native UI behavior.
+- [x] Verify worker restart, cancellation, malformed selections, tampering,
+  duplicate results, concurrency, and paid-fallback exclusion in local tests.
+- [ ] Verify campaign resumption after a quota reset with the configured
+  subscriptions and verify the full campaign flow in the native UI.
 - [x] Verify the ready-made beginner campaign in the native app. It records
   both checked results and final review in a dedicated local table; it does
   not create provider jobs or consume real research trials.
