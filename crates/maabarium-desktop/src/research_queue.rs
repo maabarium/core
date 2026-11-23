@@ -202,7 +202,7 @@ impl ResearchStep {
             "muse" => &[
                 "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
             ],
-            "deepseek" => &["low", "high", "max"],
+            "deepseek" => &["none", "low", "high", "max"],
             _ => return false,
         };
         model.is_none_or(|m| {

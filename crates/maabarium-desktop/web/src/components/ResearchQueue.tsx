@@ -16,7 +16,7 @@ const effortOptions: Record<Lane, string[]> = {
   claude: [...commonEffort, "max"],
   antigravity: [...commonEffort, "max"],
   muse: ["none", "minimal", ...commonEffort, "max", "ultra"],
-  deepseek: ["low", "high", "max"],
+  deepseek: ["none", "low", "high", "max"],
 };
 const setup: Record<Lane, { status: string; steps: string[]; check: string }> = {
   codex: {
@@ -319,9 +319,9 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
                       const effort = event.target.value || null;
                       setPlan((previous) => previous.map((value, i) => i === index ? { ...value, effort } : value));
                     }}>
-                    <option value="">Use default</option>
+                    <option value="">{step.lane === "deepseek" ? "Maabarium default (off)" : "Use default"}</option>
                     {effortOptions[step.lane].map((effort) => <option key={effort} value={effort}>
-                      {effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}
+                      {effort === "xhigh" ? "Extra high" : step.lane === "deepseek" && effort === "none" ? "Off" : effort[0].toUpperCase() + effort.slice(1)}
                     </option>)}
                   </ResearchSelect>
                 </label>
@@ -372,7 +372,7 @@ export function ResearchQueue({ onJobsChange }: { onJobsChange?: (jobs: Research
                     disabled={reviewer.lane === "antigravity" && /orchestrator/i.test(reviewer.model ?? "")}
                     onChange={(event) => setReviewer({ ...reviewer, effort: event.target.value || null })}>
                     <option value="">{reviewer.lane === "deepseek" ? "Off" : "Provider default"}</option>
-                    {effortOptions[reviewer.lane].map((effort) => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
+                    {effortOptions[reviewer.lane].map((effort) => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : reviewer.lane === "deepseek" && effort === "none" ? "Off" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
                   </ResearchSelect>
                 </label>
               </>}

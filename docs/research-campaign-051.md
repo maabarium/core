@@ -153,6 +153,10 @@ Claude, Antigravity, Muse, and DeepSeek are supported. Model and effort choices
 apply to every round; blanks use provider defaults. An Antigravity Orchestrator
 model controls its own effort. DeepSeek requires explicit campaign consent and
 a paid-enabled worker. It is never a fallback.
+The DeepSeek lane uses the text Chat Completions API with `deepseek-flash`
+or `deepseek-v4-pro`. Reasoning can be off, low, high, or maximum; Maabarium
+leaves it off when no effort is selected. This lane does not use the Responses
+API or send images.
 For an unattended search over a vetted catalog, add
 `--stage --select-by-proposal` when submitting each approved benchmark
 before starting discovery. Use public-safe trial IDs: providers receive

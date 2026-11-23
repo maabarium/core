@@ -745,6 +745,14 @@ else:
         self.assertEqual(sent.full_url, "https://api.deepseek.com/chat/completions")
         self.assertEqual(json.loads(sent.data)["max_tokens"], 2048)
         self.assertEqual(json.loads(sent.data)["reasoning_effort"], "high")
+        for effort in (None, "none"):
+            with patch.dict(request.__globals__, {"build_opener": lambda *_: opener}):
+                request("fake-test-key", "public prompt", "deepseek-flash", effort)
+            body = json.loads(opener.open.call_args.args[0].data)
+            self.assertEqual(body["model"], "deepseek-flash")
+            self.assertEqual(body["thinking"], {"type": "disabled"})
+            self.assertEqual(body.get("reasoning_effort"), effort)
+        self.assertTrue(script["valid_selection"]("deepseek", "deepseek-flash", "none"))
         run = script["run_deepseek"]
         with sqlite3.connect(":memory:") as db:
             db.execute("CREATE TABLE jobs(id,state,finished_at,detail)")

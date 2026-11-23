@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Align the campaign setup fields and offer an explicit reasoning-off setting for DeepSeek.
+
 - Review prepared data-only benchmark packages against trusted templates without executing their programs.
 
 - Reserve local benchmark and checker time against a shared campaign budget before either program runs.

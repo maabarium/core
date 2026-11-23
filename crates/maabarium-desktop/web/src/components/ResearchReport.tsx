@@ -20,7 +20,7 @@ const campaignEfforts = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   antigravity: ["low", "medium", "high", "xhigh", "max"],
   muse: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
-  deepseek: ["low", "high", "max"],
+  deepseek: ["none", "low", "high", "max"],
 };
 type CampaignLane = keyof typeof campaignEfforts;
 type ProviderChoice = { lane: CampaignLane; model: string; effort: string };
@@ -205,24 +205,31 @@ export function ResearchReport() {
         <details className="mt-3 rounded border p-3">
           <summary className="cursor-pointer font-semibold">Create a research campaign</summary>
           <p className="mt-2 text-sm">Set a trial limit. This does not queue or run any benchmark.</p>
-          <form className="mt-2 flex flex-wrap items-end gap-3" onSubmit={(event) => {
+          <form className="mt-3 grid gap-4" onSubmit={(event) => {
             event.preventDefault();
             void createCampaign();
           }}>
-            <label className="grid gap-1 text-sm">Campaign ID
-              <input className="rounded border px-2 py-1" required maxLength={64} pattern="[A-Za-z0-9_\\-]+"
-                value={campaignId} onChange={(event) => setCampaignId(event.target.value)} />
-            </label>
-            <label className="grid gap-1 text-sm">Trial limit
-              <input className="w-24 rounded border px-2 py-1" required type="number" min={1} max={200}
-                value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
-            </label>
-            <label className="grid gap-1 text-sm">Pause for review every
-              <input className="h-10 w-36 rounded border px-2" type="number" min={1} max={campaignLimit}
-                placeholder="Final review only" value={reviewEvery}
-                onChange={event => setReviewEvery(event.target.value)} />
-              <span>Audited trials · optional</span>
-            </label>
+            <fieldset className="grid min-w-0 gap-3">
+              <legend className="sr-only">Campaign settings</legend>
+              <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-3">
+                <label className="grid min-w-0 gap-1 text-sm">Campaign ID
+                  <input className="h-10 w-full min-w-0 rounded border px-2" required maxLength={64} pattern="[A-Za-z0-9_\\-]+"
+                    value={campaignId} onChange={(event) => setCampaignId(event.target.value)} />
+                </label>
+                <label className="grid min-w-0 gap-1 text-sm">Trial limit
+                  <input className="h-10 w-full min-w-0 rounded border px-2" required type="number" min={1} max={200}
+                    value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
+                </label>
+                <label className="grid min-w-0 gap-1 text-sm">Pause for review every
+                  <input className="h-10 w-full min-w-0 rounded border px-2" type="number" min={1} max={campaignLimit}
+                    placeholder="Final review only" value={reviewEvery} aria-describedby="campaign-review-interval-help"
+                  onChange={event => setReviewEvery(event.target.value)} />
+                </label>
+              </div>
+              <p className="text-sm" id="campaign-review-interval-help">
+                Enter the number of audited trials between reviews, or leave blank to review only at the end.
+              </p>
+            </fieldset>
             <label className="grid w-full gap-1 text-sm">Public brief for adaptive proposals (optional)
               <textarea className="rounded border px-2 py-1" rows={3} maxLength={4096}
                 value={publicBrief} onChange={(event) => setPublicBrief(event.target.value)}
@@ -270,8 +277,8 @@ export function ResearchReport() {
                     {fixedEffort ? <p>Orchestrator sets its own reasoning effort.</p> : <label className="grid gap-1">{role} reasoning effort
                       <select className="h-10 rounded border px-2" value={choice.effort}
                         onChange={e => update({ ...choice, effort: e.target.value })}>
-                        <option value="">Provider default</option>
-                        {campaignEfforts[choice.lane].map(effort => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
+                        <option value="">{choice.lane === "deepseek" ? "Maabarium default (off)" : "Provider default"}</option>
+                        {campaignEfforts[choice.lane].map(effort => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : choice.lane === "deepseek" && effort === "none" ? "Off" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
                       </select>
                     </label>}
                   </fieldset>;
@@ -282,7 +289,7 @@ export function ResearchReport() {
                 Allow paid DeepSeek requests: {allowPaid ? "On" : "Off"}
               </button>}
             </details>}
-            <button className="rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy || (usesPaid && !allowPaid)}>Create campaign</button>
+            <button className="justify-self-start rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy || (usesPaid && !allowPaid)}>Create campaign</button>
           </form>
         </details>
         {!!report.campaigns?.length && <section className="mt-3" aria-label="Research campaigns">

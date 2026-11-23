@@ -719,7 +719,7 @@ def deepseek_request(key, prompt, model=None, effort=None):
         "model": model or "deepseek-flash",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 2048,
-        "thinking": {"type": "enabled" if effort else "disabled"},
+        "thinking": {"type": "enabled" if effort in ("low", "high", "max") else "disabled"},
     }
     if effort:
         body["reasoning_effort"] = effort
@@ -948,7 +948,7 @@ EFFORTS = {
     "claude": ("low", "medium", "high", "xhigh", "max"),
     "antigravity": ("low", "medium", "high", "xhigh", "max"),
     "muse": ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"),
-    "deepseek": ("low", "high", "max"),
+    "deepseek": ("none", "low", "high", "max"),
 }
 
 

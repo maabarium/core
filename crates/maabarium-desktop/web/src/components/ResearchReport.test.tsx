@@ -60,7 +60,8 @@ it("creates a campaign without queuing a benchmark", async () => {
   fireEvent.change(screen.getByLabelText("Proposer provider"), { target: { value: "muse" } });
   fireEvent.change(screen.getByLabelText("Proposer reasoning effort"), { target: { value: "ultra" } });
   fireEvent.change(screen.getByLabelText("Independent checker provider"), { target: { value: "deepseek" } });
-  expect(Array.from((screen.getByLabelText("Independent checker reasoning effort") as HTMLSelectElement).options, option => option.value)).toEqual(["", "low", "high", "max"]);
+  expect(Array.from((screen.getByLabelText("Independent checker reasoning effort") as HTMLSelectElement).options, option => option.value)).toEqual(["", "none", "low", "high", "max"]);
+  fireEvent.change(screen.getByLabelText("Independent checker reasoning effort"), { target: { value: "none" } });
   expect((screen.getByRole("button", { name: "Create campaign" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("switch", { name: /Allow paid DeepSeek/ }));
   fireEvent.click(screen.getByRole("button", { name: "Create campaign" }));
@@ -70,7 +71,7 @@ it("creates a campaign without queuing a benchmark", async () => {
   ]);
   expect(invoke).toHaveBeenCalledWith("research_campaign_create", {
     id: "demo", limit: 12, publicBrief: "Compare two exact synthetic solvers.",
-    providers: [{ lane: "muse", model: null, effort: "ultra" }, { lane: "deepseek", model: null, effort: null }],
+    providers: [{ lane: "muse", model: null, effort: "ultra" }, { lane: "deepseek", model: null, effort: "none" }],
     allowPaid: true,
   });
 });
