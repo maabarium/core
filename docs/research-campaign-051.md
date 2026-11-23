@@ -33,13 +33,18 @@ results.
   review in the existing reporting surfaces.
 - [ ] Verify restart, quota recovery, cancellation, malformed output, tampering,
   duplicate results, concurrency, paid-fallback exclusion, and native UI behavior.
-- [ ] Verify a ready-made beginner campaign in the native app. The offline
-  practice exercise is implemented, but it is not a real queued campaign.
+- [x] Verify the ready-made beginner campaign in the native app. It records
+  both checked results and final review in a dedicated local table; it does
+  not create provider jobs or consume real research trials.
 - [x] Walk through the offline practice exercise in the native app using an
   isolated profile: first test, separate final check, and finish. Zero jobs
   were created.
 - [ ] Complete the live-provider pilot and final native visual, security, and
   performance release checks before publishing.
+- [x] Verify isolated live subscription handoffs: Codex and Antigravity each
+  returned a public synthetic proposal on their first attempt with no paid
+  fallback. A separate locally audited benchmark completed live Codex review.
+  This does not verify live adaptive catalog selection through confirmation.
 
 The local regression run passed 40 worker tests, seven ledger tests, 52
 desktop Rust tests, and 106 frontend tests. The worker and Rust suites each
@@ -53,6 +58,10 @@ comparison locally, without files, an account, or any campaign jobs. It guides
 the user through the first result, a final check on different questions, and
 explicit finish or stop. It teaches correctness and work accounting; it is not
 CODA evidence.
+
+**Open a ready-made campaign** saves a separate starter's progress and both
+checked results on this computer. A student can close and reopen the app,
+run the final check when ready, and finish or stop without setting up a worker.
 
 The worker supports `campaign-create` and `campaign-status` with an experiment
 ID. Submit a frozen trial through `local-benchmark-enqueue` with `--campaign`

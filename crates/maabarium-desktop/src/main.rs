@@ -579,6 +579,7 @@ fn main() {
             research_queue::research_queue_list,
             research_queue::research_queue_report,
             research_queue::research_campaign_practice,
+            research_queue::research_starter_campaign,
             research_queue::research_campaign_create,
             research_queue::research_campaign_start,
             research_queue::research_campaign_stop,

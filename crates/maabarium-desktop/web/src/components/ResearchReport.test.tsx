@@ -5,6 +5,24 @@ import { ResearchReport } from "./ResearchReport";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+it("resumes a saved starter campaign and offers the next review step", async () => {
+  const result = { questions: 5, matches: 5, scan_checks: 20, lookup_checks: 20 };
+  vi.mocked(invoke).mockClear();
+  vi.mocked(invoke).mockResolvedValueOnce({ stage: "first_review", first: result, final_result: null })
+    .mockResolvedValueOnce({ stage: "final_review", first: result, final_result: result })
+    .mockResolvedValueOnce({ stage: "finished", first: result, final_result: result });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByRole("button", { name: "Open starter campaign" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Run final check on different questions" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Finish starter campaign" }));
+  expect(await screen.findByText("Starter campaign finished. These results are separate from your research trials.")).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls).toEqual([
+    ["research_starter_campaign", { action: "status" }],
+    ["research_starter_campaign", { action: "final_check" }],
+    ["research_starter_campaign", { action: "finish" }],
+  ]);
+});
+
 it("runs a local practice experiment without opening the queue or starting a campaign", async () => {
   vi.mocked(invoke).mockClear();
   vi.mocked(invoke).mockResolvedValueOnce({ questions: 5, matches: 5, scan_checks: 20, lookup_checks: 15 })

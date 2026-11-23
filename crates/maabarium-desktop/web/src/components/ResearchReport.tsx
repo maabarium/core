@@ -10,6 +10,7 @@ type Lane = TokenUsage & {
 };
 type Campaign = { id: string; status: string; limit: number; audited_trials: number; ready_proposal_rounds?: string[]; can_start?: boolean };
 type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
+type Starter = { stage: string; first: PracticeResult | null; final_result: PracticeResult | null };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
@@ -42,6 +43,15 @@ export function ResearchReport() {
   const [starting, setStarting] = useState(false);
   const [practice, setPractice] = useState<PracticeResult>();
   const [practicing, setPracticing] = useState(false);
+  const [starter, setStarter] = useState<Starter>();
+  const [starterBusy, setStarterBusy] = useState(false);
+  async function starterAction(action: string) {
+    setStarterBusy(true);
+    setError("");
+    try { setStarter(await invoke<Starter>("research_starter_campaign", { action })); }
+    catch (failure) { setError(String(failure)); }
+    finally { setStarterBusy(false); }
+  }
   const [practiceStep, setPracticeStep] = useState<"intro" | "result" | "final" | "closed" | "stopped">("intro");
   async function runPractice(finalCheck = false) {
     setPracticing(true);
@@ -113,6 +123,28 @@ export function ResearchReport() {
           onClick={() => void refresh()}>{busy ? "Loading…" : report ? "Refresh report" : "Load report"}</button>
       </div>
       {error && <p role="status" className="mt-2 text-sm">{error}</p>}
+      <section className="mt-3 rounded border p-3" aria-label="Starter campaign">
+        <h4 className="font-semibold">Open a ready-made campaign</h4>
+        <p className="mt-2 text-sm">Compare two ways to find a number on a list. Run the first test, review it, then decide whether to check it on different questions. Your progress is saved on this computer. No files, sign-in, or internet are needed.</p>
+        {starter && <div className="mt-2 space-y-2 text-sm" role="status">
+          {starter.first && <p>First test: both methods agreed with the answer key on {starter.first.matches} of {starter.first.questions} questions. They used {starter.first.scan_checks} and {starter.first.lookup_checks} comparisons.</p>}
+          {starter.final_result && <p>Final check: both methods agreed with the answer key on {starter.final_result.matches} of {starter.final_result.questions} different questions. They used {starter.final_result.scan_checks} and {starter.final_result.lookup_checks} comparisons.</p>}
+          {starter.stage === "finished" && <p>Starter campaign finished. These results are separate from your research trials.</p>}
+          {starter.stage === "stopped" && <p>Starter campaign stopped. Completed results are still here.</p>}
+        </div>}
+        <div className="mt-2 flex flex-wrap gap-2">
+          {(starter?.stage === "first_review" || starter?.stage === "final_review") &&
+            <button className="min-h-10 rounded border px-3 text-sm" type="button" disabled={starterBusy}
+              onClick={() => void starterAction("stop")}>Stop starter campaign</button>}
+          <button className="min-h-10 rounded border px-3 text-sm" type="button" disabled={starterBusy}
+            onClick={() => void starterAction(!starter ? "status" : starter.stage === "ready" ? "start"
+              : starter.stage === "first_review" ? "final_check" : starter.stage === "final_review" ? "finish" : "reset")}>
+            {starterBusy ? "Working…" : !starter ? "Open starter campaign" : starter.stage === "ready" ? "Run first test"
+              : starter.stage === "first_review" ? "Run final check on different questions"
+              : starter.stage === "final_review" ? "Finish starter campaign" : "Reset starter campaign"}
+          </button>
+        </div>
+      </section>
       <details className="mt-3 rounded border p-3">
         <summary className="cursor-pointer font-semibold">Try a practice experiment</summary>
         <p className="mt-2 text-sm">Compare two ways to find a number on a sorted list. First try five questions. Then check the result on five different questions before you finish. No sign-in, files, or internet needed.</p>

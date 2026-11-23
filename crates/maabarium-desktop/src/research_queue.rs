@@ -408,12 +408,93 @@ pub(crate) async fn research_queue_report() -> Result<QueueReport, String> {
         .map_err(|e| e.to_string())?
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 pub(crate) struct PracticeResult {
     questions: usize,
     matches: usize,
     scan_checks: usize,
     lookup_checks: usize,
+}
+
+#[derive(Serialize)]
+pub(crate) struct StarterCampaign {
+    stage: String,
+    first: Option<PracticeResult>,
+    final_result: Option<PracticeResult>,
+}
+
+#[tauri::command]
+pub(crate) async fn research_starter_campaign(action: String) -> Result<StarterCampaign, String> {
+    tauri::async_runtime::spawn_blocking(move || starter_campaign(&mut connect()?, &action))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn starter_campaign(db: &mut Connection, action: &str) -> Result<StarterCampaign, String> {
+    let err = |error: rusqlite::Error| error.to_string();
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS starter_campaign (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), stage TEXT NOT NULL,
+        first TEXT, final_result TEXT);
+        INSERT OR IGNORE INTO starter_campaign(singleton,stage) VALUES (1,'ready');",
+    )
+    .map_err(err)?;
+    let (stage, first, final_result): (String, Option<String>, Option<String>) = tx
+        .query_row(
+            "SELECT stage,first,final_result FROM starter_campaign WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(err)?;
+    let (stage, first, final_result) = match (action, stage.as_str()) {
+        ("status", _) => (stage, first, final_result),
+        ("start", "ready") => {
+            let result = research_campaign_practice(None);
+            (
+                "first_review".into(),
+                Some(serde_json::to_string(&result).map_err(|e| e.to_string())?),
+                None,
+            )
+        }
+        ("final_check", "first_review") => {
+            let result = research_campaign_practice(Some(true));
+            (
+                "final_review".into(),
+                first,
+                Some(serde_json::to_string(&result).map_err(|e| e.to_string())?),
+            )
+        }
+        ("finish", "final_review") => ("finished".into(), first, final_result),
+        ("stop", "first_review" | "final_review") => ("stopped".into(), first, final_result),
+        ("reset", "finished" | "stopped") => ("ready".into(), None, None),
+        _ => {
+            return Err(
+                "That step is not available. Refresh the starter campaign and try again.".into(),
+            )
+        }
+    };
+    if action != "status" {
+        tx.execute(
+            "UPDATE starter_campaign SET stage=?,first=?,final_result=? WHERE singleton=1",
+            rusqlite::params![stage, first, final_result],
+        )
+        .map_err(err)?;
+    }
+    let decode = |raw: Option<String>| {
+        raw.map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .map_err(|error| error.to_string())
+    };
+    let result = StarterCampaign {
+        stage,
+        first: decode(first)?,
+        final_result: decode(final_result)?,
+    };
+    tx.commit().map_err(err)?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1666,6 +1747,39 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn starter_campaign_resumes_and_requires_review_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("starter.db");
+        let mut db = rusqlite::Connection::open(&path).unwrap();
+        assert!(super::starter_campaign(&mut db, "final_check").is_err());
+        assert_eq!(
+            super::starter_campaign(&mut db, "start").unwrap().stage,
+            "first_review"
+        );
+        drop(db);
+        let mut db = rusqlite::Connection::open(&path).unwrap();
+        let current = super::starter_campaign(&mut db, "status").unwrap();
+        assert_eq!(current.stage, "first_review");
+        assert_eq!(current.first.unwrap().matches, 5);
+        assert!(super::starter_campaign(&mut db, "finish").is_err());
+        let checked = super::starter_campaign(&mut db, "final_check").unwrap();
+        assert_eq!(checked.final_result.unwrap().matches, 5);
+        assert_eq!(
+            super::starter_campaign(&mut db, "finish").unwrap().stage,
+            "finished"
+        );
+        assert_eq!(
+            super::starter_campaign(&mut db, "reset").unwrap().stage,
+            "ready"
+        );
+        super::starter_campaign(&mut db, "start").unwrap();
+        assert_eq!(
+            super::starter_campaign(&mut db, "stop").unwrap().stage,
+            "stopped"
+        );
+        assert!(super::starter_campaign(&mut db, "final_check").is_err());
+    }
     #[test]
     fn practice_checks_both_methods_against_known_answers() {
         let result = super::research_campaign_practice(None);
