@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Disclosure } from "./ui/Disclosure";
 
 type Executable = { path: string; sha256: string };
+type CampaignOption = { id: string; status: string; ready_proposal_rounds?: string[] };
 const reviewers = { codex: "Codex", claude: "Claude", antigravity: "Antigravity" } as const;
 
 export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }) {
@@ -19,6 +20,36 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [error, setError] = useState("");
   const [queued, setQueued] = useState("");
   const [campaignId, setCampaignId] = useState("");
+  const [campaignOptions, setCampaignOptions] = useState<CampaignOption[]>();
+  const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+  const selectedCampaign = campaignOptions?.find(item => item.id === campaignId);
+  async function loadCampaigns() {
+    setLoadingCampaigns(true);
+    setError("");
+    try {
+      const report = await invoke<{ campaigns?: CampaignOption[] }>("research_queue_report");
+      const options = (report.campaigns ?? []).filter(item =>
+        item.status === "active" || item.status === "confirmation_required");
+      setCampaignOptions(options);
+      setConfirmed(false);
+      if (!options.some(item => item.id === campaignId)) setCampaignId("");
+    } catch (failure) { setError(String(failure)); }
+    finally { setLoadingCampaigns(false); }
+  }
+  function chooseCampaign(id: string) {
+    setCampaignId(id);
+    setConfirmSealed(campaignOptions?.find(item => item.id === id)?.status === "confirmation_required");
+    setConfirmed(false);
+    setContractHash("");
+    setPanelHash("");
+    setProposalRound("");
+    setCatalog(false);
+    setCandidateId("");
+    setParameterRanges([]);
+    setPreApprove(false);
+    setSealedRunner(undefined);
+    setSealedAuditor(undefined);
+  }
   const [contractHash, setContractHash] = useState("");
   const [proposalRound, setProposalRound] = useState("");
   const [confirmSealed, setConfirmSealed] = useState(false);
@@ -94,27 +125,37 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         <input className="mt-1 block h-10 w-full rounded-md border bg-transparent px-3" required maxLength={256}
           value={title} onChange={event => { setTitle(event.target.value); setConfirmed(false); }} />
       </label>
-      <Disclosure title="Attach to a research campaign (optional)">
-        <p className="mt-2 text-sm">Approval stages this trial for automatic dispatch. Only the independent audit can count it or stop the campaign.</p>
+      <Disclosure title="Add this test to a campaign (optional)">
+        <p className="mt-2 text-sm">A campaign runs a series of tests. Maabarium counts a test only after a separate program checks the result.</p>
         <div className="mt-2 grid gap-3">
-          <label className="grid gap-1 text-sm">Campaign ID
-            <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={campaignId}
-              onChange={event => { setCampaignId(event.target.value); setConfirmed(false); }} />
-          </label>
+          <button type="button" className="min-h-10 justify-self-start rounded-md border px-3 text-sm"
+            disabled={loadingCampaigns || busy} onClick={() => void loadCampaigns()}>
+            {loadingCampaigns ? "Loading…" : campaignOptions ? "Refresh campaigns" : "Find my campaigns"}
+          </button>
+          {campaignOptions && (campaignOptions.length ? <label className="grid gap-1 text-sm">Campaign
+            <select className="h-10 w-full rounded-md border bg-transparent px-3" value={campaignId}
+              onChange={event => chooseCampaign(event.target.value)}>
+              <option value="">Run this as a standalone test</option>
+              {campaignOptions.map(item => <option key={item.id} value={item.id}>
+                {item.id}{item.status === "confirmation_required" ? " (needs a final check)" : ""}
+              </option>)}
+            </select>
+          </label> : <p className="text-sm">No campaigns are accepting tests. Create one under Research activity, then come back here.</p>)}
           {campaignId.trim() && <>
-            <label className="grid gap-1 text-sm">Frozen contract SHA-256
+            <label className="grid gap-1 text-sm">Test rules fingerprint (SHA-256)
               <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[a-f0-9]{64}" maxLength={64} value={contractHash}
                 onChange={event => { setContractHash(event.target.value); setConfirmed(false); }} />
+              <span>Paste the 64-character fingerprint from the approved test instructions. It keeps the rules the same across the campaign.</span>
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" role="switch" className="workspace-switch" checked={confirmSealed}
                 onChange={event => { setConfirmSealed(event.target.checked); setConfirmed(false); }} />
-              Run sealed confirmation instead
+              Run a final check on separate, unseen data
             </label>
             {confirmSealed ? <label className="grid gap-1 text-sm">Sealed panel SHA-256
               <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[a-f0-9]{64}" maxLength={64} value={panelHash}
                 onChange={event => { setPanelHash(event.target.value); setConfirmed(false); }} />
-              <span>Use separate trusted programs and the winning trial’s contract. Turn off sharing with an AI evaluator.</span>
+              <span>Paste the fingerprint for the separate test data. Use the winning trial’s test rules and turn off sharing with an AI evaluator.</span>
             </label> : <>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" role="switch" className="workspace-switch" checked={catalog}
@@ -148,9 +189,12 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
                 onClick={() => { setParameterRanges(rows => [...rows, { key: nextRangeKey, name: "", minimum: "", maximum: "" }]); setNextRangeKey(key => key + 1); setConfirmed(false); }}>
                 Add a setting
               </button>
-            </fieldset></> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
-              <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={proposalRound}
-                onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
+            </fieldset></> : <label className="grid gap-1 text-sm">Link the suggestions that inspired this test (optional)
+              <select className="h-10 w-full rounded-md border bg-transparent px-3" value={proposalRound}
+                onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }}>
+                <option value="">No suggestions linked</option>
+                {(selectedCampaign?.ready_proposal_rounds ?? []).map(round => <option key={round} value={round}>{round}</option>)}
+              </select>
             </label>}
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" role="switch" className="workspace-switch" checked={preApprove}
@@ -214,11 +258,16 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
             value={brief} onChange={event => { setBrief(event.target.value); setConfirmed(false); }} />
         </label>
         <p className="mt-2 text-sm text-[var(--muted)]">After the local check, Maabarium sends this brief and the pass/fail result without asking again. File paths and the full local report stay on this computer. The run still pauses for human review.</p>
-      </div> : <p className="text-sm text-[var(--muted)]">Results stay on this computer. The run pauses for human review after the local check.</p>}
+      </div> : <p className="text-sm text-[var(--muted)]">
+        {campaignId.trim() ? "Test results stay on this computer. Follow the campaign’s next step in Research activity."
+          : "Results stay on this computer. The run pauses for human review after the local check."}
+      </p>}
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" role="switch" className="workspace-switch" checked={confirmed} disabled={busy}
           onChange={event => setConfirmed(event.target.checked)} />
-        I trust these two programs to run on this computer.
+        {campaignId.trim() && preApprove && !confirmSealed
+          ? "I trust the test and final-check programs to run on this computer."
+          : "I trust these two programs to run on this computer."}
       </label>
       <button type="submit" className="min-h-10 rounded-md bg-[var(--accent)] px-3 font-semibold text-[var(--on-accent)] disabled:opacity-60"
         disabled={busy || !runner || !auditor || !confirmed || !title.trim()
