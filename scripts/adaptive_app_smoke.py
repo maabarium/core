@@ -49,26 +49,66 @@ print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
 """
 
 
+def bounded_json(path, limit):
+    with path.open("rb") as handle:
+        raw = handle.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError(f"{path.name} exceeds {limit} bytes")
+    return json.loads(raw)
+
+
+def validate_fixture(fixture):
+    if not isinstance(fixture, dict) or set(fixture) != {"rows", "queries"}:
+        raise ValueError("provide rows and queries")
+    rows, queries = fixture["rows"], fixture["queries"]
+    if any(not isinstance(values, list) or not 1 <= len(values) <= limit
+           or any(type(value) is not int or not 0 <= value < 8 for value in values)
+           for values, limit in ((rows, 64), (queries, 512))):
+        raise ValueError("use 1–64 rows and 1–512 queries, each an integer from 0 to 7")
+    return rows, queries
+
+
+def executable_bytes(mode, rows, queries, code):
+    return (f"#!{sys.executable}\nmode = {mode!r}\nrows = {rows!r}\n"
+            f"queries = {queries!r}\n" + code).encode()
+
+
+def review_package(directory):
+    manifest = bounded_json(directory / "review.json", 8192)
+    if not isinstance(manifest, dict) or set(manifest) != {"schema", "fixture", "pins"} or manifest["schema"] != 1:
+        raise ValueError("unrecognized benchmark package")
+    rows, queries = validate_fixture(manifest["fixture"])
+    expected_pins = {}
+    for role, code in (("runner", RUNNER), ("auditor", AUDITOR)):
+        expected = executable_bytes("custom", rows, queries, code)
+        path = directory / f"custom-{role}"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"{role} must be a regular package file")
+        with path.open("rb") as handle:
+            if handle.read(len(expected) + 1) != expected:
+                raise ValueError(f"{role} differs from the trusted template")
+        expected_pins[role] = hashlib.sha256(expected).hexdigest()
+    if manifest["pins"] != expected_pins:
+        raise ValueError("recorded pins do not match the trusted files")
+    return {"review": "verified without executing either program", "rows": len(rows),
+            "queries": len(queries), "pins": expected_pins}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
-    parser.add_argument("--fixture", type=Path, help="prepare a new public fixture from bounded rows and queries")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--fixture", type=Path, help="prepare a new public fixture from bounded rows and queries")
+    mode.add_argument("--review", action="store_true", help="verify prepared files without executing them")
     args = parser.parse_args()
     fixtures = FIXTURES
-    if args.fixture:
+    if args.review or args.fixture:
         try:
-            with args.fixture.open("rb") as handle:
-                raw = handle.read(8193)
-            if len(raw) > 8192:
-                raise ValueError("fixture exceeds 8192 bytes")
-            fixture = json.loads(raw)
-            if not isinstance(fixture, dict) or set(fixture) != {"rows", "queries"}:
-                raise ValueError("provide rows and queries")
-            rows, queries = fixture["rows"], fixture["queries"]
-            if any(not isinstance(values, list) or not 1 <= len(values) <= limit
-                   or any(type(value) is not int or not 0 <= value < 8 for value in values)
-                   for values, limit in ((rows, 64), (queries, 512))):
-                raise ValueError("use 1–64 rows and 1–512 queries, each an integer from 0 to 7")
+            if args.review:
+                print(json.dumps(review_package(args.out), sort_keys=True))
+                return
+            fixture = bounded_json(args.fixture, 8192)
+            rows, queries = validate_fixture(fixture)
             fixtures = {"custom": (rows, queries)}
         except (ValueError, OSError, RecursionError) as error:
             parser.error(str(error))
@@ -78,14 +118,17 @@ def main():
         info = {"title": f"Adaptive app pilot · {mode} fixture"}
         for role, code in (("runner", RUNNER), ("auditor", AUDITOR)):
             path = args.out.resolve() / f"{mode}-{role}"
-            contents = (f"#!{sys.executable}\nmode = {mode!r}\nrows = {rows!r}\n"
-                        f"queries = {queries!r}\n" + code).encode()
+            contents = executable_bytes(mode, rows, queries, code)
             path.write_bytes(contents)
             path.chmod(0o500)
             info[role] = str(path)
             info[role + "_sha256"] = hashlib.sha256(contents).hexdigest()
         packages[mode] = info
     if args.fixture:
+        (args.out / "review.json").write_text(json.dumps({
+            "schema": 1, "fixture": fixture,
+            "pins": {role: packages["custom"][role + "_sha256"] for role in ("runner", "auditor")},
+        }, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(packages["custom"]))
     else:
         (args.out / "branches.json").write_text(json.dumps({k: packages[k] for k in ("pass", "fail")}))

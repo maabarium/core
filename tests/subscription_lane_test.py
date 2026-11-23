@@ -46,12 +46,24 @@ class SubscriptionLaneTest(unittest.TestCase):
             result = subprocess.check_output([sys.executable, str(preparer), str(base / "out"),
                                               "--fixture", str(fixture)])
             package = json.loads(result)
+            review = [sys.executable, str(preparer), str(base / "out"), "--review"]
+            reviewed = json.loads(subprocess.check_output(review))
+            self.assertEqual((reviewed["rows"], reviewed["queries"]), (2, 3))
             for role in ("runner", "auditor"):
                 self.assertEqual(hashlib.sha256(Path(package[role]).read_bytes()).hexdigest(),
                                  package[role + "_sha256"])
             evidence = subprocess.check_output([package["runner"]])
             verdict = json.loads(subprocess.check_output([package["auditor"]], input=evidence))
             self.assertEqual(verdict["evidence_sha256"], hashlib.sha256(evidence).hexdigest())
+            runner = Path(package["runner"])
+            runner.chmod(0o700)
+            runner.write_bytes(runner.read_bytes() + b"\n# changed\n")
+            manifest = base / "out" / "review.json"
+            values = json.loads(manifest.read_bytes())
+            values["pins"]["runner"] = hashlib.sha256(runner.read_bytes()).hexdigest()
+            manifest.write_text(json.dumps(values))
+            self.assertIn(b"differs from the trusted template",
+                          subprocess.run(review, capture_output=True).stderr)
             fixture.write_text('{"rows":[true],"queries":[0]}')
             bad = subprocess.run([sys.executable, str(preparer), str(base / "bad"),
                                   "--fixture", str(fixture)], capture_output=True)

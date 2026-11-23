@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Review prepared data-only benchmark packages against trusted templates without executing their programs.
+
 - Reserve local benchmark and checker time against a shared campaign budget before either program runs.
 - Prepare new data-only subset benchmarks from a bounded JSON fixture and fixed trusted templates.
 
