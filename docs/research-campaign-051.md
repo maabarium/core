@@ -59,6 +59,8 @@ results.
   final build before publishing.
 - [x] Build an optimized app-only QA bundle and verify the campaign controls
   in a fresh macOS profile, without installing or publishing it.
+- [x] Create and stop a campaign through the optimized native UI, including
+  its explicit stop confirmation, without queuing provider work.
 - [x] Complete one isolated live adaptive catalog pilot with Codex and
   Antigravity: first candidate rejected, second selected with agreed bounded
   settings, development audit passed, and separate sealed confirmation passed.
@@ -81,6 +83,13 @@ to Active with the audited count unchanged and zero jobs created. The native
 accessibility tree exposed the trial limit, review interval, public brief,
 and local benchmark budget. Closed the QA copy; the installed app remained
 running. This does not replace full native visual or release verification.
+
+The optimized QA bundle also passed native create/stop in a fresh isolated
+profile: the campaign appeared as Active, required explicit confirmation to
+stop, and appeared as Stopped. The saved queue contained zero jobs. The
+production `npm run test:release-local` check did not build a signed artifact:
+it exited before compilation because neither updater private-key setting
+was configured. The optimized QA bundle is not a substitute for that gate.
 
 ## Current implementation
 
