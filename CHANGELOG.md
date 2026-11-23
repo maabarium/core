@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Save optional subscription model settings for all suggestion rounds in a research campaign.
+
 - Reject provider selections with duplicate candidate or parameter fields before dispatching a benchmark.
 
 - Research activity separates audited rejections from operational failures and shows reported suggestion token usage by provider for each campaign.

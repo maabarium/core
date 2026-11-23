@@ -56,6 +56,8 @@ it("creates a campaign without queuing a benchmark", async () => {
   fireEvent.change(screen.getByLabelText("Public brief for adaptive proposals (optional)"), {
     target: { value: "Compare two exact synthetic solvers." },
   });
+  fireEvent.click(screen.getByText("Suggestion model settings"));
+  fireEvent.change(screen.getByLabelText("Codex reasoning effort"), { target: { value: "high" } });
   fireEvent.click(screen.getByRole("button", { name: "Create campaign" }));
   expect(await screen.findByText("0 of 12 audited trials · Active")).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
@@ -63,6 +65,7 @@ it("creates a campaign without queuing a benchmark", async () => {
   ]);
   expect(invoke).toHaveBeenCalledWith("research_campaign_create", {
     id: "demo", limit: 12, publicBrief: "Compare two exact synthetic solvers.",
+    providers: [{ lane: "codex", model: null, effort: "high" }, { lane: "antigravity", model: null }],
   });
 });
 

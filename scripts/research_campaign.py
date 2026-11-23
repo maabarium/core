@@ -21,6 +21,9 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_proposals (
             job_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id));
         CREATE INDEX IF NOT EXISTS campaign_proposals_by_campaign ON campaign_proposals(campaign);
+        CREATE TABLE IF NOT EXISTS campaign_provider_options (
+            campaign TEXT NOT NULL REFERENCES campaigns(id), lane TEXT NOT NULL,
+            model TEXT, effort TEXT, PRIMARY KEY(campaign,lane));
         CREATE TABLE IF NOT EXISTS campaign_adaptive (
             campaign TEXT PRIMARY KEY REFERENCES campaigns(id), public_brief TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS campaign_confirmations (

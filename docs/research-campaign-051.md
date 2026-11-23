@@ -108,6 +108,10 @@ failure bit and the approved brief go to providers; local evidence stays local.
 Start discovery explicitly with `campaign-start --id <campaign>` or
 **Send public brief to Codex and Antigravity** in Research activity. Repeating
 the request does not create a duplicate round or consume a trial.
+When creating an adaptive campaign in the app, **Suggestion model settings**
+can pin the Codex model and reasoning effort and the Antigravity model.
+These settings apply to every round; blank values use the provider defaults.
+The two subscription roles are fixed for this catalog workflow.
 For an unattended search over a vetted catalog, add
 `--stage --select-by-proposal` when submitting each approved benchmark
 before starting discovery. Use public-safe trial IDs: providers receive

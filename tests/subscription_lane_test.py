@@ -18,6 +18,21 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_followup_proposals_copy_saved_provider_settings(self):
+        queue = runpy.run_path(str(SCRIPT))["queue_campaign_proposals"]
+        with sqlite3.connect(":memory:") as db:
+            db.executescript("""CREATE TABLE campaign_members(loop_id,campaign,ordinal);
+                CREATE TABLE research_loops(id,status);
+                CREATE TABLE local_benchmarks(loop_id,spec);
+                CREATE TABLE campaign_proposals(job_id,campaign);
+                CREATE TABLE campaign_provider_options(campaign,lane,model,effort);
+                CREATE TABLE jobs(id,lane,detail,prompt,model,effort);
+                INSERT INTO campaign_provider_options VALUES ('demo','codex','chosen','high'),
+                    ('other','antigravity','unrelated','low');""")
+            queue(db, "demo", "after-1", "Public synthetic task")
+            self.assertEqual(db.execute("SELECT lane,model,effort FROM jobs ORDER BY lane").fetchall(),
+                             [("antigravity", None, None), ("codex", "chosen", "high")])
+
     @unittest.skipUnless(os.getenv("MAABARIUM_LIVE_ADAPTIVE_PILOT") == "1",
                          "uses live Codex and Antigravity subscriptions")
     def test_live_adaptive_catalog_and_sealed_confirmation(self):

@@ -39,6 +39,9 @@ export function ResearchReport() {
   const [quotaError, setQuotaError] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [campaignLimit, setCampaignLimit] = useState(200);
+  const [codexModel, setCodexModel] = useState("");
+  const [codexEffort, setCodexEffort] = useState("");
+  const [antigravityModel, setAntigravityModel] = useState("");
   const [publicBrief, setPublicBrief] = useState("");
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -91,9 +94,18 @@ export function ResearchReport() {
     try {
       await invoke("research_campaign_create", {
         id: campaignId.trim(), limit: campaignLimit, publicBrief: publicBrief.trim() || null,
+        ...(publicBrief.trim() && (codexModel.trim() || codexEffort || antigravityModel.trim()) ? {
+          providers: [
+            { lane: "codex", model: codexModel.trim() || null, effort: codexEffort || null },
+            { lane: "antigravity", model: antigravityModel.trim() || null },
+          ],
+        } : {}),
       });
       setCampaignId("");
       setPublicBrief("");
+      setCodexModel("");
+      setCodexEffort("");
+      setAntigravityModel("");
       await refresh();
     } catch (failure) { setError(String(failure)); }
     finally { setCreating(false); }
@@ -198,6 +210,28 @@ export function ResearchReport() {
             <p id="campaign-public-brief-help" className="w-full text-sm">
               When no approved trial is waiting after an audited failure, Codex and Antigravity receive this brief and the failure status. Do not include private information.
             </p>
+            {publicBrief.trim() && <details className="w-full rounded border p-3">
+              <summary className="cursor-pointer font-semibold">Suggestion model settings</summary>
+              <p className="mt-2 text-sm">Both providers check the same candidate independently. Blank settings use the provider defaults. Enter a model ID supported by your subscription.</p>
+              <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                <label className="grid gap-1 text-sm">Codex model
+                  <input className="h-10 min-w-0 rounded border px-2" maxLength={128}
+                    value={codexModel} onChange={event => setCodexModel(event.target.value)} />
+                </label>
+                <label className="grid gap-1 text-sm">Codex reasoning effort
+                  <select className="h-10 rounded border px-2" value={codexEffort}
+                    onChange={event => setCodexEffort(event.target.value)}>
+                    <option value="">Default</option><option value="low">Low</option>
+                    <option value="medium">Medium</option><option value="high">High</option>
+                    <option value="xhigh">Extra high</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-sm">Antigravity model
+                  <input className="h-10 min-w-0 rounded border px-2" maxLength={128}
+                    value={antigravityModel} onChange={event => setAntigravityModel(event.target.value)} />
+                </label>
+              </div>
+            </details>}
             <button className="rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy}>Create campaign</button>
           </form>
         </details>
