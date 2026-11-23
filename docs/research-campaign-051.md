@@ -38,6 +38,9 @@ results.
   failures, and the final check outcome in Research activity.
 - [x] Verify worker restart, cancellation, malformed selections, tampering,
   duplicate results, concurrency, and paid-fallback exclusion in local tests.
+- [x] Simulate a deferred subscription during adaptive selection. The
+  restarted worker waits for the same job to become due, completes the pair
+  without a paid fallback, and reaches independent sealed confirmation.
 - [ ] Verify campaign resumption after a quota reset with the configured
   subscriptions and verify the full campaign flow in the native UI.
 - [x] Verify the ready-made beginner campaign in the native app. It records

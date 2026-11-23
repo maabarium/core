@@ -126,6 +126,8 @@ class SubscriptionLaneTest(unittest.TestCase):
         self.managed_benchmark(campaign=True, decision="confirm-auto-tamper")
     def test_full_adaptive_catalog_with_subscriptions_and_confirmation(self):
         self.managed_benchmark(campaign=True, decision="catalog-flow")
+    def test_adaptive_catalog_waits_for_deferred_subscription_across_worker_restarts(self):
+        self.managed_benchmark(campaign=True, decision="catalog-flow", defer=True)
     def test_catalog_trial_runs_after_agreement_in_restarted_worker(self):
         self.managed_benchmark(campaign=True, decision="catalog")
     def test_catalog_selection_is_closed_to_unapproved_or_disagreeing_ids(self):
@@ -312,7 +314,7 @@ else:
     def test_campaign_limit_counts_a_valid_scientific_failure(self):
         self.managed_benchmark(campaign=True, decision="limit")
 
-    def managed_benchmark(self, live=False, damage=None, local_only=False, adaptive=None, decision="accept", campaign=False):
+    def managed_benchmark(self, live=False, damage=None, local_only=False, adaptive=None, decision="accept", campaign=False, defer=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = root / "runner"
@@ -381,6 +383,8 @@ elif 'models' in args:
     print('gemini-4-neon-low\\tNeon')
 else:
     antigravity = '-p' in args
+    if not antigravity and pathlib.Path({str(root / "defer-codex")!r}).exists():
+        sys.exit(1)
     prompt = args[args.index('-p')+1] if antigravity else sys.stdin.read()
     assert 'PRIVATE-TITLE' not in prompt and 'Matched-learner audit' not in prompt
     choices = json.JSONDecoder().raw_decode(prompt.split('Approved IDs: ', 1)[1])[0] if 'Approved IDs: ' in prompt else []
@@ -493,12 +497,32 @@ else:
                 if decision == "catalog-flow":
                     successful("campaign-start", "--id", "demo")
                     status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
+                    if defer:
+                        marker = root / "defer-codex"
+                        marker.touch()
+                        successful("tick")
+                        successful("tick")
+                        successful("tick")
+                        self.assertEqual(status()["audited_trials"], 0)
+                        with sqlite3.connect(state / "queue.db") as db:
+                            jobs = db.execute("""SELECT lane,state,attempts,due FROM jobs
+                                WHERE id LIKE 'proposal:demo:initial:%' ORDER BY lane""").fetchall()
+                            self.assertEqual([row[:3] for row in jobs],
+                                             [("antigravity", "done", 1), ("codex", "queued", 1)])
+                            self.assertGreater(jobs[1][3], time.time())
+                            self.assertFalse((state / "local-evidence").exists())
+                            marker.unlink()
+                            db.execute("UPDATE jobs SET due=0 WHERE id='proposal:demo:initial:codex'")
                     for _ in range(12):
                         if status()["status"] == "confirmation_required":
                             break
                         successful("tick")
                     self.assertEqual(status(), {"status": "confirmation_required", "limit": 2, "audited_trials": 2})
                     with sqlite3.connect(state / "queue.db") as db:
+                        if defer:
+                            self.assertEqual(db.execute("""SELECT state,attempts FROM jobs
+                                WHERE id='proposal:demo:initial:codex'""").fetchone(), ("done", 2))
+                            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs WHERE lane='deepseek'").fetchone(), (0,))
                         self.assertEqual(db.execute("SELECT identity,outcome FROM campaign_trials ORDER BY rowid").fetchall(),
                                          [("fresh-public-check", "fail"), ("second", "pass")])
                         digest, = db.execute("SELECT evidence_sha256 FROM campaign_trials WHERE outcome='pass'").fetchone()
