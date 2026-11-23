@@ -359,7 +359,12 @@ pub(crate) async fn research_queue_report() -> Result<QueueReport, String> {
         .map_err(|e| e.to_string())?
 }
 
-fn create_campaign(db: &Connection, id: &str, limit: u16) -> Result<(), String> {
+fn create_campaign(
+    db: &mut Connection,
+    id: &str,
+    limit: u16,
+    public_brief: Option<&str>,
+) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 64
         || !id
@@ -369,17 +374,24 @@ fn create_campaign(db: &Connection, id: &str, limit: u16) -> Result<(), String> 
     {
         return Err("Use a campaign ID of 1–64 letters, digits, hyphens or underscores and a limit of 1–200.".into());
     }
-    db.execute_batch(
+    let public_brief = public_brief.map(str::trim);
+    if public_brief.is_some_and(|brief| brief.is_empty() || brief.len() > 4096) {
+        return Err("Use a public brief of 1–4096 bytes.".into());
+    }
+    let tx = db.transaction().map_err(|error| error.to_string())?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS campaigns (
             id TEXT PRIMARY KEY, trial_limit INTEGER NOT NULL CHECK(trial_limit BETWEEN 1 AND 200),
             status TEXT NOT NULL DEFAULT 'active');
          CREATE TABLE IF NOT EXISTS campaign_trials (
             campaign TEXT NOT NULL REFERENCES campaigns(id), identity TEXT NOT NULL,
             outcome TEXT NOT NULL CHECK(outcome IN ('pass','fail','operational_failure')),
-            evidence_sha256 TEXT NOT NULL, PRIMARY KEY(campaign,identity));",
+            evidence_sha256 TEXT NOT NULL, PRIMARY KEY(campaign,identity));
+         CREATE TABLE IF NOT EXISTS campaign_adaptive (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id), public_brief TEXT NOT NULL);",
     )
     .map_err(|error| error.to_string())?;
-    let inserted = db
+    let inserted = tx
         .execute(
             "INSERT INTO campaigns(id,trial_limit) VALUES (?,?) ON CONFLICT(id) DO NOTHING",
             rusqlite::params![id, limit],
@@ -388,14 +400,27 @@ fn create_campaign(db: &Connection, id: &str, limit: u16) -> Result<(), String> 
     if inserted == 0 {
         return Err("A campaign with that ID already exists.".into());
     }
-    Ok(())
+    if let Some(brief) = public_brief {
+        tx.execute(
+            "INSERT INTO campaign_adaptive VALUES (?,?)",
+            rusqlite::params![id, brief],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub(crate) async fn research_campaign_create(id: String, limit: u16) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || create_campaign(&connect()?, &id, limit))
-        .await
-        .map_err(|error| error.to_string())?
+pub(crate) async fn research_campaign_create(
+    id: String,
+    limit: u16,
+    public_brief: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        create_campaign(&mut connect()?, &id, limit, public_brief.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1072,11 +1097,18 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 mod tests {
     #[test]
     fn campaign_creation_is_bounded_and_does_not_replace_existing_campaign() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        assert!(super::create_campaign(&db, "../demo", 200).is_err());
-        assert!(super::create_campaign(&db, "demo", 201).is_err());
-        super::create_campaign(&db, "demo", 200).unwrap();
-        assert!(super::create_campaign(&db, "demo", 1).is_err());
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(super::create_campaign(&mut db, "../demo", 200, None).is_err());
+        assert!(super::create_campaign(&mut db, "demo", 201, None).is_err());
+        assert!(super::create_campaign(&mut db, "demo", 200, Some(" ")).is_err());
+        super::create_campaign(&mut db, "demo", 200, Some("Public synthetic problem")).unwrap();
+        assert!(super::create_campaign(&mut db, "demo", 1, Some("replacement")).is_err());
+        let brief: String = db
+            .query_row("SELECT public_brief FROM campaign_adaptive", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(brief, "Public synthetic problem");
         let rows = super::campaign_report(&db).unwrap();
         assert_eq!((rows[0].limit, rows[0].audited_trials), (200, 0));
     }

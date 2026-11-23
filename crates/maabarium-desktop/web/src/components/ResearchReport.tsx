@@ -36,13 +36,17 @@ export function ResearchReport() {
   const [quotaError, setQuotaError] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [campaignLimit, setCampaignLimit] = useState(200);
+  const [publicBrief, setPublicBrief] = useState("");
   const [creating, setCreating] = useState(false);
   async function createCampaign() {
     setCreating(true);
     setError("");
     try {
-      await invoke("research_campaign_create", { id: campaignId.trim(), limit: campaignLimit });
+      await invoke("research_campaign_create", {
+        id: campaignId.trim(), limit: campaignLimit, publicBrief: publicBrief.trim() || null,
+      });
       setCampaignId("");
+      setPublicBrief("");
       await refresh();
     } catch (failure) { setError(String(failure)); }
     finally { setCreating(false); }
@@ -89,6 +93,14 @@ export function ResearchReport() {
               <input className="w-24 rounded border px-2 py-1" required type="number" min={1} max={200}
                 value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
             </label>
+            <label className="grid w-full gap-1 text-sm">Public brief for adaptive proposals (optional)
+              <textarea className="rounded border px-2 py-1" rows={3} maxLength={4096}
+                value={publicBrief} onChange={(event) => setPublicBrief(event.target.value)}
+                aria-describedby="campaign-public-brief-help" />
+            </label>
+            <p id="campaign-public-brief-help" className="w-full text-sm">
+              When no approved trial is waiting after an audited failure, Codex and Antigravity receive this brief and the failure status. Do not include private information.
+            </p>
             <button className="rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy}>Create campaign</button>
           </form>
         </details>
