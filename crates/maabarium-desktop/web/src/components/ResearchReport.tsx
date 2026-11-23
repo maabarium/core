@@ -42,10 +42,14 @@ export function ResearchReport() {
   const [starting, setStarting] = useState(false);
   const [practice, setPractice] = useState<PracticeResult>();
   const [practicing, setPracticing] = useState(false);
-  async function runPractice() {
+  const [practiceStep, setPracticeStep] = useState<"intro" | "result" | "final" | "closed" | "stopped">("intro");
+  async function runPractice(finalCheck = false) {
     setPracticing(true);
     setError("");
-    try { setPractice(await invoke<PracticeResult>("research_campaign_practice")); }
+    try {
+      setPractice(await invoke<PracticeResult>("research_campaign_practice", { finalCheck }));
+      setPracticeStep(finalCheck ? "final" : "result");
+    }
     catch (failure) { setError(String(failure)); }
     finally { setPracticing(false); }
   }
@@ -111,16 +115,30 @@ export function ResearchReport() {
       {error && <p role="status" className="mt-2 text-sm">{error}</p>}
       <details className="mt-3 rounded border p-3">
         <summary className="cursor-pointer font-semibold">Try a practice experiment</summary>
-        <p className="mt-2 text-sm">Can you check whether a number is on a sorted list without looking at every number? Compare two ways to check. No sign-in, files, or internet needed.</p>
-        <button type="button" className="mt-2 min-h-10 rounded border px-3 text-sm" disabled={practicing}
-          onClick={() => void runPractice()}>{practicing ? "Running…" : "Run practice experiment"}</button>
-        {practice && <div className="mt-2 space-y-1 text-sm" role="status">
-          <p>Both methods gave the expected answer on {practice.matches} of {practice.questions} questions.</p>
+        <p className="mt-2 text-sm">Compare two ways to find a number on a sorted list. First try five questions. Then check the result on five different questions before you finish. No sign-in, files, or internet needed.</p>
+        {practiceStep === "intro" && <button type="button" className="mt-2 min-h-10 rounded border px-3 text-sm" disabled={practicing}
+          onClick={() => void runPractice()}>{practicing ? "Running…" : "Run practice experiment"}</button>}
+        {practice && (practiceStep === "result" || practiceStep === "final") && <div className="mt-2 space-y-1 text-sm">
+          <h4 className="font-semibold">{practiceStep === "result" ? "First test" : "Final check on different questions"}</h4>
+          <p role="status">Both methods gave the expected answer on {practice.matches} of {practice.questions} questions.</p>
           <ul className="list-disc pl-5">
             <li>Check one number at a time: {practice.scan_checks} comparisons</li>
             <li>Keep splitting the list in half: {practice.lookup_checks} comparisons</li>
           </ul>
           <p>This comparison starts with an already sorted list. It does not count the work of sorting, and it does not use a campaign trial.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {practiceStep === "result" ? <button type="button" className="min-h-10 rounded border px-3"
+              disabled={practicing} onClick={() => void runPractice(true)}>Run final check</button>
+              : <button type="button" className="min-h-10 rounded border px-3"
+                onClick={() => setPracticeStep("closed")}>Finish practice</button>}
+            <button type="button" className="min-h-10 rounded border px-3" disabled={practicing}
+              onClick={() => setPracticeStep("stopped")}>Stop practice</button>
+          </div>
+        </div>}
+        {(practiceStep === "closed" || practiceStep === "stopped") && <div className="mt-2 text-sm">
+          <p role="status">{practiceStep === "closed" ? "Practice complete. No campaign work was started." : "Practice stopped. Nothing else will run."}</p>
+          <button type="button" className="mt-2 min-h-10 rounded border px-3"
+            onClick={() => { setPractice(undefined); setPracticeStep("intro"); }}>Start over</button>
         </div>}
       </details>
       {report && <>

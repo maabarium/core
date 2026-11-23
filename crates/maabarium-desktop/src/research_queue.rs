@@ -417,10 +417,13 @@ pub(crate) struct PracticeResult {
 }
 
 #[tauri::command]
-pub(crate) fn research_campaign_practice() -> PracticeResult {
+pub(crate) fn research_campaign_practice(final_check: Option<bool>) -> PracticeResult {
     let numbers = [2, 4, 7, 9, 12];
-    let questions = [2, 5, 9, 12, 13];
-    let expected = [true, false, true, true, false];
+    let (questions, expected) = if final_check == Some(true) {
+        ([0, 4, 6, 7, 10], [false, true, false, true, false])
+    } else {
+        ([2, 5, 9, 12, 13], [true, false, true, true, false])
+    };
     let mut scan_checks = 0;
     let mut lookup_checks = 0;
     let mut matches = 0;
@@ -1665,12 +1668,21 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 mod tests {
     #[test]
     fn practice_checks_both_methods_against_known_answers() {
-        let result = super::research_campaign_practice();
+        let result = super::research_campaign_practice(None);
         assert_eq!(
             (result.questions, result.matches, result.scan_checks),
             (5, 5, 20)
         );
         assert!(result.lookup_checks > 0);
+        let final_check = super::research_campaign_practice(Some(true));
+        assert_eq!(
+            (
+                final_check.questions,
+                final_check.matches,
+                final_check.scan_checks
+            ),
+            (5, 5, 20)
+        );
     }
     #[cfg(unix)]
     #[test]
