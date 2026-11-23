@@ -81,6 +81,17 @@ class SubscriptionLaneTest(unittest.TestCase):
             package = json.loads(subprocess.check_output([*cmd, "--fixture", str(fixture)]))
             review = json.loads(subprocess.check_output([*cmd, "--review"]))
             self.assertEqual(review["family"], "membership")
+            self.assertEqual(review["review_sha256"], package["review_sha256"])
+            subprocess.check_call([*cmd, "--review", "--expected-review-sha256", package["review_sha256"]],
+                                  stdout=subprocess.DEVNULL)
+            changed = base / "different-package"
+            fixture.write_text(json.dumps({"family": "membership", "rows": [1], "queries": [1]}))
+            subprocess.check_call([sys.executable, str(preparer), str(changed), "--fixture", str(fixture)],
+                                  stdout=subprocess.DEVNULL)
+            rejected = subprocess.run([sys.executable, str(preparer), str(changed), "--review",
+                                       "--expected-review-sha256", package["review_sha256"]], capture_output=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn(b"differs from the separately saved pin", rejected.stderr)
             evidence = subprocess.check_output([package["runner"]])
             self.assertEqual(json.loads(evidence), {
                 "mode": "custom", "baseline": [True, False, True, False],

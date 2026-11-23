@@ -93,14 +93,18 @@ FAMILIES = {
 }
 
 
-def bounded_json(path, limit):
+def bounded_bytes(path, limit):
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{path.name} must be a regular file")
     with path.open("rb") as handle:
         raw = handle.read(limit + 1)
     if len(raw) > limit:
         raise ValueError(f"{path.name} exceeds {limit} bytes")
-    return json.loads(raw)
+    return raw
+
+
+def bounded_json(path, limit):
+    return json.loads(bounded_bytes(path, limit))
 
 
 def validate_fixture(fixture):
@@ -128,8 +132,12 @@ def executable_bytes(mode, rows, queries, code):
             f"queries = {queries!r}\n" + code).encode()
 
 
-def review_package(directory):
-    manifest = bounded_json(directory / "review.json", 8192)
+def review_package(directory, expected_digest=None):
+    manifest_bytes = bounded_bytes(directory / "review.json", 8192)
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if expected_digest is not None and expected_digest != manifest_digest:
+        raise ValueError("review manifest differs from the separately saved pin")
+    manifest = json.loads(manifest_bytes)
     if not isinstance(manifest, dict) or set(manifest) != {"schema", "fixture", "pins"} or manifest["schema"] != 1:
         raise ValueError("unrecognized benchmark package")
     family, rows, queries = validate_fixture(manifest["fixture"])
@@ -146,7 +154,7 @@ def review_package(directory):
     if manifest["pins"] != expected_pins:
         raise ValueError("recorded pins do not match the trusted files")
     return {"review": "verified without executing either program", "family": family, "rows": len(rows),
-            "queries": len(queries), "pins": expected_pins}
+            "queries": len(queries), "pins": expected_pins, "review_sha256": manifest_digest}
 
 
 def main():
@@ -155,13 +163,16 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fixture", type=Path, help="prepare a new public fixture from bounded rows and queries")
     mode.add_argument("--review", action="store_true", help="verify prepared files without executing them")
+    parser.add_argument("--expected-review-sha256", help="check a separately saved review manifest digest")
     args = parser.parse_args()
+    if args.expected_review_sha256 is not None and not args.review:
+        parser.error("--expected-review-sha256 requires --review")
     fixtures = FIXTURES
     family = "subset"
     if args.review or args.fixture:
         try:
             if args.review:
-                print(json.dumps(review_package(args.out), sort_keys=True))
+                print(json.dumps(review_package(args.out, args.expected_review_sha256), sort_keys=True))
                 return
             fixture = bounded_json(args.fixture, 8192)
             family, rows, queries = validate_fixture(fixture)
@@ -181,10 +192,12 @@ def main():
             info[role + "_sha256"] = hashlib.sha256(contents).hexdigest()
         packages[mode] = info
     if args.fixture:
-        (args.out / "review.json").write_text(json.dumps({
+        manifest_bytes = (json.dumps({
             "schema": 1, "fixture": fixture,
             "pins": {role: packages["custom"][role + "_sha256"] for role in ("runner", "auditor")},
-        }, sort_keys=True) + "\n", encoding="utf-8")
+        }, sort_keys=True) + "\n").encode("utf-8")
+        (args.out / "review.json").write_bytes(manifest_bytes)
+        packages["custom"]["review_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
         print(json.dumps(packages["custom"]))
     else:
         (args.out / "branches.json").write_text(json.dumps({k: packages[k] for k in ("pass", "fail")}))

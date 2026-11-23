@@ -99,6 +99,10 @@ not queue or run the benchmark, accept generated source, or produce CODA evidenc
 Run the same tool with `OUTPUT --review` to reconstruct the exact expected
 program bytes from the package fixture and check both pins without executing
 either program. This is a template integrity review, not approval to run.
+Save the printed `review_sha256` outside the package. Repeat review with
+`--expected-review-sha256 DIGEST` to reject a replacement package, even if its
+internal fixture and hashes agree. The public templates do not emit the
+strongest-comparator audit required by the CODA campaign contract.
 
 **Try a practice experiment** in Research activity runs a small built-in
 comparison locally, without files, an account, or any campaign jobs. It guides
