@@ -90,5 +90,12 @@ select this candidate** and enter a public-safe candidate ID before starting
 discovery. Preparing new benchmark executables from free-form proposals and
 native release verification remain open.
 
+The synthetic end-to-end worker test
+`test_full_adaptive_catalog_with_subscriptions_and_confirmation` exercises
+two provider selections, one audited rejection, a development pass, and
+sealed confirmation across independent worker invocations. Its provider
+clients are fixtures, not live accounts. The test audits two development
+trials and one separate confirmation; it does not run CODA evidence.
+
 Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
 acceptance requirements are implemented and verified.

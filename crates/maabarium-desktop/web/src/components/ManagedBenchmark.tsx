@@ -74,12 +74,12 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         <p className="mt-2 text-sm">Approval stages this trial for automatic dispatch. Only the independent audit can count it or stop the campaign.</p>
         <div className="mt-2 grid gap-3">
           <label className="grid gap-1 text-sm">Campaign ID
-            <input className="rounded border px-2 py-1" maxLength={64} value={campaignId}
+            <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={campaignId}
               onChange={event => { setCampaignId(event.target.value); setConfirmed(false); }} />
           </label>
           {campaignId.trim() && <>
             <label className="grid gap-1 text-sm">Frozen contract SHA-256
-              <input className="rounded border px-2 py-1" required pattern="[a-f0-9]{64}" maxLength={64} value={contractHash}
+              <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[a-f0-9]{64}" maxLength={64} value={contractHash}
                 onChange={event => { setContractHash(event.target.value); setConfirmed(false); }} />
             </label>
             <label className="flex items-center gap-2 text-sm">
@@ -88,7 +88,7 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
               Run sealed confirmation instead
             </label>
             {confirmSealed ? <label className="grid gap-1 text-sm">Sealed panel SHA-256
-              <input className="rounded border px-2 py-1" required pattern="[a-f0-9]{64}" maxLength={64} value={panelHash}
+              <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[a-f0-9]{64}" maxLength={64} value={panelHash}
                 onChange={event => { setPanelHash(event.target.value); setConfirmed(false); }} />
               <span>Use separate trusted programs and the winning trial’s contract. Turn off sharing with an AI evaluator.</span>
             </label> : <>
@@ -98,11 +98,11 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
               Let Codex and Antigravity select this candidate
             </label>
             {catalog ? <label className="grid gap-1 text-sm">Public candidate ID
-              <input className="rounded border px-2 py-1" required pattern="[A-Za-z0-9_\\-]{1,64}" maxLength={64} value={candidateId}
+              <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[A-Za-z0-9_\\-]{1,64}" maxLength={64} value={candidateId}
                 onChange={event => { setCandidateId(event.target.value); setConfirmed(false); }} />
               <span>Both providers can see this ID. Use an ID that describes the approach without revealing private information. Add candidates before starting discovery.</span>
             </label> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
-              <input className="rounded border px-2 py-1" maxLength={64} value={proposalRound}
+              <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={proposalRound}
                 onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
             </label>}
             </>}

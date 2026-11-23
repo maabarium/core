@@ -18,6 +18,8 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_full_adaptive_catalog_with_subscriptions_and_confirmation(self):
+        self.managed_benchmark(campaign=True, decision="catalog-flow")
     def test_catalog_trial_runs_after_agreement_in_restarted_worker(self):
         self.managed_benchmark(campaign=True, decision="catalog")
     def test_catalog_selection_is_closed_to_unapproved_or_disagreeing_ids(self):
@@ -221,7 +223,7 @@ print(json.dumps(dict(contract_sha256="a"*64,
 """)
                 if decision in ("limit", "adaptive"):
                     auditor.write_text(auditor.read_text().replace('wrong_answers=0', 'wrong_answers=1'))
-                if decision == "stage-next":
+                if decision in ("stage-next", "catalog-flow"):
                     auditor.write_text(auditor.read_text().replace(
                         'wrong_answers=0', 'wrong_answers=0 if report.get("successor") else 1'))
             if expected_gate == "fail":
@@ -236,6 +238,25 @@ prompt = sys.stdin.read()
 assert "PRIVATE-LOCAL-REPORT" not in prompt and "PRIVATE-TITLE" not in prompt and '"local_gate": "{expected_gate}"' in prompt
 pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("Review complete; a handoff needs a human.")
 """)
+            if decision == "catalog-flow":
+                fake.write_text(f"""#!{sys.executable}
+import json, pathlib, sys
+args = sys.argv
+if 'login' in args:
+    print('Logged in using ChatGPT')
+elif 'models' in args:
+    print('gemini-4-neon-low\\tNeon')
+else:
+    antigravity = '-p' in args
+    prompt = args[args.index('-p')+1] if antigravity else sys.stdin.read()
+    assert 'PRIVATE-TITLE' not in prompt and 'Matched-learner audit' not in prompt
+    answer = ('fresh-public-check' if 'fresh-public-check' in prompt else 'second') if 'Approved IDs:' in prompt else 'Review complete'
+    if antigravity:
+        assert json.loads(args[args.index('--settings')+1])['useG1Credits'] is False
+        print(json.dumps(dict(status='SUCCESS', response=answer)))
+    else:
+        pathlib.Path(args[args.index('--output-last-message')+1]).write_text(answer)
+""")
             if damage == "bad-audit":
                 text = auditor.read_text().replace("hashlib.sha256(raw).hexdigest()", "'0' * 64")
                 auditor.write_text(text)
@@ -244,6 +265,8 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             state = root / "state"
             base = [sys.executable, str(SCRIPT), "--state", str(state),
                     "--codex", "codex" if live else str(fake)]
+            if decision == "catalog-flow":
+                base += ["--antigravity", str(fake)]
             def run(*args):
                 return subprocess.run([*base, *args], capture_output=True, text=True,
                                       timeout=135 if live else 10)
@@ -254,12 +277,12 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             adaptive_args = ()
             limit = 1 if decision == "limit" else 2
             if campaign:
-                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper", "catalog") else ()
+                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper", "catalog", "catalog-flow") else ()
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
                     adaptive_args += ("--stage",)
-                if decision == "catalog":
+                if decision in ("catalog", "catalog-flow"):
                     adaptive_args += ("--stage", "--select-by-proposal")
             if adaptive:
                 branches = {}
@@ -298,7 +321,7 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                     self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
                                      {"status": "confirmation_required", "limit": 2, "audited_trials": 1})
                     return
-                if decision in ("stage", "stage-next"):
+                if decision in ("stage", "stage-next", "catalog-flow"):
                     second = root / "runner-two"
                     second.write_text(fixture.read_text().replace(
                         "baseline=[", "successor=True,\n    baseline=["))
@@ -309,6 +332,32 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                                "--runner-sha256", hashlib.sha256(second.read_bytes()).hexdigest(),
                                "--auditor", str(auditor),
                                "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
+                if decision == "catalog-flow":
+                    successful("campaign-start", "--id", "demo")
+                    status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
+                    for _ in range(12):
+                        if status()["status"] == "confirmation_required":
+                            break
+                        successful("tick")
+                    self.assertEqual(status(), {"status": "confirmation_required", "limit": 2, "audited_trials": 2})
+                    with sqlite3.connect(state / "queue.db") as db:
+                        self.assertEqual(db.execute("SELECT identity,outcome FROM campaign_trials ORDER BY rowid").fetchall(),
+                                         [("fresh-public-check", "fail"), ("second", "pass")])
+                        digest, = db.execute("SELECT evidence_sha256 FROM campaign_trials WHERE outcome='pass'").fetchone()
+                    sealed = root / "confirmation"
+                    sealed.write_text(second.read_text().replace("successor=True", "successor=True, sealed_fixture=True"))
+                    sealed.chmod(0o700)
+                    auditor.write_text(auditor.read_text().replace(
+                        "complete=True", f"complete=True, panel_sha256={'c' * 64!r}, development_evidence_sha256={digest!r}"))
+                    successful("local-benchmark-enqueue", "--id", "confirm",
+                               "--campaign", "demo", "--contract-sha256", "a" * 64,
+                               "--confirm-panel-sha256", "c" * 64, "--local-title", "Sealed",
+                               "--public-target", "Public synthetic check", "--reviewer", "codex",
+                               "--runner", str(sealed), "--runner-sha256", hashlib.sha256(sealed.read_bytes()).hexdigest(),
+                               "--auditor", str(auditor), "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest())
+                    successful("tick")
+                    self.assertEqual(status(), {"status": "target_achieved", "limit": 2, "audited_trials": 2})
+                    return
                 if decision == "stop":
                     successful("campaign-stop", "--id", "demo")
                     successful("tick")
