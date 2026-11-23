@@ -57,6 +57,8 @@ results.
   were created.
 - [ ] Finish native visual, security, and performance release checks on the
   final build before publishing.
+- [x] Build an optimized app-only QA bundle and verify the campaign controls
+  in a fresh macOS profile, without installing or publishing it.
 - [x] Complete one isolated live adaptive catalog pilot with Codex and
   Antigravity: first candidate rejected, second selected with agreed bounded
   settings, development audit passed, and separate sealed confirmation passed.
