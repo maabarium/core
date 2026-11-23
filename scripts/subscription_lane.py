@@ -712,6 +712,7 @@ def main():
     parser.add_argument("--campaign")
     parser.add_argument("--trial-limit", type=int, default=200)
     parser.add_argument("--contract-sha256")
+    parser.add_argument("--proposal-round", help="Completed campaign proposal round used to design this trusted trial")
     parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
     parser.add_argument("--runner", type=Path)
     parser.add_argument("--runner-sha256")
@@ -889,6 +890,8 @@ def main():
                         spec = dict(runner=runner, runner_sha256=args.runner_sha256,
                                     auditor=auditor, auditor_sha256=args.auditor_sha256,
                                     reviewer=args.reviewer, public_brief=public, timeout=args.benchmark_timeout)
+                        if args.proposal_round and not args.campaign:
+                            parser.error("proposal rounds must belong to a campaign")
                         if args.campaign:
                             if (args.adaptive_branches or not re.fullmatch(r"[0-9a-f]{64}", args.contract_sha256 or "")
                                     or args.reviewer not in ("codex", "antigravity")):
@@ -903,6 +906,26 @@ def main():
                                 WHERE m.campaign=? AND m.ordinal=1""", (args.campaign,)).fetchone()
                             if first and first[0] != args.contract_sha256:
                                 parser.error("campaign contract cannot change")
+                            if args.proposal_round:
+                                if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.proposal_round):
+                                    parser.error("invalid proposal round")
+                                if db.execute("""SELECT 1 FROM campaign_members m
+                                    JOIN local_benchmarks b ON b.loop_id=m.loop_id
+                                    WHERE m.campaign=? AND json_extract(b.spec,'$.proposal_round')=?""",
+                                    (args.campaign, args.proposal_round)).fetchone():
+                                    parser.error("proposal round already attached to a trial")
+                                hashes = {}
+                                for lane in ("codex", "antigravity"):
+                                    proposal_id = f"proposal:{args.campaign}:{args.proposal_round}:{lane}"
+                                    result = db.execute("""SELECT j.result FROM campaign_proposals p
+                                        JOIN jobs j ON j.id=p.job_id WHERE p.campaign=? AND j.id=?
+                                        AND j.lane=? AND j.state='done' AND j.detail IN
+                                        ('ChatGPT', 'Antigravity account; AI credits disabled for run')""",
+                                        (args.campaign, proposal_id, lane)).fetchone()
+                                    if not result or not result[0]:
+                                        parser.error("both subscription proposals must complete before attachment")
+                                    hashes[lane] = hashlib.sha256(result[0].encode()).hexdigest()
+                                spec.update(proposal_round=args.proposal_round, proposal_sha256=hashes)
                             if db.execute("""SELECT 1 FROM campaign_members m
                                 JOIN local_benchmarks b ON b.loop_id=m.loop_id WHERE m.campaign=?
                                 AND json_extract(b.spec,'$.runner_sha256')=?""",

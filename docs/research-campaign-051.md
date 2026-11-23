@@ -44,6 +44,10 @@ are not automatically executed. `campaign-propose --campaign <campaign> --id
 <round> --public-target <brief>` queues advisory jobs for Codex and Antigravity
 without consuming trial slots. Pending proposals and pending trials cannot
 overlap in a campaign, and stopping cancels pending proposals too.
+When enqueueing a vetted benchmark, `--proposal-round <round>` connects
+it to a completed pair of subscription results in the same campaign. The
+frozen trial spec records both result hashes; a round cannot be reused.
+This is provenance, not evidence or an authorization from the providers.
 The desktop can create campaigns and display counts; approving and attaching
 a frozen trial is still a CLI step. Automatic proposal-to-trial coordination
 and native release verification remain open.

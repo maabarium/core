@@ -54,6 +54,25 @@ else:
                              {("codex", "done", 1, "Codex proposal"),
                               ("antigravity", "done", 1, "Antigravity proposal")})
             self.assertEqual(json.loads(run("campaign-status", "--id", "demo"))["audited_trials"], 0)
+            runner = Path(tmp) / "runner"
+            auditor = Path(tmp) / "auditor"
+            for path in (runner, auditor):
+                path.write_text("#!/bin/sh\nexit 1\n# " + path.name)
+                path.chmod(0o700)
+            enqueue = ("local-benchmark-enqueue", "--campaign", "demo", "--id", "trial-1",
+                       "--local-title", "Local trial", "--public-target", "Public synthetic check",
+                       "--reviewer", "antigravity", "--contract-sha256", "a" * 64,
+                       "--runner", str(runner), "--runner-sha256", hashlib.sha256(runner.read_bytes()).hexdigest(),
+                       "--auditor", str(auditor), "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest())
+            with self.assertRaises(subprocess.CalledProcessError):
+                run(*enqueue, "--proposal-round", "missing")
+            run(*enqueue, "--proposal-round", "round-1")
+            with sqlite3.connect(Path(tmp) / "state" / "queue.db") as db:
+                raw, = db.execute("SELECT spec FROM local_benchmarks WHERE loop_id='trial-1'").fetchone()
+            self.assertEqual(json.loads(raw)["proposal_sha256"], {
+                "codex": hashlib.sha256(b"Codex proposal").hexdigest(),
+                "antigravity": hashlib.sha256(b"Antigravity proposal").hexdigest(),
+            })
 
     def test_campaign_proposals_are_separate_from_trials_and_stop_with_campaign(self):
         with tempfile.TemporaryDirectory() as tmp:
