@@ -18,6 +18,11 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_preapproved_confirmation_runs_after_restart(self):
+        self.managed_benchmark(campaign=True, decision="confirm-auto")
+
+    def test_preapproved_confirmation_rejects_changed_development_evidence(self):
+        self.managed_benchmark(campaign=True, decision="confirm-auto-tamper")
     def test_full_adaptive_catalog_with_subscriptions_and_confirmation(self):
         self.managed_benchmark(campaign=True, decision="catalog-flow")
     def test_catalog_trial_runs_after_agreement_in_restarted_worker(self):
@@ -277,13 +282,27 @@ else:
             adaptive_args = ()
             limit = 1 if decision == "limit" else 2
             if campaign:
-                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper", "catalog", "catalog-flow") else ()
+                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper", "confirm-auto", "confirm-auto-tamper", "catalog", "catalog-flow") else ()
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
                     adaptive_args += ("--stage",)
                 if decision in ("catalog", "catalog-flow"):
                     adaptive_args += ("--stage", "--select-by-proposal")
+                if decision.startswith("confirm-auto"):
+                    sealed = root / "sealed"
+                    sealed.write_text(fixture.read_text().replace("baseline=[", "sealed_fixture=True,\n    baseline=["))
+                    sealed_auditor = root / "sealed-auditor"
+                    sealed_auditor.write_text(auditor.read_text().replace("complete=True",
+                        "complete=True, panel_sha256='c'*64, development_evidence_sha256="
+                        "hashlib.sha256(open('development.json','rb').read()).hexdigest()"))
+                    for executable in (sealed, sealed_auditor):
+                        executable.chmod(0o700)
+                    plan = root / "sealed-plan.json"
+                    plan.write_text(json.dumps(dict(runner=str(sealed), auditor=str(sealed_auditor),
+                        runner_sha256=hashlib.sha256(sealed.read_bytes()).hexdigest(),
+                        auditor_sha256=hashlib.sha256(sealed_auditor.read_bytes()).hexdigest(), panel_sha256="c"*64)))
+                    adaptive_args += ("--confirmation-plan", str(plan))
             if adaptive:
                 branches = {}
                 for outcome in ("pass", "fail"):
@@ -367,6 +386,19 @@ else:
                                      {"status": "stopped", "limit": 2, "audited_trials": 0})
                     return
                 successful("tick")
+                if decision.startswith("confirm-auto"):
+                    status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
+                    self.assertEqual(status(), {"status": "confirming", "limit": 2, "audited_trials": 1})
+                    tampered = decision == "confirm-auto-tamper"
+                    if tampered:
+                        (state / "local-evidence" / "fresh-public-check" / "runner.json").write_text("{}")
+                    successful("tick")
+                    self.assertEqual(status(), {"status": "human_review" if tampered else "target_achieved",
+                                                "limit": 2, "audited_trials": 1})
+                    successful("tick")
+                    with sqlite3.connect(state / "queue.db") as db:
+                        self.assertEqual(db.execute("SELECT COUNT(*) FROM campaign_confirmations").fetchone()[0], 1)
+                    return
                 if decision in ("confirm", "confirm-tamper"):
                     status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
                     self.assertEqual(status()["status"], "confirmation_required")

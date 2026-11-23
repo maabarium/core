@@ -108,6 +108,44 @@ def adaptive_branches(manifest):
     return branches
 
 
+def confirmation_plan(path, runner_hash, auditor_hash):
+    with path.open("rb") as handle:
+        raw = handle.read(16385)
+    if len(raw) > 16384:
+        raise ValueError("confirmation plan is too large")
+    plan = json.loads(raw)
+    if not isinstance(plan, dict) or set(plan) != {
+            "runner", "runner_sha256", "auditor", "auditor_sha256", "panel_sha256"}:
+        raise ValueError("confirmation plan needs runner, auditor, and panel identities")
+    if not isinstance(plan["panel_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", plan["panel_sha256"]):
+        raise ValueError("invalid sealed panel identity")
+    for role in ("runner", "auditor"):
+        plan[role] = frozen_executable(Path(plan[role]), plan[role + "_sha256"])
+    if (len({runner_hash, auditor_hash, plan["runner_sha256"], plan["auditor_sha256"]}) != 4
+            or plan["runner"] == plan["auditor"]):
+        raise ValueError("confirmation requires separate pinned executables")
+    return plan
+
+
+def queue_preapproved_confirmation(db, campaign, loop_id, spec, evidence_digest):
+    plan = spec["confirmation_plan"]
+    successor = "sealed-" + hashlib.sha256(loop_id.encode()).hexdigest()[:40]
+    confirmation = dict(panel_sha256=plan["panel_sha256"],
+                        development_evidence_sha256=evidence_digest, development_loop_id=loop_id)
+    runner_spec = {key: plan[key] for key in ("runner", "auditor", "runner_sha256", "auditor_sha256")}
+    runner_spec.update(campaign=campaign, contract_sha256=spec["contract_sha256"], confirmation=confirmation,
+                       timeout=spec["timeout"], reviewer=None, public_brief="")
+    db.execute("INSERT INTO campaign_confirmations(campaign,loop_id) VALUES (?,?)", (campaign, successor))
+    db.execute("""INSERT INTO research_loops(id,target,plan,step,status,review_every)
+        VALUES (?,?,'["Local evidence"]',1,'active',1)""", (successor, "Pre-approved sealed confirmation"))
+    db.execute("INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)",
+               (successor, json.dumps(runner_spec)))
+    db.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,?,?)",
+               (f"loop:{successor}:1", LOCAL_LANE, "Waiting for sealed confirmation"))
+    db.execute("UPDATE campaigns SET status='confirming' WHERE id=? AND status='confirmation_required'",
+               (campaign,))
+
+
 def queue_campaign_proposals(db, campaign, round_id, public):
     choices = [row[0] for row in db.execute("""SELECT m.loop_id FROM campaign_members m
         JOIN research_loops l ON l.id=m.loop_id WHERE m.campaign=? AND l.status='catalog'
@@ -245,6 +283,18 @@ def process_local_benchmark(db, lock_fd, state):
                 raise ValueError
             copies[role] = copy
         (directory / "spec.json").write_text(raw_spec + "\n", encoding="utf-8")
+        confirmation = spec.get("confirmation") or {}
+        if development_id := confirmation.get("development_loop_id"):
+            stage = "sealed confirmation development binding"
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", development_id):
+                raise ValueError
+            source = state / "local-evidence" / development_id / "runner.json"
+            with source.open("rb") as handle:
+                development = handle.read(1048577)
+            if (len(development) > 1048576 or hashlib.sha256(development).hexdigest()
+                    != confirmation["development_evidence_sha256"]):
+                raise ValueError
+            (directory / "development.json").write_bytes(development)
 
         def execute(role, input_path=None):
             output = directory / (role + ".json")
@@ -295,7 +345,7 @@ def process_local_benchmark(db, lock_fd, state):
                 or len(report["report"].encode()) > 12000):
             raise ValueError
         manifest = {path.name: file_hash(path) for path in sorted(directory.iterdir())
-                    if path.name in {"runner.json", "runner.stderr", "runner.exit", "auditor.json", "auditor.stderr", "auditor.exit", "spec.json"}}
+                    if path.name in {"runner.json", "runner.stderr", "runner.exit", "auditor.json", "auditor.stderr", "auditor.exit", "spec.json", "development.json"}}
         (directory / "hashes.json").write_text(json.dumps(manifest, indent=2) + "\n")
         db.execute("BEGIN IMMEDIATE")
         if campaign and spec.get("confirmation"):
@@ -308,6 +358,8 @@ def process_local_benchmark(db, lock_fd, state):
         elif campaign:
             from research_campaign import record
             record(db, campaign, loop_id, report["outcome"], evidence_digest, in_transaction=True)
+            if spec.get("confirmation_plan") and report["outcome"] == "pass":
+                queue_preapproved_confirmation(db, campaign, loop_id, spec, evidence_digest)
         db.execute("UPDATE local_benchmarks SET outcome=? WHERE loop_id=?", (report["outcome"], loop_id))
         db.execute("UPDATE jobs SET state='done',finished_at=unixepoch(),detail=?,result=? WHERE id=?",
                    ("Local check complete; waiting for AI evaluation" if reviewer_lane
@@ -821,6 +873,7 @@ def main():
     parser.add_argument("--stage", action="store_true", help="Stage a pre-approved campaign trial for automatic dispatch")
     parser.add_argument("--select-by-proposal", action="store_true", help="Require agreeing provider IDs to dispatch a staged candidate")
     parser.add_argument("--confirm-panel-sha256", help="Approve a separate sealed confirmation panel")
+    parser.add_argument("--confirmation-plan", type=Path, help="Pre-approved confirmation executables and sealed panel")
     parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
     parser.add_argument("--runner", type=Path)
     parser.add_argument("--runner-sha256")
@@ -849,6 +902,9 @@ def main():
             or args.proposal_round or args.adaptive_branches
             or not re.fullmatch(r"[0-9a-f]{64}", args.confirm_panel_sha256)):
         parser.error("confirmation requires a campaign, a sealed panel hash, and no staged successor or proposal")
+    if args.confirmation_plan and (not args.campaign or args.action != "local-benchmark-enqueue"
+                                   or args.confirm_panel_sha256 or args.adaptive_branches):
+        parser.error("a confirmation plan belongs to a development trial in an adaptive campaign")
     CHILD_TIMEOUT = max(1, args.child_timeout)
     os.umask(0o077)
     state = args.state.expanduser().resolve()
@@ -1049,6 +1105,15 @@ def main():
                                                       (args.campaign,)).fetchone()
                             if not campaign_row or campaign_row[0] != "active":
                                 parser.error("campaign is not active")
+                            if args.confirmation_plan:
+                                if not db.execute("SELECT 1 FROM campaign_adaptive WHERE campaign=?",
+                                                  (args.campaign,)).fetchone():
+                                    parser.error("pre-approved confirmation requires an adaptive campaign")
+                                try:
+                                    spec["confirmation_plan"] = confirmation_plan(
+                                        args.confirmation_plan, args.runner_sha256, args.auditor_sha256)
+                                except (OSError, ValueError, TypeError) as error:
+                                    parser.error(str(error))
                             if args.select_by_proposal and not db.execute(
                                     "SELECT 1 FROM campaign_adaptive WHERE campaign=?", (args.campaign,)).fetchone():
                                 parser.error("catalog selection needs an adaptive public brief")

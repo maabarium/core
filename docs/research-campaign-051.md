@@ -82,6 +82,15 @@ must bind its result to the approved panel and the winning development
 evidence. Confirmation stays local and does not consume another development
 trial. The auditor is trusted to verify panel separation and candidate
 identity; different file hashes alone do not prove those properties.
+
+For unattended confirmation, approve a plan before executing the development
+trial by passing `--confirmation-plan <file>` with the deployment. The JSON
+accepts only `runner`, `runner_sha256`, `auditor`, `auditor_sha256`, and
+`panel_sha256`. On a development pass the worker reserves one confirmation
+atomically with the audited verdict. It rechecks both executable pins and
+copies the hash-verified winning evidence into the isolated confirmation
+directory as `development.json`, for the trusted auditor. Nothing from that
+directory is sent to providers. The confirmation plan is CLI-only.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
