@@ -18,7 +18,13 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
-    def managed_benchmark(self, live=False, damage=None, local_only=False, adaptive=None, decision="accept"):
+    def test_campaign_real_worker_and_restart(self):
+        self.managed_benchmark(campaign=True)
+
+    def test_campaign_bad_audit_is_not_counted(self):
+        self.managed_benchmark(campaign=True, damage="bad-audit")
+
+    def managed_benchmark(self, live=False, damage=None, local_only=False, adaptive=None, decision="accept", campaign=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = root / "runner"
@@ -46,6 +52,14 @@ print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
     outcome="pass", report="PRIVATE-LOCAL-REPORT. Six matches; 14 versus 39 work units.")))
 """)
             expected_gate = adaptive or "pass"
+            if campaign:
+                auditor.write_text(auditor.read_text().split("print(json.dumps")[0] + """
+print(json.dumps(dict(contract_sha256="a"*64,
+    evidence_sha256=hashlib.sha256(raw).hexdigest(), wrong_answers=0, lost_coverage=0,
+    candidate_coverage=6, baseline_coverage=6, teaching_sha256="b"*64,
+    baseline_teaching_sha256="b"*64, candidate_total_work=report["index_work"],
+    baseline_total_work=report["scan_work"], strongest_comparator=True, complete=True)))
+""")
             if expected_gate == "fail":
                 auditor.write_text(auditor.read_text().replace('outcome="pass"', 'outcome="fail"'))
             fake = root / "codex"
@@ -74,6 +88,9 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return result.stdout
             adaptive_args = ()
+            if campaign:
+                successful("campaign-create", "--id", "demo", "--trial-limit", "2")
+                adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
             if adaptive:
                 branches = {}
                 for outcome in ("pass", "fail"):
@@ -93,6 +110,14 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                        "--runner-sha256", hashlib.sha256(fixture.read_bytes()).hexdigest(),
                        "--auditor", str(auditor),
                        "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
+            if campaign:
+                successful("tick")
+                expected = {"status": "human_review" if damage else "target_achieved",
+                            "limit": 2, "audited_trials": 0 if damage else 1}
+                self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")), expected)
+                successful("tick")
+                self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")), expected)
+                return
             if adaptive:
                 successful("tick")
                 next_args = ("loop-status", "--id", "fresh-public-check-next")

@@ -121,11 +121,17 @@ def process_local_benchmark(db, lock_fd, state):
     loop_id, raw_spec, prior = row
     job = f"loop:{loop_id}:1"
     stage = "interrupted execution; no automatic rerun"
+    campaign = None
     try:
+        spec = json.loads(raw_spec)
+        campaign = spec.get("campaign")
         if prior == "running":
             raise ValueError
         stage = "executable identity check"
-        spec = json.loads(raw_spec)
+        if campaign:
+            status = db.execute("SELECT status FROM campaigns WHERE id=?", (campaign,)).fetchone()
+            if status != ("active",):
+                raise ValueError("campaign is not active")
         reviewer_lane = spec["reviewer"]
         if reviewer_lane is not None and reviewer_lane not in ("codex", "claude", "antigravity"):
             raise ValueError("unsupported benchmark evaluator")
@@ -179,6 +185,11 @@ def process_local_benchmark(db, lock_fd, state):
         if audit_file.stat().st_size > 16384:
             raise ValueError
         report = json.loads(audit_file.read_text(encoding="utf-8"))
+        if campaign:
+            from research_campaign import verified_verdict
+            outcome = verified_verdict(report, evidence.read_bytes(), spec["contract_sha256"])
+            report = {"evidence_sha256": evidence_digest, "outcome": outcome,
+                      "report": "Matched-learner audit: " + json.dumps(report, sort_keys=True)}
         if (not isinstance(report, dict) or set(report) != {"evidence_sha256", "outcome", "report"}
                 or report["evidence_sha256"] != evidence_digest or file_hash(evidence) != evidence_digest
                 or report["outcome"] not in ("pass", "fail")
@@ -189,6 +200,9 @@ def process_local_benchmark(db, lock_fd, state):
                     if path.name in {"runner.json", "runner.stderr", "runner.exit", "auditor.json", "auditor.stderr", "auditor.exit", "spec.json"}}
         (directory / "hashes.json").write_text(json.dumps(manifest, indent=2) + "\n")
         db.execute("BEGIN IMMEDIATE")
+        if campaign:
+            from research_campaign import record
+            record(db, campaign, loop_id, report["outcome"], evidence_digest, in_transaction=True)
         db.execute("UPDATE local_benchmarks SET outcome=? WHERE loop_id=?", (report["outcome"], loop_id))
         db.execute("UPDATE jobs SET state='done',finished_at=unixepoch(),detail=?,result=? WHERE id=?",
                    ("Local check complete; waiting for AI evaluation" if reviewer_lane
@@ -231,8 +245,12 @@ def process_local_benchmark(db, lock_fd, state):
     except (OSError, ValueError, KeyError, TypeError, sqlite3.IntegrityError):
         if db.in_transaction:
             db.rollback()
+        db.execute("BEGIN IMMEDIATE")
+        if campaign:
+            db.execute("UPDATE campaigns SET status='human_review' WHERE id=? AND status='active'", (campaign,))
         db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail=? WHERE id=?",
                    (f"Operational failure: {stage}. No automatic rerun.", job))
+        db.commit()
     return True
 
 
@@ -690,7 +708,10 @@ def main():
     parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
     parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
     parser.add_argument("--enable-deepseek", action="store_true", help="allow paid DeepSeek jobs using the macOS Keychain")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status"])
+    parser.add_argument("--campaign")
+    parser.add_argument("--trial-limit", type=int, default=200)
+    parser.add_argument("--contract-sha256")
     parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
     parser.add_argument("--runner", type=Path)
     parser.add_argument("--runner-sha256")
@@ -781,7 +802,24 @@ def main():
             db.execute("""CREATE TABLE IF NOT EXISTS local_benchmarks (
                 loop_id TEXT PRIMARY KEY, spec TEXT NOT NULL, outcome TEXT)""")
             db.commit()
-            if args.action == "enqueue":
+            if args.action in ("campaign-create", "campaign-status") or args.campaign:
+                from research_campaign import initialize
+                initialize(db)
+            if args.action == "campaign-create":
+                from research_campaign import create
+                try:
+                    create(db, args.id, args.trial_limit)
+                except (ValueError, sqlite3.IntegrityError) as error:
+                    parser.error(str(error))
+            elif args.action == "campaign-status":
+                row = db.execute("""SELECT c.status,c.trial_limit,COUNT(t.identity)
+                    FROM campaigns c LEFT JOIN campaign_trials t
+                    ON t.campaign=c.id AND t.outcome IN ('pass','fail')
+                    WHERE c.id=? GROUP BY c.id""", (args.id,)).fetchone()
+                if row is None:
+                    parser.error("campaign not found")
+                print(json.dumps(dict(zip(("status", "limit", "audited_trials"), row))))
+            elif args.action == "enqueue":
                 if args.id.startswith("loop:"):
                     parser.error("job IDs starting with loop: are reserved")
                 detail = None if args.lane == "codex" else "awaiting manual handoff"
@@ -815,6 +853,29 @@ def main():
                         spec = dict(runner=runner, runner_sha256=args.runner_sha256,
                                     auditor=auditor, auditor_sha256=args.auditor_sha256,
                                     reviewer=args.reviewer, public_brief=public, timeout=args.benchmark_timeout)
+                        if args.campaign:
+                            if (args.adaptive_branches or not re.fullmatch(r"[0-9a-f]{64}", args.contract_sha256 or "")
+                                    or args.reviewer not in ("codex", "antigravity")):
+                                parser.error("campaign trials require a pinned contract and Codex or Antigravity review")
+                            if db.execute("SELECT status FROM campaigns WHERE id=?", (args.campaign,)).fetchone() != ("active",):
+                                parser.error("campaign is not active")
+                            first = db.execute("""SELECT json_extract(b.spec,'$.contract_sha256')
+                                FROM campaign_members m JOIN local_benchmarks b ON b.loop_id=m.loop_id
+                                WHERE m.campaign=? AND m.ordinal=1""", (args.campaign,)).fetchone()
+                            if first and first[0] != args.contract_sha256:
+                                parser.error("campaign contract cannot change")
+                            if db.execute("""SELECT 1 FROM campaign_members m
+                                JOIN local_benchmarks b ON b.loop_id=m.loop_id WHERE m.campaign=?
+                                AND json_extract(b.spec,'$.runner_sha256')=?""",
+                                (args.campaign, args.runner_sha256)).fetchone():
+                                parser.error("campaign runner has already been submitted")
+                            if db.execute("""SELECT 1 FROM campaign_members m JOIN jobs j
+                                ON j.id='loop:' || m.loop_id || ':1' WHERE m.campaign=?
+                                AND j.state IN ('queued','running')""", (args.campaign,)).fetchone():
+                                parser.error("campaign already has a pending trial")
+                            db.execute("""INSERT INTO campaign_members SELECT ?,?,COUNT(*)+1
+                                FROM campaign_members WHERE campaign=?""", (args.id, args.campaign, args.campaign))
+                            spec.update(campaign=args.campaign, contract_sha256=args.contract_sha256)
                         if args.adaptive_branches:
                             if len(args.id) > 59:
                                 parser.error("adaptive experiment ID must leave room for -next")

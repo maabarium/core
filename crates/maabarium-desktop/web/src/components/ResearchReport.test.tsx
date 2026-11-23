@@ -5,6 +5,18 @@ import { ResearchReport } from "./ResearchReport";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+it("shows audited campaigns separately from provider jobs", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce({
+    experiments: 8,
+    lanes: [],
+    campaigns: [{ id: "coda-demo", status: "target_achieved", limit: 200, audited_trials: 3 }],
+  });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByRole("button", { name: "Load report" }));
+  expect(await screen.findByText("3 of 200 audited trials · Target achieved")).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Research campaigns" })).toBeTruthy();
+});
+
 it("shows terminal rates and reveals provider details only with the switch", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({
     experiments: 2,

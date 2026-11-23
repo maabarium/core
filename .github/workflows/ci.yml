@@ -28,6 +28,8 @@ jobs:
         run: cargo test --workspace --locked
       - name: Test subscription lane recovery
         run: python3 tests/subscription_lane_test.py
+      - name: Test audited research campaign
+        run: python3 -m unittest discover -s tests -p research_campaign_test.py
 
   cargo-deny:
     runs-on: ubuntu-latest

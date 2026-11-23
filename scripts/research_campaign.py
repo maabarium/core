@@ -20,14 +20,15 @@ def initialize(db):
     """)
 
 
-def record(db, campaign, identity, outcome, evidence_sha256):
-    """Called only after independent audit, in a separate connection/transaction."""
+def record(db, campaign, identity, outcome, evidence_sha256, *, in_transaction=False):
+    """Record an independent audit, optionally inside the worker's transaction."""
     if outcome not in ('pass', 'fail', 'operational_failure'):
         raise ValueError('not an audited outcome')
     if not identity or len(evidence_sha256) != 64 or any(
             c not in '0123456789abcdef' for c in evidence_sha256):
         raise ValueError('missing frozen identity or evidence digest')
-    db.execute('BEGIN IMMEDIATE')
+    if not in_transaction:
+        db.execute('BEGIN IMMEDIATE')
     try:
         previous = db.execute(
             'SELECT outcome,evidence_sha256 FROM campaign_trials WHERE campaign=? AND identity=?',
@@ -35,7 +36,8 @@ def record(db, campaign, identity, outcome, evidence_sha256):
         if previous:
             if previous != (outcome, evidence_sha256):
                 raise ValueError('conflicting replay')
-            db.commit()
+            if not in_transaction:
+                db.commit()
             return
         row = db.execute('SELECT trial_limit,status FROM campaigns WHERE id=?', (campaign,)).fetchone()
         if row is None or row[1] != 'active':
@@ -46,9 +48,11 @@ def record(db, campaign, identity, outcome, evidence_sha256):
         status = ('target_achieved' if outcome == 'pass' else
                   'human_review' if count >= row[0] or outcome == 'operational_failure' else 'active')
         db.execute('UPDATE campaigns SET status=? WHERE id=?', (status, campaign))
-        db.commit()
+        if not in_transaction:
+            db.commit()
     except Exception:
-        db.rollback()
+        if not in_transaction:
+            db.rollback()
         raise
 
 
@@ -70,7 +74,10 @@ def verified_verdict(report, evidence, contract):
     if not isinstance(report, dict) or set(report) != required:
         raise ValueError('incomplete scientific audit')
     digest = hashlib.sha256(evidence).hexdigest()
-    if (report['evidence_sha256'] != digest or report['contract_sha256'] != contract
+    teaching = report['teaching_sha256']
+    if (not isinstance(teaching, str) or len(teaching) != 64
+            or any(c not in '0123456789abcdef' for c in teaching)
+            or report['evidence_sha256'] != digest or report['contract_sha256'] != contract
             or report['complete'] is not True or report['strongest_comparator'] is not True
             or report['teaching_sha256'] != report['baseline_teaching_sha256']):
         raise ValueError('audit identity or comparison mismatch')

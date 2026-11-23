@@ -29,12 +29,17 @@ Status: incomplete development, not a released capability.
 
 ## Current implementation
 
-The standalone transactional ledger has focused tests for success, trial bound,
-idempotency, conflicting replay, restart, and operational-failure review. It is
-not yet connected to the trusted benchmark auditor, provider loop, or desktop UI.
-Its `record` function is an internal boundary, not an authenticated audit API.
-The existing subscription worker tests are a separate regression suite, not
-evidence that the campaign lifecycle above works.
+The worker supports `campaign-create` and `campaign-status` with an experiment
+ID. Submit a frozen trial through `local-benchmark-enqueue` with `--campaign`
+and `--contract-sha256`; the first trial binds the contract for that campaign.
+Only one trial can be pending, and duplicate runner hashes are rejected.
+Trial outcomes and job completion are committed together after the independent
+audit. Operational failures require review rather than counting as scientific
+verdicts. The desktop Research activity report shows campaign progress.
+
+The benchmark and auditor must be trusted local executables. Code suggestions
+are not automatically executed. Automated proposal-to-trial coordination,
+desktop campaign configuration, and native release verification remain open.
 
 Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
 acceptance requirements are implemented and verified.

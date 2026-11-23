@@ -8,7 +8,8 @@ type Lane = TokenUsage & {
   lane: string; jobs: number; completed: number; failed: number; stopped: number;
   pending: number; attempts: number; observed_jobs: number;
 };
-type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[] };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number };
+type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
 
@@ -60,6 +61,18 @@ export function ResearchReport() {
       </div>
       {error && <p role="status" className="mt-2 text-sm">{error}</p>}
       {report && <>
+        {!!report.campaigns?.length && <section className="mt-3" aria-label="Research campaigns">
+          <h4 className="font-semibold">Research campaigns</h4>
+          <ul className="mt-2 space-y-2">
+            {report.campaigns.map((campaign) => <li key={campaign.id} className="rounded border p-3 text-sm">
+              <p className="break-all font-semibold">{campaign.id}</p>
+              <p>{campaign.audited_trials} of {campaign.limit} audited trials · {
+                campaign.status === "target_achieved" ? "Target achieved" :
+                campaign.status === "human_review" ? "Needs review" : "Active"
+              }</p>
+            </li>)}
+          </ul>
+        </section>}
         <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div><dt>Experiments</dt><dd className="text-lg font-semibold">{report.experiments}</dd></div>
           <div><dt>Jobs</dt><dd className="text-lg font-semibold">{sum("jobs")}</dd></div>

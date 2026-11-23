@@ -221,8 +221,43 @@ impl ResearchStep {
 #[derive(Serialize)]
 pub(crate) struct QueueReport {
     experiments: i64,
+    campaigns: Vec<CampaignReport>,
     lanes: Vec<LaneReport>,
     trend: Vec<TrendDay>,
+}
+
+#[derive(Serialize)]
+struct CampaignReport {
+    id: String,
+    status: String,
+    limit: i64,
+    audited_trials: i64,
+}
+
+fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
+    let available = db.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE type='table'
+           AND name IN ('campaigns','campaign_trials')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? == 2;
+    if !available {
+        return Ok(Vec::new());
+    }
+    let mut statement = db.prepare(
+        "SELECT id,status,trial_limit,(SELECT COUNT(*) FROM campaign_trials
+         WHERE campaign=campaigns.id AND outcome IN ('pass','fail'))
+         FROM campaigns ORDER BY rowid DESC LIMIT 50",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(CampaignReport {
+            id: row.get(0)?,
+            status: row.get(1)?,
+            limit: row.get(2)?,
+            audited_trials: row.get(3)?,
+        })
+    })?;
+    rows.collect()
 }
 
 #[derive(Serialize)]
@@ -311,6 +346,7 @@ fn report(db: &Connection) -> rusqlite::Result<QueueReport> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(QueueReport {
         experiments,
+        campaigns: campaign_report(db)?,
         lanes,
         trend,
     })
