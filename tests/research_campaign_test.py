@@ -11,6 +11,20 @@ spec.loader.exec_module(campaign)
 
 
 class CampaignTest(unittest.TestCase):
+    def test_checkpoint_blocks_new_verdicts_without_overriding_terminal_review(self):
+        db = sqlite3.connect(':memory:')
+        campaign.initialize(db)
+        campaign.create(db, 'bounded', 2)
+        db.execute("INSERT INTO campaign_review_policy VALUES ('bounded',1)")
+        db.commit()
+        campaign.record(db, 'bounded', 'one', 'fail', 'a' * 64)
+        self.assertEqual(db.execute('SELECT status FROM campaigns').fetchone()[0], 'checkpoint')
+        with self.assertRaisesRegex(ValueError, 'not active'):
+            campaign.record(db, 'bounded', 'two', 'fail', 'b' * 64)
+        db.execute("UPDATE campaigns SET status='active'")
+        db.commit()
+        campaign.record(db, 'bounded', 'two', 'fail', 'b' * 64)
+        self.assertEqual(db.execute('SELECT status FROM campaigns').fetchone()[0], 'human_review')
     def test_adaptive_development_pass_cannot_claim_the_target(self):
         db = sqlite3.connect(':memory:')
         campaign.initialize(db)

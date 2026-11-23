@@ -30,7 +30,7 @@ class SubscriptionLaneTest(unittest.TestCase):
                 CREATE TABLE campaign_proposals(job_id PRIMARY KEY,campaign);
                 CREATE TABLE campaign_provider_options(campaign,lane,model,effort);
                 CREATE TABLE jobs(id PRIMARY KEY,lane,detail,prompt,model,effort,state DEFAULT 'queued',finished_at);
-                INSERT INTO campaigns VALUES ('demo','active');
+                INSERT INTO campaigns VALUES ('demo','checkpoint');
                 INSERT INTO campaign_adaptive VALUES ('demo','Synthetic brief');
                 INSERT INTO campaign_members VALUES ('first','demo',1);
                 INSERT INTO research_loops VALUES ('first','done');
@@ -38,6 +38,9 @@ class SubscriptionLaneTest(unittest.TestCase):
                 INSERT INTO local_benchmarks VALUES ('first','{}');
                 INSERT INTO campaign_provider_options VALUES
                     ('demo','claude',NULL,NULL),('demo','deepseek',NULL,NULL);""")
+            advance(db)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 0)
+            db.execute("UPDATE campaigns SET status='active'")
             advance(db)
             db.execute("UPDATE jobs SET state='done'")
             advance(db)

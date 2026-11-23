@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Pause campaigns after a configurable number of audited trials and approve or stop from Research activity.
+
 - Choose two independent adaptive campaign providers from Codex, Claude, Antigravity, Muse, and DeepSeek, with provider-specific model and effort settings and explicit consent for paid requests.
 
 - Save optional subscription model settings for all suggestion rounds in a research campaign.

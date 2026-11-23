@@ -24,6 +24,9 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_provider_options (
             campaign TEXT NOT NULL REFERENCES campaigns(id), lane TEXT NOT NULL,
             model TEXT, effort TEXT, PRIMARY KEY(campaign,lane));
+        CREATE TABLE IF NOT EXISTS campaign_review_policy (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id),
+            interval INTEGER NOT NULL CHECK(interval BETWEEN 1 AND 200));
         CREATE TABLE IF NOT EXISTS campaign_adaptive (
             campaign TEXT PRIMARY KEY REFERENCES campaigns(id), public_brief TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS campaign_confirmations (
@@ -60,6 +63,10 @@ def record(db, campaign, identity, outcome, evidence_sha256, *, in_transaction=F
         adaptive = db.execute('SELECT 1 FROM campaign_adaptive WHERE campaign=?', (campaign,)).fetchone()
         status = (('confirmation_required' if adaptive else 'target_achieved') if outcome == 'pass' else
                   'human_review' if count >= row[0] or outcome == 'operational_failure' else 'active')
+        if status == 'active':
+            policy = db.execute("SELECT interval FROM campaign_review_policy WHERE campaign=?", (campaign,)).fetchone()
+            if policy and count % policy[0] == 0:
+                status = 'checkpoint'
         db.execute('UPDATE campaigns SET status=? WHERE id=?', (status, campaign))
         if not in_transaction:
             db.commit()

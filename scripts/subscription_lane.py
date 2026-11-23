@@ -287,9 +287,9 @@ def advance_campaigns(db):
         db.execute("""UPDATE jobs SET state='failed',detail='loop stopped',finished_at=unixepoch()
             WHERE state='queued' AND id IN (
                 SELECT 'loop:' || l.id || ':1' FROM research_loops l JOIN campaign_members m ON m.loop_id=l.id
-                JOIN campaigns c ON c.id=m.campaign WHERE l.status IN ('staged','catalog') AND c.status!='active')""")
+                JOIN campaigns c ON c.id=m.campaign WHERE l.status IN ('staged','catalog') AND c.status NOT IN ('active','checkpoint'))""")
         db.execute("""UPDATE research_loops SET status='stopped' WHERE status IN ('staged','catalog') AND id IN (
-            SELECT m.loop_id FROM campaign_members m JOIN campaigns c ON c.id=m.campaign WHERE c.status!='active')""")
+            SELECT m.loop_id FROM campaign_members m JOIN campaigns c ON c.id=m.campaign WHERE c.status NOT IN ('active','checkpoint'))""")
         if db.execute("SELECT 1 FROM sqlite_schema WHERE name='campaign_adaptive' AND type='table'").fetchone():
             rows = db.execute("""SELECT c.id,a.public_brief,MAX(m.ordinal)
                 FROM campaigns c JOIN campaign_adaptive a ON a.campaign=c.id
@@ -1123,7 +1123,7 @@ def main():
                 db.commit()
             elif args.action == "campaign-stop":
                 db.execute("BEGIN IMMEDIATE")
-                if db.execute("UPDATE campaigns SET status='stopped' WHERE id=? AND status IN ('active','confirmation_required','confirming')",
+                if db.execute("UPDATE campaigns SET status='stopped' WHERE id=? AND status IN ('active','checkpoint','confirmation_required','confirming')",
                               (args.id,)).rowcount != 1:
                     parser.error("campaign is not active")
                 db.execute("""UPDATE jobs SET state='failed', detail='loop stopped',finished_at=unixepoch()

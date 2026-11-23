@@ -649,7 +649,7 @@ fn create_campaign(
     limit: u16,
     public_brief: Option<&str>,
 ) -> Result<(), String> {
-    create_configured_campaign(db, id, limit, public_brief, &[])
+    create_configured_campaign(db, id, limit, public_brief, &[], None)
 }
 
 fn create_configured_campaign(
@@ -658,6 +658,7 @@ fn create_configured_campaign(
     limit: u16,
     public_brief: Option<&str>,
     providers: &[ResearchStep],
+    review_every: Option<u16>,
 ) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 64
@@ -667,6 +668,9 @@ fn create_configured_campaign(
         || !(1..=200).contains(&limit)
     {
         return Err("Use a campaign ID of 1–64 letters, digits, hyphens or underscores and a limit of 1–200.".into());
+    }
+    if review_every.is_some_and(|interval| interval == 0 || interval > limit) {
+        return Err("Set the review interval between 1 and the trial limit.".into());
     }
     let public_brief = public_brief.map(str::trim);
     if public_brief.is_some_and(|brief| brief.is_empty() || brief.len() > 4096) {
@@ -712,6 +716,19 @@ fn create_configured_campaign(
     if inserted == 0 {
         return Err("A campaign with that ID already exists.".into());
     }
+    if let Some(interval) = review_every {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS campaign_review_policy (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id),
+            interval INTEGER NOT NULL CHECK(interval BETWEEN 1 AND 200));",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO campaign_review_policy VALUES (?,?)",
+            rusqlite::params![id, interval],
+        )
+        .map_err(|error| error.to_string())?;
+    }
     if let Some(brief) = public_brief {
         tx.execute(
             "INSERT INTO campaign_adaptive VALUES (?,?)",
@@ -737,6 +754,7 @@ pub(crate) async fn research_campaign_create(
     public_brief: Option<String>,
     providers: Option<Vec<ResearchStep>>,
     allow_paid: Option<bool>,
+    review_every: Option<u16>,
 ) -> Result<(), String> {
     if providers
         .as_ref()
@@ -747,25 +765,46 @@ pub(crate) async fn research_campaign_create(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut db = connect()?;
-        match providers {
-            Some(providers) => {
-                create_configured_campaign(&mut db, &id, limit, public_brief.as_deref(), &providers)
-            }
-            None => create_campaign(&mut db, &id, limit, public_brief.as_deref()),
+        if providers.is_none() && review_every.is_none() {
+            return create_campaign(&mut db, &id, limit, public_brief.as_deref());
         }
+        create_configured_campaign(
+            &mut db,
+            &id,
+            limit,
+            public_brief.as_deref(),
+            providers.as_deref().unwrap_or_default(),
+            review_every,
+        )
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub(crate) async fn research_campaign_start(id: String) -> Result<(), String> {
+pub(crate) async fn research_campaign_start(
+    id: String,
+    reviewed_trials: Option<u16>,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut db = connect()?;
-        start_campaign(&mut db, &id)
+        match reviewed_trials {
+            Some(count) => resume_campaign(&db, &id, count),
+            None => start_campaign(&mut db, &id),
+        }
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+fn resume_campaign(db: &Connection, id: &str, count: u16) -> Result<(), String> {
+    let changed = db.execute("UPDATE campaigns SET status='active' WHERE id=?1 AND status='checkpoint'
+        AND ?2=(SELECT COUNT(*) FROM campaign_trials WHERE campaign=?1 AND outcome IN ('pass','fail'))",
+        rusqlite::params![id, count]).map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err("This review has changed. Refresh before continuing.".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -805,7 +844,7 @@ fn stop_campaign(db: &mut Connection, id: &str) -> Result<(), String> {
     if tx
         .execute(
             "UPDATE campaigns SET status='stopped' WHERE id=?
-        AND status IN ('active','confirmation_required','confirming')",
+        AND status IN ('active','checkpoint','confirmation_required','confirming')",
             [id],
         )
         .map_err(err)?
@@ -2138,9 +2177,18 @@ mod tests {
             },
             super::ResearchStep::Lane("muse".into()),
         ];
-        assert!(super::create_configured_campaign(&mut db, "demo", 2, None, &providers).is_err());
-        super::create_configured_campaign(&mut db, "demo", 2, Some("Public brief"), &providers)
-            .unwrap();
+        assert!(
+            super::create_configured_campaign(&mut db, "demo", 2, None, &providers, None).is_err()
+        );
+        super::create_configured_campaign(
+            &mut db,
+            "demo",
+            2,
+            Some("Public brief"),
+            &providers,
+            Some(1),
+        )
+        .unwrap();
         super::start_campaign(&mut db, "demo").unwrap();
         let selection: (String, String) = db
             .query_row(
@@ -2163,9 +2211,24 @@ mod tests {
             "duplicate",
             2,
             Some("Public brief"),
-            &duplicate
+            &duplicate,
+            None
         )
         .is_err());
+    }
+
+    #[test]
+    fn checkpoint_approval_requires_current_trial_count() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::create_configured_campaign(&mut db, "demo", 3, None, &[], Some(1)).unwrap();
+        db.execute_batch(
+            "INSERT INTO campaign_trials VALUES ('demo','one','fail','a');
+            UPDATE campaigns SET status='checkpoint' WHERE id='demo';",
+        )
+        .unwrap();
+        assert!(super::resume_campaign(&db, "demo", 0).is_err());
+        super::resume_campaign(&db, "demo", 1).unwrap();
+        assert!(super::resume_campaign(&db, "demo", 1).is_err());
     }
 
     #[test]

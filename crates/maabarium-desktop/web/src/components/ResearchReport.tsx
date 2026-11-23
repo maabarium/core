@@ -51,6 +51,7 @@ export function ResearchReport() {
   const [quotaError, setQuotaError] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [campaignLimit, setCampaignLimit] = useState(200);
+  const [reviewEvery, setReviewEvery] = useState("");
   const [choices, setChoices] = useState(defaultChoices);
   const [allowPaid, setAllowPaid] = useState(false);
   const [publicBrief, setPublicBrief] = useState("");
@@ -91,11 +92,11 @@ export function ResearchReport() {
     } catch (failure) { setError(String(failure)); }
     finally { setStopping(false); }
   }
-  async function startCampaign(id: string) {
+  async function startCampaign(id: string, reviewedTrials?: number) {
     setStarting(true);
     setError("");
     try {
-      await invoke("research_campaign_start", { id });
+      await invoke("research_campaign_start", { id, reviewedTrials });
       await refresh();
     } catch (failure) { setError(String(failure)); }
     finally { setStarting(false); }
@@ -106,12 +107,14 @@ export function ResearchReport() {
     try {
       await invoke("research_campaign_create", {
         id: campaignId.trim(), limit: campaignLimit, publicBrief: publicBrief.trim() || null,
+        ...(reviewEvery ? { reviewEvery: Number(reviewEvery) } : {}),
         ...(publicBrief.trim() ? {
           providers: choices.map(choice => ({ lane: choice.lane, model: choice.model.trim() || null, effort: choice.effort || null })),
           ...(usesPaid ? { allowPaid } : {}),
         } : {}),
       });
       setCampaignId("");
+      setReviewEvery("");
       setPublicBrief("");
       setChoices(defaultChoices());
       setAllowPaid(false);
@@ -211,6 +214,12 @@ export function ResearchReport() {
               <input className="w-24 rounded border px-2 py-1" required type="number" min={1} max={200}
                 value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
             </label>
+            <label className="grid gap-1 text-sm">Pause for review every
+              <input className="h-10 w-36 rounded border px-2" type="number" min={1} max={campaignLimit}
+                placeholder="Final review only" value={reviewEvery}
+                onChange={event => setReviewEvery(event.target.value)} />
+              <span>Audited trials · optional</span>
+            </label>
             <label className="grid w-full gap-1 text-sm">Public brief for adaptive proposals (optional)
               <textarea className="rounded border px-2 py-1" rows={3} maxLength={4096}
                 value={publicBrief} onChange={(event) => setPublicBrief(event.target.value)}
@@ -278,6 +287,7 @@ export function ResearchReport() {
                 campaign.status === "confirmation_required" ? "Development pass; sealed confirmation required" :
                 campaign.status === "confirming" ? "Sealed confirmation pending" :
                 campaign.status === "human_review" ? "Needs review" :
+                campaign.status === "checkpoint" ? "Paused for your review" :
                 campaign.status === "stopped" ? "Stopped" : "Active"
               }</p>
               <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
@@ -317,7 +327,12 @@ export function ResearchReport() {
                 disabled={starting || busy} onClick={() => void startCampaign(campaign.id)}>
                 Send public brief to selected providers
               </button>}
-              {["active", "confirmation_required", "confirming"].includes(campaign.status) &&
+              {campaign.status === "checkpoint" && <button type="button" className="mt-2 rounded border px-3 py-1"
+                disabled={starting || busy || stopping || !!stopRequested}
+                onClick={() => void startCampaign(campaign.id, campaign.audited_trials)}>
+                Approve and resume campaign
+              </button>}
+              {["active", "checkpoint", "confirmation_required", "confirming"].includes(campaign.status) &&
                 (stopRequested === campaign.id ? <div className="mt-2 flex flex-wrap items-center gap-2">
                   <p className="w-full">Cancel queued work and close this campaign? Completed evidence will be kept.</p>
                   <button type="button" className="rounded border px-3 py-1" disabled={stopping}

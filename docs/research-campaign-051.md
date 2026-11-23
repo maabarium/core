@@ -10,7 +10,9 @@ results.
 
 - [x] Configure a target, trial limit up to 200, and distinct provider roles
   with provider-specific model and effort settings through the desktop app.
-- [ ] Complete campaign-wide resource limits and configurable human review policy.
+- [x] Configure a recurring human checkpoint in the desktop app. Approval
+  resumes the current campaign; stopping preserves completed evidence.
+- [ ] Complete campaign-wide resource limits beyond the trial limit.
 - [x] Preserve proposals, executable candidates, operational failures, and audited
   scientific trials as distinct records. Provider messages cannot declare success.
 - [x] Carry prior failure and bounded rejected public catalog IDs into the next
@@ -60,6 +62,11 @@ skipped one live-provider test. The production frontend build and Rust
 advisory check passed. These are development checks, not release sign-off.
 
 ## Current implementation
+
+Set **Pause for review every** when creating a campaign to hold after that
+many audited trials. **Approve and resume campaign** releases the hold;
+**Stop campaign** cancels queued work. A hold does not override a terminal
+review, scientific success, or separate confirmation requirements.
 
 **Try a practice experiment** in Research activity runs a small built-in
 comparison locally, without files, an account, or any campaign jobs. It guides
