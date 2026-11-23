@@ -662,6 +662,7 @@ pub(crate) async fn research_enqueue_benchmark(
     runner: BenchmarkExecutable,
     auditor: BenchmarkExecutable,
     confirmed: bool,
+    campaign: Option<CampaignTrial>,
 ) -> Result<String, String> {
     if !confirmed
         || title.trim().is_empty()
@@ -694,22 +695,149 @@ pub(crate) async fn research_enqueue_benchmark(
         }
         let mut db = connect()?;
         let id = uuid::Uuid::new_v4().to_string();
-        insert_local_benchmark(
-            &mut db,
-            &id,
-            title.trim(),
-            serde_json::json!({
-                "runner": checked_runner.path, "runner_sha256": checked_runner.sha256,
-                "auditor": checked_auditor.path, "auditor_sha256": checked_auditor.sha256,
-                "reviewer": reviewer, "public_brief": public_brief, "timeout": timeout,
-            })
-            .to_string(),
-        )
-        .map_err(|e| e.to_string())?;
+        let spec = serde_json::json!({
+            "runner": checked_runner.path, "runner_sha256": checked_runner.sha256,
+            "auditor": checked_auditor.path, "auditor_sha256": checked_auditor.sha256,
+            "reviewer": reviewer, "public_brief": public_brief, "timeout": timeout,
+        });
+        if let Some(campaign) = campaign {
+            stage_campaign_trial(&mut db, &id, title.trim(), spec, campaign)?;
+        } else {
+            insert_local_benchmark(&mut db, &id, title.trim(), spec.to_string())
+                .map_err(|e| e.to_string())?;
+        }
         Ok(id)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CampaignTrial {
+    id: String,
+    contract_sha256: String,
+    proposal_round: Option<String>,
+}
+
+fn stage_campaign_trial(
+    db: &mut Connection,
+    id: &str,
+    title: &str,
+    mut spec: serde_json::Value,
+    campaign: CampaignTrial,
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let CampaignTrial {
+        id: campaign,
+        contract_sha256,
+        proposal_round,
+    } = campaign;
+    let valid_id = |id: &str| {
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    };
+    if !valid_id(&campaign)
+        || contract_sha256.len() != 64
+        || !contract_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        || proposal_round
+            .as_deref()
+            .is_some_and(|round| !valid_id(round))
+        || spec["reviewer"]
+            .as_str()
+            .is_some_and(|lane| !matches!(lane, "codex" | "antigravity"))
+    {
+        return Err("Enter a valid campaign, frozen contract hash, and optional proposal round. Campaign reviews use Codex or Antigravity.".into());
+    }
+    let err = |error: rusqlite::Error| error.to_string();
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(err)?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS campaign_members (
+        loop_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id),
+        ordinal INTEGER NOT NULL, UNIQUE(campaign,ordinal));
+        CREATE TABLE IF NOT EXISTS campaign_proposals (
+        job_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id));",
+    )
+    .map_err(err)?;
+    let limit: i64 = tx
+        .query_row(
+            "SELECT trial_limit FROM campaigns WHERE id=? AND status='active'",
+            [&campaign],
+            |row| row.get(0),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => "No active campaign with that ID.".into(),
+            _ => err(error),
+        })?;
+    let (count, conflicts): (i64, i64) = tx.query_row("SELECT COUNT(*),COUNT(*) FILTER (WHERE
+        json_extract(b.spec,'$.contract_sha256') != ?2 OR json_extract(b.spec,'$.runner_sha256') = ?3
+        OR json_extract(b.spec,'$.proposal_round') = ?4)
+        FROM campaign_members m JOIN local_benchmarks b ON b.loop_id=m.loop_id WHERE m.campaign=?1",
+        rusqlite::params![campaign, contract_sha256, spec["runner_sha256"].as_str(), proposal_round],
+        |row| Ok((row.get(0)?, row.get(1)?))).map_err(err)?;
+    let pending: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM campaign_proposals p
+        JOIN jobs j ON j.id=p.job_id WHERE p.campaign=? AND j.state IN ('queued','running'))",
+            [&campaign],
+            |row| row.get(0),
+        )
+        .map_err(err)?;
+    if count >= limit || conflicts != 0 || pending {
+        return Err("Trial slots are full, the contract or identities conflict, or proposals are still pending.".into());
+    }
+    if let Some(round) = proposal_round {
+        let mut hashes = serde_json::Map::new();
+        for (lane, detail) in [
+            ("codex", "ChatGPT"),
+            (
+                "antigravity",
+                "Antigravity account; AI credits disabled for run",
+            ),
+        ] {
+            let result: String = tx.query_row("SELECT j.result FROM campaign_proposals p JOIN jobs j ON j.id=p.job_id
+                WHERE p.campaign=? AND j.id=? AND j.lane=? AND j.state='done' AND j.detail=? AND length(j.result)>0",
+                rusqlite::params![campaign, format!("proposal:{campaign}:{round}:{lane}"), lane, detail],
+                |row| row.get(0)).map_err(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => "Both subscription proposals must complete first.".into(),
+                    _ => err(error),
+                })?;
+            hashes.insert(
+                lane.into(),
+                format!("{:x}", Sha256::digest(result.as_bytes())).into(),
+            );
+        }
+        spec["proposal_round"] = round.into();
+        spec["proposal_sha256"] = hashes.into();
+    }
+    spec["campaign"] = campaign.clone().into();
+    spec["contract_sha256"] = contract_sha256.into();
+    tx.execute(
+        "INSERT INTO campaign_members VALUES (?,?,?)",
+        rusqlite::params![id, campaign, count + 1],
+    )
+    .map_err(err)?;
+    tx.execute(
+        "INSERT INTO research_loops(id,target,plan,step,status,review_every)
+        VALUES (?,?,'[\"Local evidence\"]',1,'staged',1)",
+        rusqlite::params![id, title],
+    )
+    .map_err(err)?;
+    tx.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,'Local evidence','Approved; waiting for campaign dispatch')",
+        [format!("loop:{id}:1")]).map_err(err)?;
+    tx.execute(
+        "INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)",
+        rusqlite::params![id, spec.to_string()],
+    )
+    .map_err(err)?;
+    tx.commit().map_err(err)
 }
 
 fn insert_local_benchmark(
@@ -1095,6 +1223,30 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn desktop_staging_reserves_a_slot_without_activating_the_trial() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::initialise(&mut db).unwrap();
+        super::create_campaign(&mut db, "demo", 1, None).unwrap();
+        let campaign = || super::CampaignTrial {
+            id: "demo".into(),
+            contract_sha256: "a".repeat(64),
+            proposal_round: None,
+        };
+        let spec = serde_json::json!({"runner_sha256": "b".repeat(64), "reviewer": null});
+        super::stage_campaign_trial(&mut db, "trial-1", "One", spec.clone(), campaign()).unwrap();
+        assert!(super::stage_campaign_trial(&mut db, "trial-2", "Two", spec, campaign()).is_err());
+        let status: String = db
+            .query_row(
+                "SELECT status FROM research_loops WHERE id='trial-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "staged");
+        assert_eq!(super::campaign_report(&db).unwrap()[0].audited_trials, 0);
+    }
+
     #[test]
     fn campaign_creation_is_bounded_and_does_not_replace_existing_campaign() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();

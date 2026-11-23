@@ -56,9 +56,11 @@ For adaptive discovery, include an approved public brief via `--public-target`
 when creating the campaign from the CLI. An audited failure with no staged
 trial queues one deterministic Codex/Antigravity proposal pair. Only the
 failure bit and the approved brief go to providers; local evidence stays local.
-The desktop can create campaigns and display counts; approving and attaching
-a frozen trial is still a CLI step. Automatic proposal-to-trial coordination
-and native release verification remain open.
+The desktop can create campaigns, display counts, and approve a frozen trial
+through **Set up a local benchmark → Attach to a research campaign**. The
+optional completed-round ID pins the two proposal results to that trial.
+Automatically preparing a benchmark from a proposal and native release
+verification remain open.
 
 Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
 acceptance requirements are implemented and verified.

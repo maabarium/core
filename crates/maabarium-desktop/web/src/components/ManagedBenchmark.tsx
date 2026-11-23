@@ -18,6 +18,9 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState("");
   const [queued, setQueued] = useState("");
+  const [campaignId, setCampaignId] = useState("");
+  const [contractHash, setContractHash] = useState("");
+  const [proposalRound, setProposalRound] = useState("");
 
   async function choose(set: (file?: Executable) => void) {
     setBusy(true);
@@ -42,6 +45,10 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
       const id = await invoke<string>("research_enqueue_benchmark", {
         title, publicBrief: shareAutomatically ? brief : "",
         reviewer: shareAutomatically ? reviewer : null, timeout, runner, auditor, confirmed,
+        campaign: campaignId.trim() ? {
+          id: campaignId.trim(), contractSha256: contractHash.trim(),
+          proposalRound: proposalRound.trim() || null,
+        } : null,
       });
       setQueued(id);
       setConfirmed(false);
@@ -57,6 +64,25 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         <input className="mt-1 block h-10 w-full rounded-md border bg-transparent px-3" required maxLength={256}
           value={title} onChange={event => { setTitle(event.target.value); setConfirmed(false); }} />
       </label>
+      <Disclosure title="Attach to a research campaign (optional)">
+        <p className="mt-2 text-sm">Approval stages this trial for automatic dispatch. Only the independent audit can count it or stop the campaign.</p>
+        <div className="mt-2 grid gap-3">
+          <label className="grid gap-1 text-sm">Campaign ID
+            <input className="rounded border px-2 py-1" maxLength={64} value={campaignId}
+              onChange={event => { setCampaignId(event.target.value); setConfirmed(false); }} />
+          </label>
+          {campaignId.trim() && <>
+            <label className="grid gap-1 text-sm">Frozen contract SHA-256
+              <input className="rounded border px-2 py-1" required pattern="[a-f0-9]{64}" maxLength={64} value={contractHash}
+                onChange={event => { setContractHash(event.target.value); setConfirmed(false); }} />
+            </label>
+            <label className="grid gap-1 text-sm">Completed proposal round (optional)
+              <input className="rounded border px-2 py-1" maxLength={64} value={proposalRound}
+                onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
+            </label>
+          </>}
+        </div>
+      </Disclosure>
       <div className="grid gap-3 md:grid-cols-2">
         {([{ label: "Runner", file: runner, set: setRunner }, { label: "Independent auditor", file: auditor, set: setAuditor }]).map(({ label, file, set }) =>
           <div key={label} className="min-w-0 rounded-xl border border-[var(--line)] p-3">
@@ -102,8 +128,10 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         I trust these two programs to run on this computer.
       </label>
       <button type="submit" className="min-h-10 rounded-md bg-[var(--accent)] px-3 font-semibold text-[var(--on-accent)] disabled:opacity-60"
-        disabled={busy || !runner || !auditor || !confirmed || !title.trim() || (shareAutomatically && !brief.trim())}>Queue benchmark</button>
-      {queued && <p role="status" className="text-sm">Benchmark queued. It will pause for human review.</p>}
+        disabled={busy || !runner || !auditor || !confirmed || !title.trim() || (shareAutomatically && !brief.trim())}>
+        {campaignId.trim() ? "Approve and stage trial" : "Queue benchmark"}
+      </button>
+      {queued && <p role="status" className="text-sm">Benchmark submitted. Check its status in Research activity.</p>}
       {error && <p role="alert" className="break-words text-sm">{error}</p>}
     </form>
   </Disclosure>;
