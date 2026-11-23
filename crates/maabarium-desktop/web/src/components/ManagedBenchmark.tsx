@@ -28,6 +28,7 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [sealedAuditor, setSealedAuditor] = useState<Executable>();
   const [catalog, setCatalog] = useState(false);
   const [candidateId, setCandidateId] = useState("");
+  const [parameterBounds, setParameterBounds] = useState("");
 
   async function choose(set: (file?: Executable) => void) {
     setBusy(true);
@@ -57,6 +58,7 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
           proposalRound: confirmSealed || catalog ? null : proposalRound.trim() || null,
           confirmationPanelSha256: confirmSealed ? panelHash.trim() : null,
           publicCandidateId: catalog && !confirmSealed ? candidateId.trim() : null,
+          parameterBounds: catalog && !confirmSealed ? parameterBounds.trim() || null : null,
           confirmationPlan: preApprove && !confirmSealed ? {
             runner: sealedRunner, auditor: sealedAuditor, panelSha256: panelHash.trim(),
           } : null,
@@ -103,11 +105,17 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
                 onChange={event => { setCatalog(event.target.checked); setConfirmed(false); }} />
               Let Codex and Antigravity select this candidate
             </label>
-            {catalog ? <label className="grid gap-1 text-sm">Public candidate ID
+            {catalog ? <><label className="grid gap-1 text-sm">Public candidate ID
               <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[A-Za-z0-9_\\-]{1,64}" maxLength={64} value={candidateId}
                 onChange={event => { setCandidateId(event.target.value); setConfirmed(false); }} />
               <span>Both providers can see this ID. Use an ID that describes the approach without revealing private information. Add candidates before starting discovery.</span>
-            </label> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
+            </label>
+            <label className="grid gap-1 text-sm">Public integer parameter ranges (optional)
+              <textarea className="w-full rounded-md border bg-transparent p-2 font-mono" rows={2}
+                maxLength={2048} placeholder={'{"width":[1,8]}'} value={parameterBounds}
+                onChange={event => { setParameterBounds(event.target.value); setConfirmed(false); }} />
+              <span>Both providers can see these names and ranges. The runner must read parameters.json. Leave blank for a fixed benchmark.</span>
+            </label></> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
               <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={proposalRound}
                 onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
             </label>}

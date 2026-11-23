@@ -265,7 +265,8 @@ else:
     antigravity = '-p' in args
     prompt = args[args.index('-p')+1] if antigravity else sys.stdin.read()
     assert 'PRIVATE-TITLE' not in prompt and 'Matched-learner audit' not in prompt
-    answer = ('fresh-public-check' if 'fresh-public-check' in prompt else 'second') if 'Approved IDs:' in prompt else 'Review complete'
+    answer = ('fresh-public-check' if 'fresh-public-check' in prompt else
+              json.dumps(dict(id='second',parameters=dict(width=4)))) if 'Approved IDs:' in prompt else 'Review complete'
     if antigravity:
         assert json.loads(args[args.index('--settings')+1])['useG1Credits'] is False
         print(json.dumps(dict(status='SUCCESS', response=answer)))
@@ -352,15 +353,19 @@ else:
                     return
                 if decision in ("stage", "stage-next", "catalog-flow"):
                     second = root / "runner-two"
-                    second.write_text(fixture.read_text().replace(
-                        "baseline=[", "successor=True,\n    baseline=["))
+                    source = fixture.read_text().replace("baseline=[", "successor=True,\n    baseline=[")
+                    second_args = adaptive_args
+                    if decision == "catalog-flow":
+                        source = source.replace("import json", "import json\nassert json.load(open('parameters.json')) == {'width': 4}")
+                        second_args += ("--parameter-bounds", '{"width":[1,8]}')
+                    second.write_text(source)
                     second.chmod(0o700)
                     successful("local-benchmark-enqueue", "--id", "second",
                                "--local-title", "Second", "--public-target", "Public synthetic benchmark",
                                "--reviewer", "codex", "--runner", str(second),
                                "--runner-sha256", hashlib.sha256(second.read_bytes()).hexdigest(),
                                "--auditor", str(auditor),
-                               "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
+                               "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *second_args)
                 if decision == "catalog-flow":
                     successful("campaign-start", "--id", "demo")
                     status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
