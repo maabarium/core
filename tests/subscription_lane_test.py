@@ -29,6 +29,23 @@ class SubscriptionLaneTest(unittest.TestCase):
             prepared = json.loads(subprocess.check_output([*package_command, "--fixture", str(fixture)], timeout=5))
             reviewed = json.loads(subprocess.check_output([*package_command, "--review", "--expected-review-sha256",
                                                            prepared["review_sha256"]], timeout=5))
+            approval = root / "approved.json"
+            approval_bytes = json.dumps({
+                "schema": 2, "contract_sha256": reviewed["contract_sha256"],
+                "programs": {role: {"path": prepared[role], "sha256": reviewed["pins"][role]}
+                             for role in ("runner", "auditor")},
+            }).encode()
+            approval.write_bytes(approval_bytes)
+            approved_command = [sys.executable, str(preparer), str(root / "approved")]
+            rejected = subprocess.run([*approved_command, "--approved-programs", str(approval),
+                                       "--approval-sha256", "0" * 64], capture_output=True, timeout=5)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertFalse((root / "approved").exists())
+            snapshot = json.loads(subprocess.check_output(
+                [*approved_command, "--approved-programs", str(approval),
+                 "--approval-sha256", hashlib.sha256(approval_bytes).hexdigest()], timeout=5))
+            checked = json.loads(subprocess.check_output(
+                [*approved_command, "--review", "--expected-review-sha256", snapshot["review_sha256"]], timeout=5))
             state = root / "state"
             command = [sys.executable, str(SCRIPT), "--state", str(state), "--codex", sys.executable]
             def run(*args):
@@ -37,8 +54,8 @@ class SubscriptionLaneTest(unittest.TestCase):
             run("local-benchmark-enqueue", "--id", "membership", "--campaign", "prepared",
                 "--contract-sha256", reviewed["contract_sha256"], "--local-title", "Synthetic membership",
                 "--public-target", "Public synthetic membership test", "--reviewer", "codex",
-                "--runner", prepared["runner"], "--runner-sha256", reviewed["pins"]["runner"],
-                "--auditor", prepared["auditor"], "--auditor-sha256", reviewed["pins"]["auditor"])
+                "--runner", checked["runner"], "--runner-sha256", checked["runner_sha256"],
+                "--auditor", checked["auditor"], "--auditor-sha256", checked["auditor_sha256"])
             run("tick")
             status = json.loads(run("campaign-status", "--id", "prepared"))
             self.assertEqual((status["audited_trials"], status["status"]), (1, "confirmation_required"))

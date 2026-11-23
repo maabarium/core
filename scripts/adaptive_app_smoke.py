@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 
 FIXTURES = {
@@ -193,6 +194,18 @@ def review_package(directory, expected_digest=None):
     if expected_digest is not None and expected_digest != manifest_digest:
         raise ValueError("review manifest differs from the separately saved pin")
     manifest = json.loads(manifest_bytes)
+    if isinstance(manifest, dict) and manifest.get("schema") == 2:
+        if expected_digest is None:
+            raise ValueError("custom programs require an independently saved review pin")
+        pins = checked_approval(manifest, packaged=True)
+        result = {"contract_sha256": manifest["contract_sha256"], "review_sha256": manifest_digest,
+                  "review": "custom program identities verified; neither program executed"}
+        for role in ("runner", "auditor"):
+            path = directory / role
+            if hashlib.sha256(bounded_bytes(path, 64 * 1024 * 1024)).hexdigest() != pins[role]:
+                raise ValueError(f"{role} does not match the approved bytes")
+            result.update({role: str(path.resolve()), role + "_sha256": pins[role]})
+        return result
     if not isinstance(manifest, dict) or set(manifest) != {"schema", "fixture", "pins"} or manifest["schema"] != 1:
         raise ValueError("unrecognized benchmark package")
     family, rows, queries = validate_fixture(manifest["fixture"])
@@ -213,20 +226,75 @@ def review_package(directory, expected_digest=None):
             **({"contract_sha256": CAMPAIGN_CONTRACT_SHA256} if family == "membership-campaign" else {})}
 
 
+def checked_approval(approval, packaged=False):
+    if not isinstance(approval, dict) or set(approval) != {"schema", "contract_sha256", "programs"} or approval["schema"] != 2:
+        raise ValueError("invalid custom benchmark approval")
+    programs = approval["programs"]
+    if not isinstance(programs, dict) or set(programs) != {"runner", "auditor"}:
+        raise ValueError("approve a separate runner and auditor")
+    digest = re.compile(r"[a-f0-9]{64}").fullmatch
+    if not isinstance(approval["contract_sha256"], str) or not digest(approval["contract_sha256"]):
+        raise ValueError("approve a frozen campaign contract")
+    pins = {}
+    for role, item in programs.items():
+        expected = {"sha256"} if packaged else {"path", "sha256"}
+        if (not isinstance(item, dict) or set(item) != expected
+                or not isinstance(item["sha256"], str) or not digest(item["sha256"])):
+            raise ValueError(f"invalid approval for {role}")
+        if not packaged and (not isinstance(item["path"], str) or not Path(item["path"]).is_absolute()):
+            raise ValueError(f"choose an absolute path for {role}")
+        pins[role] = item["sha256"]
+    if pins["runner"] == pins["auditor"]:
+        raise ValueError("runner and auditor must be different programs")
+    return pins
+
+
+def prepare_approved(root, approval_path, expected_digest):
+    raw = bounded_bytes(approval_path, 8192)
+    if expected_digest != hashlib.sha256(raw).hexdigest():
+        raise ValueError("approval does not match its separately saved pin")
+    approval = json.loads(raw)
+    pins = checked_approval(approval)
+    programs = {}
+    for role, item in approval["programs"].items():
+        snapshot = bounded_bytes(Path(item["path"]), 64 * 1024 * 1024)
+        if not snapshot or hashlib.sha256(snapshot).hexdigest() != pins[role]:
+            raise ValueError(f"{role} does not match its approval")
+        programs[role] = snapshot
+    root.mkdir(mode=0o700)
+    for role, snapshot in programs.items():
+        path = root / role
+        path.write_bytes(snapshot)
+        path.chmod(0o500)
+    manifest = (json.dumps({"schema": 2, "contract_sha256": approval["contract_sha256"],
+                            "programs": {role: {"sha256": pin} for role, pin in pins.items()}},
+                           sort_keys=True) + "\n").encode()
+    (root / "review.json").write_bytes(manifest)
+    return review_package(root, hashlib.sha256(manifest).hexdigest())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("out", type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fixture", type=Path, help="prepare a new public fixture from bounded rows and queries")
     mode.add_argument("--review", action="store_true", help="verify prepared files without executing them")
+    mode.add_argument("--approved-programs", type=Path, help="package manually reviewed local programs")
     parser.add_argument("--expected-review-sha256", help="check a separately saved review manifest digest")
+    parser.add_argument("--approval-sha256", help="separately saved digest of the approved-programs JSON")
     args = parser.parse_args()
     if args.expected_review_sha256 is not None and not args.review:
         parser.error("--expected-review-sha256 requires --review")
+    if bool(args.approved_programs) != bool(args.approval_sha256):
+        parser.error("--approved-programs and --approval-sha256 must be provided together")
     fixtures = FIXTURES
     family = "subset"
-    if args.review or args.fixture:
+    if args.review or args.fixture or args.approved_programs:
         try:
+            if args.approved_programs:
+                print(json.dumps(prepare_approved(args.out, args.approved_programs, args.approval_sha256),
+                                 sort_keys=True))
+                return
             if args.review:
                 print(json.dumps(review_package(args.out, args.expected_review_sha256), sort_keys=True))
                 return

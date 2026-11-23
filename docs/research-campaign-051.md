@@ -25,6 +25,8 @@ results.
   validation and the configured review policy before it becomes an executable.
 - [x] Prepare, review against a saved pin, and independently audit a new
   template-derived synthetic benchmark through the campaign worker.
+- [x] Package custom programs after independent approval pins their exact
+  bytes, and verify their identities without executing them.
 - [x] Freeze candidate and independent auditor identities before opening evidence.
 - [ ] Verify same teaching evidence, zero wrong answers, no coverage loss, and lower
   total work than the strongest matched exact comparator. Count all preparation,
@@ -108,6 +110,16 @@ prints a synthetic contract pin. It can be staged through the campaign
 worker and independently checks parity and the cheaper of two frozen exact
 scans. This narrow synthetic comparator set is not the CODA comparator set
 and cannot establish the CODA target.
+
+For custom programs that have passed a separate trusted review, create an
+approval JSON with `schema: 2`, `contract_sha256`, and `programs`. The
+`programs` object must contain `runner` and `auditor`, each with an absolute
+`path` and separately verified `sha256`. Save the approval file's SHA-256
+outside the package. Run `OUTPUT --approved-programs APPROVAL.json
+--approval-sha256 DIGEST` to copy only the exact reviewed bytes. Verify with
+`OUTPUT --review --expected-review-sha256 DIGEST` using the distinct review
+digest printed by preparation. This procedure verifies identities, not program
+safety. It never accepts provider output as approval or runs code during review.
 
 **Try a practice experiment** in Research activity runs a small built-in
 comparison locally, without files, an account, or any campaign jobs. It guides
