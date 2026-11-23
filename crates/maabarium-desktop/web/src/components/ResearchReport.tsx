@@ -52,6 +52,7 @@ export function ResearchReport() {
   const [campaignId, setCampaignId] = useState("");
   const [campaignLimit, setCampaignLimit] = useState(200);
   const [reviewEvery, setReviewEvery] = useState("");
+  const [localBudget, setLocalBudget] = useState("");
   const [choices, setChoices] = useState(defaultChoices);
   const [allowPaid, setAllowPaid] = useState(false);
   const [publicBrief, setPublicBrief] = useState("");
@@ -108,6 +109,7 @@ export function ResearchReport() {
       await invoke("research_campaign_create", {
         id: campaignId.trim(), limit: campaignLimit, publicBrief: publicBrief.trim() || null,
         ...(reviewEvery ? { reviewEvery: Number(reviewEvery) } : {}),
+        ...(localBudget ? { localBudgetSeconds: Number(localBudget) } : {}),
         ...(publicBrief.trim() ? {
           providers: choices.map(choice => ({ lane: choice.lane, model: choice.model.trim() || null, effort: choice.effort || null })),
           ...(usesPaid ? { allowPaid } : {}),
@@ -115,6 +117,7 @@ export function ResearchReport() {
       });
       setCampaignId("");
       setReviewEvery("");
+      setLocalBudget("");
       setPublicBrief("");
       setChoices(defaultChoices());
       setAllowPaid(false);
@@ -224,6 +227,11 @@ export function ResearchReport() {
               <textarea className="rounded border px-2 py-1" rows={3} maxLength={4096}
                 value={publicBrief} onChange={(event) => setPublicBrief(event.target.value)}
                 aria-describedby="campaign-public-brief-help" />
+            </label>
+            <label className="grid gap-1 text-sm">Local benchmark time budget (seconds, optional)
+              <input className="h-10 w-40 rounded border px-2" type="number" min={2} max={120600}
+                value={localBudget} onChange={event => setLocalBudget(event.target.value)} />
+              <span>Reserves the time limit for both the benchmark and its checker, including the final check.</span>
             </label>
             <p id="campaign-public-brief-help" className="w-full text-sm">
               Your chosen providers receive this brief and the failure status when a new suggestion is needed. Do not include private information.

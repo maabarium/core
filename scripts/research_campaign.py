@@ -27,6 +27,9 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_review_policy (
             campaign TEXT PRIMARY KEY REFERENCES campaigns(id),
             interval INTEGER NOT NULL CHECK(interval BETWEEN 1 AND 200));
+        CREATE TABLE IF NOT EXISTS campaign_local_budget (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id),
+            remaining_seconds INTEGER NOT NULL CHECK(remaining_seconds BETWEEN 0 AND 120600));
         CREATE TABLE IF NOT EXISTS campaign_adaptive (
             campaign TEXT PRIMARY KEY REFERENCES campaigns(id), public_brief TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS campaign_confirmations (

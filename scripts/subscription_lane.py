@@ -347,6 +347,7 @@ def process_local_benchmark(db, lock_fd, state):
             raise ValueError
         stage = "executable identity check"
         if campaign:
+            db.execute("BEGIN IMMEDIATE")
             status = db.execute("SELECT status FROM campaigns WHERE id=?", (campaign,)).fetchone()
             if status != (("confirming" if spec.get("confirmation") else "active"),):
                 raise ValueError("campaign is not active")
@@ -354,11 +355,27 @@ def process_local_benchmark(db, lock_fd, state):
         if reviewer_lane is not None and reviewer_lane not in ("codex", "claude", "antigravity"):
             raise ValueError("unsupported benchmark evaluator")
         directory = state / "local-evidence" / loop_id
+        if campaign:
+            stage = "local benchmark time budget"
+            timeout = spec.get("timeout")
+            if type(timeout) is not int or not 1 <= timeout <= 300:
+                raise ValueError("invalid local benchmark time limit")
+            if db.execute("SELECT 1 FROM campaign_local_budget WHERE campaign=?", (campaign,)).fetchone():
+                # Reserve both child deadlines before either program can run.
+                if db.execute("""UPDATE campaign_local_budget SET remaining_seconds=remaining_seconds-?1
+                    WHERE campaign=?2 AND remaining_seconds>=?1""",
+                    (2 * timeout, campaign)).rowcount != 1:
+                    raise ValueError("local benchmark time budget exhausted")
+            stage = "executable identity check"
         if db.execute("UPDATE jobs SET state='running', attempts=attempts+1,detail=? "
                       "WHERE id=? AND state='queued' AND EXISTS "
                       "(SELECT 1 FROM research_loops WHERE id=? AND status='active')",
                       ("Preparing pinned benchmark", job, loop_id)).rowcount != 1:
+            if db.in_transaction:
+                db.rollback()
             return True
+        if db.in_transaction:
+            db.commit()
         directory.mkdir(parents=True, mode=0o700)
         copies = {}
         for role in ("runner", "auditor"):

@@ -649,7 +649,7 @@ fn create_campaign(
     limit: u16,
     public_brief: Option<&str>,
 ) -> Result<(), String> {
-    create_configured_campaign(db, id, limit, public_brief, &[], None)
+    create_configured_campaign(db, id, limit, public_brief, &[], None, None)
 }
 
 fn create_configured_campaign(
@@ -659,6 +659,7 @@ fn create_configured_campaign(
     public_brief: Option<&str>,
     providers: &[ResearchStep],
     review_every: Option<u16>,
+    local_budget_seconds: Option<u32>,
 ) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 64
@@ -671,6 +672,9 @@ fn create_configured_campaign(
     }
     if review_every.is_some_and(|interval| interval == 0 || interval > limit) {
         return Err("Set the review interval between 1 and the trial limit.".into());
+    }
+    if local_budget_seconds.is_some_and(|seconds| !(2..=120_600).contains(&seconds)) {
+        return Err("Set the local benchmark budget between 2 and 120600 seconds.".into());
     }
     let public_brief = public_brief.map(str::trim);
     if public_brief.is_some_and(|brief| brief.is_empty() || brief.len() > 4096) {
@@ -716,6 +720,19 @@ fn create_configured_campaign(
     if inserted == 0 {
         return Err("A campaign with that ID already exists.".into());
     }
+    if let Some(seconds) = local_budget_seconds {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS campaign_local_budget (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id),
+            remaining_seconds INTEGER NOT NULL CHECK(remaining_seconds BETWEEN 0 AND 120600));",
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "INSERT INTO campaign_local_budget VALUES (?,?)",
+            rusqlite::params![id, seconds],
+        )
+        .map_err(|error| error.to_string())?;
+    }
     if let Some(interval) = review_every {
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS campaign_review_policy (
@@ -755,6 +772,7 @@ pub(crate) async fn research_campaign_create(
     providers: Option<Vec<ResearchStep>>,
     allow_paid: Option<bool>,
     review_every: Option<u16>,
+    local_budget_seconds: Option<u32>,
 ) -> Result<(), String> {
     if providers
         .as_ref()
@@ -765,7 +783,7 @@ pub(crate) async fn research_campaign_create(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let mut db = connect()?;
-        if providers.is_none() && review_every.is_none() {
+        if providers.is_none() && review_every.is_none() && local_budget_seconds.is_none() {
             return create_campaign(&mut db, &id, limit, public_brief.as_deref());
         }
         create_configured_campaign(
@@ -775,6 +793,7 @@ pub(crate) async fn research_campaign_create(
             public_brief.as_deref(),
             providers.as_deref().unwrap_or_default(),
             review_every,
+            local_budget_seconds,
         )
     })
     .await
@@ -2177,9 +2196,10 @@ mod tests {
             },
             super::ResearchStep::Lane("muse".into()),
         ];
-        assert!(
-            super::create_configured_campaign(&mut db, "demo", 2, None, &providers, None).is_err()
-        );
+        assert!(super::create_configured_campaign(
+            &mut db, "demo", 2, None, &providers, None, None
+        )
+        .is_err());
         super::create_configured_campaign(
             &mut db,
             "demo",
@@ -2187,6 +2207,7 @@ mod tests {
             Some("Public brief"),
             &providers,
             Some(1),
+            Some(120),
         )
         .unwrap();
         super::start_campaign(&mut db, "demo").unwrap();
@@ -2212,6 +2233,7 @@ mod tests {
             2,
             Some("Public brief"),
             &duplicate,
+            None,
             None
         )
         .is_err());
@@ -2220,7 +2242,7 @@ mod tests {
     #[test]
     fn checkpoint_approval_requires_current_trial_count() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();
-        super::create_configured_campaign(&mut db, "demo", 3, None, &[], Some(1)).unwrap();
+        super::create_configured_campaign(&mut db, "demo", 3, None, &[], Some(1), None).unwrap();
         db.execute_batch(
             "INSERT INTO campaign_trials VALUES ('demo','one','fail','a');
             UPDATE campaigns SET status='checkpoint' WHERE id='demo';",

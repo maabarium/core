@@ -6,6 +6,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Reserve local benchmark and checker time against a shared campaign budget before either program runs.
+- Prepare new data-only subset benchmarks from a bounded JSON fixture and fixed trusted templates.
+
 - Pause campaigns after a configurable number of audited trials and approve or stop from Research activity.
 
 - Choose two independent adaptive campaign providers from Codex, Claude, Antigravity, Muse, and DeepSeek, with provider-specific model and effort settings and explicit consent for paid requests.

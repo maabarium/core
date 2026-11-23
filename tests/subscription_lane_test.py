@@ -18,6 +18,45 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_campaign_budget_blocks_launch_before_creating_evidence(self):
+        process = runpy.run_path(str(SCRIPT))["process_local_benchmark"]
+        with tempfile.TemporaryDirectory() as root, sqlite3.connect(":memory:", isolation_level=None) as db:
+            db.executescript("""CREATE TABLE campaigns(id,status);
+                CREATE TABLE campaign_local_budget(campaign,remaining_seconds);
+                CREATE TABLE local_benchmarks(loop_id,spec);
+                CREATE TABLE research_loops(id,status);
+                CREATE TABLE jobs(id,lane,state,attempts,detail,finished_at);
+                INSERT INTO campaigns VALUES ('demo','active');
+                INSERT INTO campaign_local_budget VALUES ('demo',19);
+                INSERT INTO local_benchmarks VALUES ('test','{"campaign":"demo","timeout":10,"reviewer":null}');
+                INSERT INTO research_loops VALUES ('test','active');
+                INSERT INTO jobs VALUES ('loop:test:1','Local evidence','queued',0,NULL,NULL);""")
+            self.assertTrue(process(db, -1, Path(root)))
+            self.assertFalse((Path(root) / "local-evidence").exists())
+            self.assertEqual(db.execute("SELECT status FROM campaigns").fetchone()[0], "human_review")
+            self.assertEqual(db.execute("SELECT state,attempts FROM jobs").fetchone(), ("failed", 0))
+            self.assertEqual(db.execute("SELECT remaining_seconds FROM campaign_local_budget").fetchone()[0], 19)
+
+    def test_prepares_new_data_only_benchmark_with_pinned_executables(self):
+        preparer = SCRIPT.with_name("adaptive_app_smoke.py")
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            fixture = base / "fixture.json"
+            fixture.write_text(json.dumps({"rows": [0, 7], "queries": [6, 1, 4]}))
+            result = subprocess.check_output([sys.executable, str(preparer), str(base / "out"),
+                                              "--fixture", str(fixture)])
+            package = json.loads(result)
+            for role in ("runner", "auditor"):
+                self.assertEqual(hashlib.sha256(Path(package[role]).read_bytes()).hexdigest(),
+                                 package[role + "_sha256"])
+            evidence = subprocess.check_output([package["runner"]])
+            verdict = json.loads(subprocess.check_output([package["auditor"]], input=evidence))
+            self.assertEqual(verdict["evidence_sha256"], hashlib.sha256(evidence).hexdigest())
+            fixture.write_text('{"rows":[true],"queries":[0]}')
+            bad = subprocess.run([sys.executable, str(preparer), str(base / "bad"),
+                                  "--fixture", str(fixture)], capture_output=True)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertFalse((base / "bad").exists())
     def test_completed_non_codex_followup_round_is_not_enqueued_again(self):
         advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
         with sqlite3.connect(":memory:", isolation_level=None) as db:

@@ -12,7 +12,8 @@ results.
   with provider-specific model and effort settings through the desktop app.
 - [x] Configure a recurring human checkpoint in the desktop app. Approval
   resumes the current campaign; stopping preserves completed evidence.
-- [ ] Complete campaign-wide resource limits beyond the trial limit.
+- [x] Configure a cumulative local benchmark time budget. Before launch the
+  worker reserves both program deadlines, including for sealed confirmation.
 - [x] Preserve proposals, executable candidates, operational failures, and audited
   scientific trials as distinct records. Provider messages cannot declare success.
 - [x] Carry prior failure and bounded rejected public catalog IDs into the next
@@ -67,6 +68,18 @@ Set **Pause for review every** when creating a campaign to hold after that
 many audited trials. **Approve and resume campaign** releases the hold;
 **Stop campaign** cancels queued work. A hold does not override a terminal
 review, scientific success, or separate confirmation requirements.
+
+Set **Local benchmark time budget** to limit cumulative runner and auditor
+deadlines. For example, a 60-second per-program limit reserves 120 seconds
+from the campaign. A reservation is not refunded after an interrupted
+attempt. This does not cap provider tokens, charges, or elapsed queue time.
+Use the matching updated worker with the desktop build.
+
+For new public synthetic subset-test workloads, run
+`python3 scripts/adaptive_app_smoke.py OUTPUT --fixture FIXTURE.json`.
+Supply a JSON object with integer arrays `rows` and `queries`. The tool
+prepares separately pinned executables from fixed trusted templates; it does
+not queue or run the benchmark, accept generated source, or produce CODA evidence.
 
 **Try a practice experiment** in Research activity runs a small built-in
 comparison locally, without files, an account, or any campaign jobs. It guides
