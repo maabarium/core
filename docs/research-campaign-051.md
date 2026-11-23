@@ -91,6 +91,15 @@ production `npm run test:release-local` check did not build a signed artifact:
 it exited before compilation because neither updater private-key setting
 was configured. The optimized QA bundle is not a substitute for that gate.
 
+The documented release command was subsequently rerun with the existing
+updater key paths on source `31e298d`. It built the 0.5.1 app, updater archive,
+signature, update manifest, and installer locally. Minisign independently
+verified the archive signature. Archive SHA-256:
+`b25261dadda1cb797365b122d5f7c44750924802a7ee15791b1f815337f85aae`.
+The app itself was only linker-signed: strict Apple code-sign verification
+failed because the bundle had no resource signature. Developer ID signing,
+notarization, and in-app upgrade remain separate release checks.
+
 ## Current implementation
 
 Set **Pause for review every** when creating a campaign to hold after that
