@@ -3,6 +3,7 @@
 import sqlite3
 import json
 import hashlib
+import re
 
 
 def initialize(db):
@@ -17,6 +18,8 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_members (
             loop_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id),
             ordinal INTEGER NOT NULL, UNIQUE(campaign,ordinal));
+        CREATE TABLE IF NOT EXISTS campaign_proposals (
+            job_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id));
     """)
 
 
@@ -59,7 +62,7 @@ def record(db, campaign, identity, outcome, evidence_sha256, *, in_transaction=F
 def create(db, campaign, limit):
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
         raise ValueError('trial limit must be between 1 and 200')
-    if not isinstance(campaign, str) or not campaign or len(campaign) > 64:
+    if not isinstance(campaign, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", campaign):
         raise ValueError('invalid campaign identity')
     with db:
         db.execute('INSERT INTO campaigns(id,trial_limit) VALUES (?,?)', (campaign, limit))

@@ -18,6 +18,24 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_campaign_proposals_are_separate_from_trials_and_stop_with_campaign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = [sys.executable, str(SCRIPT), "--state", tmp]
+            def run(*args):
+                return subprocess.run([*base, *args], capture_output=True, text=True, timeout=10)
+            self.assertEqual(run("campaign-create", "--id", "demo").returncode, 0)
+            proposal = ("campaign-propose", "--id", "round-1", "--campaign", "demo",
+                        "--public-target", "Compare two exact synthetic solvers.")
+            self.assertEqual(run(*proposal).returncode, 0)
+            self.assertNotEqual(run(*proposal).returncode, 0)
+            jobs = json.loads(run("status").stdout)
+            self.assertEqual({job["lane"] for job in jobs}, {"codex", "antigravity"})
+            self.assertEqual(json.loads(run("campaign-status", "--id", "demo").stdout)["audited_trials"], 0)
+            self.assertEqual(run("campaign-stop", "--id", "demo").returncode, 0)
+            self.assertTrue(all(job["detail"] == "loop stopped" and job["attempts"] == 0
+                                for job in json.loads(run("status").stdout)))
+            self.assertNotEqual(run(*proposal).returncode, 0)
+
     def test_campaign_stop_cannot_race_the_worker_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

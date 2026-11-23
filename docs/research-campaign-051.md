@@ -40,8 +40,13 @@ audit. Operational failures require review rather than counting as scientific
 verdicts. The desktop Research activity report shows campaign progress.
 
 The benchmark and auditor must be trusted local executables. Code suggestions
-are not automatically executed. Automated proposal-to-trial coordination,
-desktop campaign configuration, and native release verification remain open.
+are not automatically executed. `campaign-propose --campaign <campaign> --id
+<round> --public-target <brief>` queues advisory jobs for Codex and Antigravity
+without consuming trial slots. Pending proposals and pending trials cannot
+overlap in a campaign, and stopping cancels pending proposals too.
+The desktop can create campaigns and display counts; approving and attaching
+a frozen trial is still a CLI step. Automatic proposal-to-trial coordination
+and native release verification remain open.
 
 Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
 acceptance requirements are implemented and verified.

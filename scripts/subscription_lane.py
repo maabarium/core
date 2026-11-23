@@ -708,7 +708,7 @@ def main():
     parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
     parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
     parser.add_argument("--enable-deepseek", action="store_true", help="allow paid DeepSeek jobs using the macOS Keychain")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status", "campaign-stop"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status", "campaign-stop", "campaign-propose"])
     parser.add_argument("--campaign")
     parser.add_argument("--trial-limit", type=int, default=200)
     parser.add_argument("--contract-sha256")
@@ -802,7 +802,7 @@ def main():
             db.execute("""CREATE TABLE IF NOT EXISTS local_benchmarks (
                 loop_id TEXT PRIMARY KEY, spec TEXT NOT NULL, outcome TEXT)""")
             db.commit()
-            if args.action in ("campaign-create", "campaign-status", "campaign-stop") or args.campaign:
+            if args.action in ("campaign-create", "campaign-status", "campaign-stop", "campaign-propose") or args.campaign:
                 from research_campaign import initialize
                 initialize(db)
             if args.action == "campaign-create":
@@ -811,6 +811,28 @@ def main():
                     create(db, args.id, args.trial_limit)
                 except (ValueError, sqlite3.IntegrityError) as error:
                     parser.error(str(error))
+            elif args.action == "campaign-propose":
+                public = (args.public_target or "").strip()
+                if not args.campaign or not public or len(public.encode()) > 4096 or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.id):
+                    parser.error("provide a campaign, unique proposal round ID, and public brief up to 4096 bytes")
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("SELECT status FROM campaigns WHERE id=?", (args.campaign,)).fetchone() != ("active",):
+                    parser.error("campaign is not active")
+                if db.execute("""SELECT 1 FROM jobs WHERE state IN ('queued','running') AND id IN (
+                    SELECT job_id FROM campaign_proposals WHERE campaign=?
+                    UNION ALL SELECT 'loop:' || loop_id || ':1' FROM campaign_members WHERE campaign=?)""",
+                    (args.campaign, args.campaign)).fetchone():
+                    parser.error("campaign has pending work")
+                for lane in ("codex", "antigravity"):
+                    job_id = f"proposal:{args.campaign}:{args.id}:{lane}"
+                    if db.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone():
+                        parser.error("proposal round already exists")
+                    db.execute("INSERT INTO jobs(id,lane,detail,prompt) VALUES (?,?,?,?)",
+                               (job_id, lane, "Campaign research proposal",
+                                "Use only this public brief. Do not use tools or local files. "
+                                "Propose one discriminating experiment, not code or a verdict.\n" + public))
+                    db.execute("INSERT INTO campaign_proposals VALUES (?,?)", (job_id, args.campaign))
+                db.commit()
             elif args.action == "campaign-stop":
                 db.execute("BEGIN IMMEDIATE")
                 if db.execute("UPDATE campaigns SET status='stopped' WHERE id=? AND status='active'",
@@ -819,8 +841,9 @@ def main():
                 db.execute("""UPDATE jobs SET state='failed', detail='loop stopped',finished_at=unixepoch()
                     WHERE state IN ('queued','running') AND id IN (
                     SELECT 'loop:' || loop_id || ':1' FROM campaign_members WHERE campaign=?
-                    UNION ALL SELECT 'loop:' || loop_id || ':review' FROM campaign_members WHERE campaign=?)""",
-                    (args.id, args.id))
+                    UNION ALL SELECT 'loop:' || loop_id || ':review' FROM campaign_members WHERE campaign=?
+                    UNION ALL SELECT job_id FROM campaign_proposals WHERE campaign=?)""",
+                    (args.id, args.id, args.id))
                 db.execute("""UPDATE research_loops SET status='stopped' WHERE status='active'
                     AND id IN (SELECT loop_id FROM campaign_members WHERE campaign=?)""", (args.id,))
                 db.commit()
@@ -872,6 +895,9 @@ def main():
                                 parser.error("campaign trials require a pinned contract and Codex or Antigravity review")
                             if db.execute("SELECT status FROM campaigns WHERE id=?", (args.campaign,)).fetchone() != ("active",):
                                 parser.error("campaign is not active")
+                            if db.execute("""SELECT 1 FROM campaign_proposals p JOIN jobs j ON j.id=p.job_id
+                                WHERE p.campaign=? AND j.state IN ('queued','running')""", (args.campaign,)).fetchone():
+                                parser.error("campaign proposals are still pending")
                             first = db.execute("""SELECT json_extract(b.spec,'$.contract_sha256')
                                 FROM campaign_members m JOIN local_benchmarks b ON b.loop_id=m.loop_id
                                 WHERE m.campaign=? AND m.ordinal=1""", (args.campaign,)).fetchone()
