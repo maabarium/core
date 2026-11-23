@@ -18,6 +18,22 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_campaign_stop_cannot_race_the_worker_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = [sys.executable, str(SCRIPT), "--state", tmp]
+            subprocess.run([*base, "campaign-create", "--id", "locked"],
+                           check=True, capture_output=True, timeout=10)
+            with (root / "worker.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                result = subprocess.run([*base, "campaign-stop", "--id", "locked"],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("worker is active", result.stderr)
+            state = subprocess.check_output([*base, "campaign-status", "--id", "locked"],
+                                            text=True, timeout=10)
+            self.assertEqual(json.loads(state)["status"], "active")
+
     def test_campaign_real_worker_and_restart(self):
         self.managed_benchmark(campaign=True)
 

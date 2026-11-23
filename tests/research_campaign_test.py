@@ -11,6 +11,18 @@ spec.loader.exec_module(campaign)
 
 
 class CampaignTest(unittest.TestCase):
+    def test_full_budget_counts_unique_verdicts_and_rejects_trial_201(self):
+        db = sqlite3.connect(':memory:')
+        campaign.initialize(db)
+        campaign.create(db, 'full-budget', 200)
+        for index in range(200):
+            digest = hashlib.sha256(str(index).encode()).hexdigest()
+            campaign.record(db, 'full-budget', str(index), 'fail', digest)
+            campaign.record(db, 'full-budget', str(index), 'fail', digest)
+        self.assertEqual(db.execute('SELECT COUNT(*) FROM campaign_trials').fetchone()[0], 200)
+        self.assertEqual(db.execute('SELECT status FROM campaigns').fetchone()[0], 'human_review')
+        with self.assertRaises(ValueError):
+            campaign.record(db, 'full-budget', '201', 'pass', 'c' * 64)
     def test_audit_requires_every_scientific_condition(self):
         evidence = b'fixed evidence'
         report = dict(contract_sha256='a' * 64,
