@@ -23,6 +23,8 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [proposalRound, setProposalRound] = useState("");
   const [confirmSealed, setConfirmSealed] = useState(false);
   const [panelHash, setPanelHash] = useState("");
+  const [catalog, setCatalog] = useState(false);
+  const [candidateId, setCandidateId] = useState("");
 
   async function choose(set: (file?: Executable) => void) {
     setBusy(true);
@@ -49,8 +51,9 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         reviewer: shareAutomatically ? reviewer : null, timeout, runner, auditor, confirmed,
         campaign: campaignId.trim() ? {
           id: campaignId.trim(), contractSha256: contractHash.trim(),
-          proposalRound: confirmSealed ? null : proposalRound.trim() || null,
+          proposalRound: confirmSealed || catalog ? null : proposalRound.trim() || null,
           confirmationPanelSha256: confirmSealed ? panelHash.trim() : null,
+          publicCandidateId: catalog && !confirmSealed ? candidateId.trim() : null,
         } : null,
       });
       setQueued(id);
@@ -88,10 +91,21 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
               <input className="rounded border px-2 py-1" required pattern="[a-f0-9]{64}" maxLength={64} value={panelHash}
                 onChange={event => { setPanelHash(event.target.value); setConfirmed(false); }} />
               <span>Use separate trusted programs and the winning trial’s contract. Turn off sharing with an AI evaluator.</span>
+            </label> : <>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" role="switch" className="workspace-switch" checked={catalog}
+                onChange={event => { setCatalog(event.target.checked); setConfirmed(false); }} />
+              Let Codex and Antigravity select this candidate
+            </label>
+            {catalog ? <label className="grid gap-1 text-sm">Public candidate ID
+              <input className="rounded border px-2 py-1" required pattern="[A-Za-z0-9_\\-]{1,64}" maxLength={64} value={candidateId}
+                onChange={event => { setCandidateId(event.target.value); setConfirmed(false); }} />
+              <span>Both providers can see this ID. Use an ID that describes the approach without revealing private information. Add candidates before starting discovery.</span>
             </label> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
               <input className="rounded border px-2 py-1" maxLength={64} value={proposalRound}
                 onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
             </label>}
+            </>}
           </>}
         </div>
       </Disclosure>

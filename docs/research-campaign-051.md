@@ -82,9 +82,10 @@ identity; different file hashes alone do not prove those properties.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
-Catalog configuration is currently CLI-only. Preparing new benchmark
-executables from free-form proposals and native release verification remain
-open.
+To stage a catalog entry from the desktop, choose **Let Codex and Antigravity
+select this candidate** and enter a public-safe candidate ID before starting
+discovery. Preparing new benchmark executables from free-form proposals and
+native release verification remain open.
 
 Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
 acceptance requirements are implemented and verified.

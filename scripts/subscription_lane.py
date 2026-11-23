@@ -153,7 +153,7 @@ def advance_campaigns(db):
             if len(selections) != 2:
                 continue
             selection = selections[0]
-            allowed = selection and selection == selections[1] and db.execute("""SELECT 1 FROM campaign_members m
+            allowed = selection and selection != "NONE" and selection == selections[1] and db.execute("""SELECT 1 FROM campaign_members m
                 JOIN research_loops l ON l.id=m.loop_id WHERE m.campaign=? AND m.loop_id=?
                 AND l.status='catalog'""", (campaign, selection)).fetchone()
             if not allowed:
@@ -842,7 +842,7 @@ def main():
     args = parser.parse_args()
     if args.stage and (args.action != "local-benchmark-enqueue" or not args.campaign):
         parser.error("--stage requires a campaign benchmark")
-    if args.select_by_proposal and (not args.stage or args.proposal_round):
+    if args.select_by_proposal and (not args.stage or args.proposal_round or args.id == "NONE"):
         parser.error("catalog entries require --stage and cannot bind a proposal until selected")
     if args.confirm_panel_sha256 is not None and (
             args.action != "local-benchmark-enqueue" or not args.campaign or args.stage
