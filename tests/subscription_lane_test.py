@@ -241,6 +241,12 @@ print(json.dumps(dict(contract_sha256="a"*64,
                 if decision in ("stage-next", "catalog-flow"):
                     auditor.write_text(auditor.read_text().replace(
                         'wrong_answers=0', 'wrong_answers=0 if report.get("successor") else 1'))
+                if decision == "catalog-flow":
+                    auditor.write_text(auditor.read_text().replace(
+                        "print(json.dumps(dict(", "from pathlib import Path\n"
+                        "parameters = Path('parameters.json')\n"
+                        "pins = dict(parameters_sha256=hashlib.sha256(parameters.read_bytes()).hexdigest()) if parameters.exists() else {}\n"
+                        "print(json.dumps(dict(**pins, " ))
             if expected_gate == "fail":
                 auditor.write_text(auditor.read_text().replace('outcome="pass"', 'outcome="fail"'))
             fake = root / "codex"

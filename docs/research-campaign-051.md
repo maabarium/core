@@ -71,8 +71,11 @@ to a catalog entry. Providers must agree on both ID and bounded integer
 values. The trusted runner and auditor receive `parameters.json` in their
 working directory; the selected values also carry forward to confirmation.
 This generates a configuration, not executable source.
-The same setting is available in the desktop catalog form as **Public integer
-parameter ranges (optional)**.
+In the desktop catalog form, use **Settings providers may choose** to add
+each setting's name, minimum, and maximum. No JSON is needed in the app.
+For a parameterized trial, the trusted auditor must return
+`parameters_sha256` for the exact `parameters.json` it verified. Missing
+or changed parameters fail closed rather than counting as a trial.
 The worker dispatches a catalog trial only when both subscription results
 return the same available ID. Disagreement, invalid IDs, or failed proposals
 stop at review. After an audited failure it requests another selection from

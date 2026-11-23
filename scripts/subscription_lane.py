@@ -328,9 +328,13 @@ def process_local_benchmark(db, lock_fd, state):
                 raise ValueError
             copies[role] = copy
         (directory / "spec.json").write_text(raw_spec + "\n", encoding="utf-8")
+        parameter_digest = None
         if "parameters" in spec:
-            (directory / "parameters.json").write_text(
-                json.dumps(spec["parameters"], sort_keys=True) + "\n", encoding="utf-8")
+            parameter_file = directory / "parameters.json"
+            parameter_bytes = (json.dumps(spec["parameters"], sort_keys=True) + "\n").encode()
+            parameter_file.write_bytes(parameter_bytes)
+            parameter_file.chmod(0o400)
+            parameter_digest = hashlib.sha256(parameter_bytes).hexdigest()
         confirmation = spec.get("confirmation") or {}
         if development_id := confirmation.get("development_loop_id"):
             stage = "sealed confirmation development binding"
@@ -378,6 +382,12 @@ def process_local_benchmark(db, lock_fd, state):
         report = json.loads(audit_file.read_text(encoding="utf-8"))
         if campaign:
             from research_campaign import verified_verdict
+            if parameter_digest is not None:
+                if (not isinstance(report, dict)
+                        or report.pop("parameters_sha256", None) != parameter_digest
+                        or parameter_file.stat().st_size != len(parameter_bytes)
+                        or parameter_file.read_bytes() != parameter_bytes):
+                    raise ValueError("parameter audit identity mismatch")
             if confirmation := spec.get("confirmation"):
                 if (evidence_digest == confirmation["development_evidence_sha256"]
                         or not isinstance(report, dict) or report.pop("panel_sha256", None) != confirmation["panel_sha256"]
@@ -385,7 +395,9 @@ def process_local_benchmark(db, lock_fd, state):
                     raise ValueError("confirmation identity mismatch")
             outcome = verified_verdict(report, evidence.read_bytes(), spec["contract_sha256"])
             report = {"evidence_sha256": evidence_digest, "outcome": outcome,
-                      "report": "Matched-learner audit: " + json.dumps(report, sort_keys=True)}
+                      "report": "Matched-learner audit: " + json.dumps(
+                          {**report, **({"parameters_sha256": parameter_digest} if parameter_digest else {})},
+                          sort_keys=True)}
         if (not isinstance(report, dict) or set(report) != {"evidence_sha256", "outcome", "report"}
                 or report["evidence_sha256"] != evidence_digest or file_hash(evidence) != evidence_digest
                 or report["outcome"] not in ("pass", "fail")

@@ -28,7 +28,12 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [sealedAuditor, setSealedAuditor] = useState<Executable>();
   const [catalog, setCatalog] = useState(false);
   const [candidateId, setCandidateId] = useState("");
-  const [parameterBounds, setParameterBounds] = useState("");
+  const [parameterRanges, setParameterRanges] = useState<Array<{ key: number; name: string; minimum: string; maximum: string }>>([]);
+  const [nextRangeKey, setNextRangeKey] = useState(0);
+  function editRange(key: number, field: "name" | "minimum" | "maximum", value: string) {
+    setParameterRanges(rows => rows.map(row => row.key === key ? { ...row, [field]: value } : row));
+    setConfirmed(false);
+  }
 
   async function choose(set: (file?: Executable) => void) {
     setBusy(true);
@@ -50,6 +55,17 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
     setError("");
     setQueued("");
     try {
+      let parameterBounds: string | null = null;
+      if (catalog && !confirmSealed && parameterRanges.length) {
+        const names = parameterRanges.map(row => row.name.trim());
+        if (new Set(names).size !== names.length) throw new Error("Give each setting a different name.");
+        if (parameterRanges.some(row => Number(row.minimum) > Number(row.maximum))) {
+          throw new Error("A setting’s minimum cannot be higher than its maximum.");
+        }
+        parameterBounds = JSON.stringify(Object.fromEntries(parameterRanges.map(row => [
+          row.name.trim(), [Number(row.minimum), Number(row.maximum)],
+        ])));
+      }
       const id = await invoke<string>("research_enqueue_benchmark", {
         title, publicBrief: shareAutomatically ? brief : "",
         reviewer: shareAutomatically ? reviewer : null, timeout, runner, auditor, confirmed,
@@ -58,7 +74,7 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
           proposalRound: confirmSealed || catalog ? null : proposalRound.trim() || null,
           confirmationPanelSha256: confirmSealed ? panelHash.trim() : null,
           publicCandidateId: catalog && !confirmSealed ? candidateId.trim() : null,
-          parameterBounds: catalog && !confirmSealed ? parameterBounds.trim() || null : null,
+          parameterBounds,
           confirmationPlan: preApprove && !confirmSealed ? {
             runner: sealedRunner, auditor: sealedAuditor, panelSha256: panelHash.trim(),
           } : null,
@@ -110,12 +126,29 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
                 onChange={event => { setCandidateId(event.target.value); setConfirmed(false); }} />
               <span>Both providers can see this ID. Use an ID that describes the approach without revealing private information. Add candidates before starting discovery.</span>
             </label>
-            <label className="grid gap-1 text-sm">Public integer parameter ranges (optional)
-              <textarea className="w-full rounded-md border bg-transparent p-2 font-mono" rows={2}
-                maxLength={2048} placeholder={'{"width":[1,8]}'} value={parameterBounds}
-                onChange={event => { setParameterBounds(event.target.value); setConfirmed(false); }} />
-              <span>Both providers can see these names and ranges. The runner must read parameters.json. Leave blank for a fixed benchmark.</span>
-            </label></> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
+            <fieldset className="grid gap-2 rounded-md border p-3 text-sm">
+              <legend className="px-1 font-medium">Settings providers may choose (optional)</legend>
+              <p>For settings supported by your runner, enter the name and the lowest and highest whole numbers allowed. Both providers can see these names and ranges. Leave this empty for a fixed benchmark.</p>
+              {parameterRanges.map((row, index) => <div key={row.key} className="grid items-end gap-2 sm:grid-cols-[minmax(0,2fr)_1fr_1fr_auto]">
+                <label className="grid gap-1">Setting {index + 1} name
+                  <input className="h-10 min-w-0 rounded-md border bg-transparent px-2" required maxLength={32}
+                    pattern="[a-z][a-z0-9_]{0,31}" placeholder="width" value={row.name}
+                    onChange={event => editRange(row.key, "name", event.target.value)} />
+                </label>
+                {(["minimum", "maximum"] as const).map(field => <label key={field} className="grid gap-1">
+                  {field === "minimum" ? "Minimum" : "Maximum"}
+                  <input className="h-10 min-w-0 rounded-md border bg-transparent px-2" type="number" required
+                    min={-1000000} max={1000000} step={1} value={row[field]}
+                    onChange={event => editRange(row.key, field, event.target.value)} />
+                </label>)}
+                <button type="button" className="min-h-10 rounded-md border px-2" aria-label={`Remove setting ${index + 1}`}
+                  onClick={() => { setParameterRanges(rows => rows.filter(item => item.key !== row.key)); setConfirmed(false); }}>Remove</button>
+              </div>)}
+              <button type="button" className="min-h-10 justify-self-start rounded-md border px-3" disabled={parameterRanges.length >= 8}
+                onClick={() => { setParameterRanges(rows => [...rows, { key: nextRangeKey, name: "", minimum: "", maximum: "" }]); setNextRangeKey(key => key + 1); setConfirmed(false); }}>
+                Add a setting
+              </button>
+            </fieldset></> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
               <input className="h-10 w-full rounded-md border bg-transparent px-3" maxLength={64} value={proposalRound}
                 onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
             </label>}
