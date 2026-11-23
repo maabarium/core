@@ -18,6 +18,11 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_staged_campaign_stops_after_first_win(self):
+        self.managed_benchmark(campaign=True, decision="stage")
+
+    def test_staged_campaign_advances_after_audited_failure(self):
+        self.managed_benchmark(campaign=True, decision="stage-next")
     def test_campaign_proposals_complete_in_separate_worker_processes(self):
         with tempfile.TemporaryDirectory() as tmp:
             cli = Path(tmp) / "fake-provider"
@@ -158,6 +163,9 @@ print(json.dumps(dict(contract_sha256="a"*64,
 """)
                 if decision == "limit":
                     auditor.write_text(auditor.read_text().replace('wrong_answers=0', 'wrong_answers=1'))
+                if decision == "stage-next":
+                    auditor.write_text(auditor.read_text().replace(
+                        'wrong_answers=0', 'wrong_answers=0 if report.get("successor") else 1'))
             if expected_gate == "fail":
                 auditor.write_text(auditor.read_text().replace('outcome="pass"', 'outcome="fail"'))
             fake = root / "codex"
@@ -190,6 +198,8 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             if campaign:
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit))
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
+                if decision in ("stage", "stage-next"):
+                    adaptive_args += ("--stage",)
             if adaptive:
                 branches = {}
                 for outcome in ("pass", "fail"):
@@ -210,6 +220,17 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                        "--auditor", str(auditor),
                        "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
             if campaign:
+                if decision in ("stage", "stage-next"):
+                    second = root / "runner-two"
+                    second.write_text(fixture.read_text().replace(
+                        "baseline=[", "successor=True,\n    baseline=["))
+                    second.chmod(0o700)
+                    successful("local-benchmark-enqueue", "--id", "second",
+                               "--local-title", "Second", "--public-target", "Public synthetic benchmark",
+                               "--reviewer", "codex", "--runner", str(second),
+                               "--runner-sha256", hashlib.sha256(second.read_bytes()).hexdigest(),
+                               "--auditor", str(auditor),
+                               "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
                 if decision == "stop":
                     successful("campaign-stop", "--id", "demo")
                     successful("tick")
@@ -219,11 +240,21 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                                      {"status": "stopped", "limit": 2, "audited_trials": 0})
                     return
                 successful("tick")
+                if decision == "stage-next":
+                    self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
+                                     {"status": "active", "limit": 2, "audited_trials": 1})
+                    successful("tick")
+                    self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
+                                     {"status": "target_achieved", "limit": 2, "audited_trials": 2})
+                    return
                 expected = {"status": "human_review" if damage or decision == "limit" else "target_achieved",
                             "limit": limit, "audited_trials": 0 if damage else 1}
                 self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")), expected)
                 successful("tick")
                 self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")), expected)
+                if decision == "stage":
+                    second_job = next(j for j in json.loads(successful("status")) if j["id"] == "loop:second:1")
+                    self.assertEqual((second_job["state"], second_job["attempts"]), ("failed", 0))
                 return
             if adaptive:
                 successful("tick")

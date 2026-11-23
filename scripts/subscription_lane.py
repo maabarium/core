@@ -108,6 +108,32 @@ def adaptive_branches(manifest):
     return branches
 
 
+def advance_campaigns(db):
+    """Dispatch at most one staged trial from each active campaign."""
+    if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='campaign_members' AND type='table'").fetchone():
+        return
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        db.execute("""UPDATE research_loops SET status='active' WHERE status='staged' AND id IN (
+            SELECT (SELECT m.loop_id FROM campaign_members m JOIN research_loops l ON l.id=m.loop_id
+                    WHERE m.campaign=c.id AND l.status='staged' ORDER BY m.ordinal LIMIT 1)
+            FROM campaigns c WHERE c.status='active' AND NOT EXISTS (
+                SELECT 1 FROM campaign_members m JOIN jobs j ON j.id='loop:' || m.loop_id || ':1'
+                JOIN research_loops l ON l.id=m.loop_id
+                WHERE m.campaign=c.id AND l.status='active' AND j.state IN ('queued','running'))
+        )""")
+        db.execute("""UPDATE jobs SET state='failed',detail='loop stopped',finished_at=unixepoch()
+            WHERE state='queued' AND id IN (
+                SELECT 'loop:' || l.id || ':1' FROM research_loops l JOIN campaign_members m ON m.loop_id=l.id
+                JOIN campaigns c ON c.id=m.campaign WHERE l.status='staged' AND c.status!='active')""")
+        db.execute("""UPDATE research_loops SET status='stopped' WHERE status='staged' AND id IN (
+            SELECT m.loop_id FROM campaign_members m JOIN campaigns c ON c.id=m.campaign WHERE c.status!='active')""")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 def process_local_benchmark(db, lock_fd, state):
     row = db.execute("""
         SELECT b.loop_id,b.spec,j.state FROM local_benchmarks b
@@ -713,6 +739,7 @@ def main():
     parser.add_argument("--trial-limit", type=int, default=200)
     parser.add_argument("--contract-sha256")
     parser.add_argument("--proposal-round", help="Completed campaign proposal round used to design this trusted trial")
+    parser.add_argument("--stage", action="store_true", help="Stage a pre-approved campaign trial for automatic dispatch")
     parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
     parser.add_argument("--runner", type=Path)
     parser.add_argument("--runner-sha256")
@@ -732,6 +759,8 @@ def main():
     parser.add_argument("--label", default="org.maabarium.subscription-lane")
     parser.add_argument("--child-timeout", type=int, default=CHILD_TIMEOUT, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.stage and (args.action != "local-benchmark-enqueue" or not args.campaign):
+        parser.error("--stage requires a campaign benchmark")
     CHILD_TIMEOUT = max(1, args.child_timeout)
     os.umask(0o077)
     state = args.state.expanduser().resolve()
@@ -845,7 +874,7 @@ def main():
                     UNION ALL SELECT 'loop:' || loop_id || ':review' FROM campaign_members WHERE campaign=?
                     UNION ALL SELECT job_id FROM campaign_proposals WHERE campaign=?)""",
                     (args.id, args.id, args.id))
-                db.execute("""UPDATE research_loops SET status='stopped' WHERE status='active'
+                db.execute("""UPDATE research_loops SET status='stopped' WHERE status IN ('active','staged')
                     AND id IN (SELECT loop_id FROM campaign_members WHERE campaign=?)""", (args.id,))
                 db.commit()
             elif args.action == "campaign-status":
@@ -896,8 +925,14 @@ def main():
                             if (args.adaptive_branches or not re.fullmatch(r"[0-9a-f]{64}", args.contract_sha256 or "")
                                     or args.reviewer not in ("codex", "antigravity")):
                                 parser.error("campaign trials require a pinned contract and Codex or Antigravity review")
-                            if db.execute("SELECT status FROM campaigns WHERE id=?", (args.campaign,)).fetchone() != ("active",):
+                            campaign_row = db.execute("SELECT status,trial_limit FROM campaigns WHERE id=?",
+                                                      (args.campaign,)).fetchone()
+                            if not campaign_row or campaign_row[0] != "active":
                                 parser.error("campaign is not active")
+                            submitted, = db.execute("SELECT COUNT(*) FROM campaign_members WHERE campaign=?",
+                                                    (args.campaign,)).fetchone()
+                            if submitted >= campaign_row[1]:
+                                parser.error("all trial slots are already reserved")
                             if db.execute("""SELECT 1 FROM campaign_proposals p JOIN jobs j ON j.id=p.job_id
                                 WHERE p.campaign=? AND j.state IN ('queued','running')""", (args.campaign,)).fetchone():
                                 parser.error("campaign proposals are still pending")
@@ -931,7 +966,7 @@ def main():
                                 AND json_extract(b.spec,'$.runner_sha256')=?""",
                                 (args.campaign, args.runner_sha256)).fetchone():
                                 parser.error("campaign runner has already been submitted")
-                            if db.execute("""SELECT 1 FROM campaign_members m JOIN jobs j
+                            if not args.stage and db.execute("""SELECT 1 FROM campaign_members m JOIN jobs j
                                 ON j.id='loop:' || m.loop_id || ':1' WHERE m.campaign=?
                                 AND j.state IN ('queued','running')""", (args.campaign,)).fetchone():
                                 parser.error("campaign already has a pending trial")
@@ -954,8 +989,8 @@ def main():
                                 parser.error(str(error))
                         db.execute("INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)", (args.id, json.dumps(spec)))
                     db.execute(
-                        "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,?,1,'active',1)",
-                        (args.id, title, json.dumps([lane])),
+                        "INSERT INTO research_loops(id,target,plan,step,status,review_every) VALUES (?,?,?,1,?,1)",
+                        (args.id, title, json.dumps([lane]), "staged" if args.stage else "active"),
                     )
                     db.execute("INSERT INTO jobs(id,lane,state,detail) VALUES (?,?,'queued',?)",
                                (job_id, lane, f"{title}: waiting for the local runner"))
@@ -1071,8 +1106,10 @@ def main():
                 if args.enable_deepseek:
                     runners["deepseek"] = None
                 advance_completed_loops(db)
+                advance_campaigns(db)
                 if not process_local_benchmark(db, lock.fileno(), state):
                     worker(db, runners, lock.fileno(), state)
+                advance_campaigns(db)
                 advance_completed_loops(db)
             elif args.action == "loop-status":
                 db.row_factory = sqlite3.Row
