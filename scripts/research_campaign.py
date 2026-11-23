@@ -20,6 +20,7 @@ def initialize(db):
             ordinal INTEGER NOT NULL, UNIQUE(campaign,ordinal));
         CREATE TABLE IF NOT EXISTS campaign_proposals (
             job_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id));
+        CREATE INDEX IF NOT EXISTS campaign_proposals_by_campaign ON campaign_proposals(campaign);
     """)
 
 

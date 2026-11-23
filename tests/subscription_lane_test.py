@@ -18,6 +18,43 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_campaign_proposals_complete_in_separate_worker_processes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli = Path(tmp) / "fake-provider"
+            cli.write_text(f"""#!{sys.executable}
+import json, os, pathlib, sys
+args = sys.argv
+assert 'OPENAI_API_KEY' not in os.environ and 'GEMINI_API_KEY' not in os.environ
+if 'login' in args:
+    print('Logged in using ChatGPT')
+elif 'models' in args:
+    print('gemini-4-neon-low\\tNeon')
+elif '--output-last-message' in args:
+    assert 'PUBLIC-SYNTHETIC-TARGET' in sys.stdin.read()
+    assert args[args.index('--sandbox')+1] == 'read-only'
+    pathlib.Path(args[args.index('--output-last-message')+1]).write_text('Codex proposal')
+else:
+    assert 'PUBLIC-SYNTHETIC-TARGET' in args[args.index('-p')+1]
+    assert json.loads(args[args.index('--settings')+1])['useG1Credits'] is False
+    print(json.dumps(dict(status='SUCCESS', response='Antigravity proposal')))
+""")
+            cli.chmod(0o700)
+            base = [sys.executable, str(SCRIPT), "--state", str(Path(tmp) / "state"),
+                    "--codex", str(cli), "--antigravity", str(cli)]
+            def run(*args):
+                return subprocess.check_output([*base, *args], text=True, timeout=10,
+                    env={**os.environ, "OPENAI_API_KEY": "excluded", "GEMINI_API_KEY": "excluded"})
+            run("campaign-create", "--id", "demo")
+            run("campaign-propose", "--id", "round-1", "--campaign", "demo",
+                "--public-target", "PUBLIC-SYNTHETIC-TARGET")
+            for _ in range(3):
+                run("tick")
+            jobs = json.loads(run("status"))
+            self.assertEqual({(j["lane"], j["state"], j["attempts"], j["result"]) for j in jobs},
+                             {("codex", "done", 1, "Codex proposal"),
+                              ("antigravity", "done", 1, "Antigravity proposal")})
+            self.assertEqual(json.loads(run("campaign-status", "--id", "demo"))["audited_trials"], 0)
+
     def test_campaign_proposals_are_separate_from_trials_and_stop_with_campaign(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = [sys.executable, str(SCRIPT), "--state", tmp]
