@@ -160,7 +160,7 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" role="switch" className="workspace-switch" checked={catalog}
                 onChange={event => { setCatalog(event.target.checked); setConfirmed(false); }} />
-              Let Codex and Antigravity select this candidate
+              Let the campaign providers select this candidate
             </label>
             {catalog ? <><label className="grid gap-1 text-sm">Public candidate ID
               <input className="h-10 w-full rounded-md border bg-transparent px-3" required pattern="[A-Za-z0-9_\\-]{1,64}" maxLength={64} value={candidateId}

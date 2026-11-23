@@ -15,6 +15,18 @@ type Starter = { stage: string; first: PracticeResult | null; final_result: Prac
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
 type Allowance = { observed: number; windows: { label: string; used: number; reset: number }[] };
 const providers: Record<string, string> = { codex: "Codex", claude: "Claude", antigravity: "Antigravity", muse: "Muse", deepseek: "DeepSeek (paid API)" };
+const campaignEfforts = {
+  codex: ["low", "medium", "high", "xhigh"],
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  antigravity: ["low", "medium", "high", "xhigh", "max"],
+  muse: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+  deepseek: ["low", "high", "max"],
+};
+type CampaignLane = keyof typeof campaignEfforts;
+type ProviderChoice = { lane: CampaignLane; model: string; effort: string };
+const defaultChoices = (): ProviderChoice[] => [
+  { lane: "codex", model: "", effort: "" }, { lane: "antigravity", model: "", effort: "" },
+];
 
 export function TokenDetails({ usage }: { usage: TokenUsage }) {
   const counters = (Object.keys(tokenLabels) as (keyof TokenUsage)[]).filter((key) => usage[key] != null);
@@ -39,10 +51,10 @@ export function ResearchReport() {
   const [quotaError, setQuotaError] = useState("");
   const [campaignId, setCampaignId] = useState("");
   const [campaignLimit, setCampaignLimit] = useState(200);
-  const [codexModel, setCodexModel] = useState("");
-  const [codexEffort, setCodexEffort] = useState("");
-  const [antigravityModel, setAntigravityModel] = useState("");
+  const [choices, setChoices] = useState(defaultChoices);
+  const [allowPaid, setAllowPaid] = useState(false);
   const [publicBrief, setPublicBrief] = useState("");
+  const usesPaid = Boolean(publicBrief.trim()) && choices.some(choice => choice.lane === "deepseek");
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
   const [practice, setPractice] = useState<PracticeResult>();
@@ -94,18 +106,15 @@ export function ResearchReport() {
     try {
       await invoke("research_campaign_create", {
         id: campaignId.trim(), limit: campaignLimit, publicBrief: publicBrief.trim() || null,
-        ...(publicBrief.trim() && (codexModel.trim() || codexEffort || antigravityModel.trim()) ? {
-          providers: [
-            { lane: "codex", model: codexModel.trim() || null, effort: codexEffort || null },
-            { lane: "antigravity", model: antigravityModel.trim() || null },
-          ],
+        ...(publicBrief.trim() ? {
+          providers: choices.map(choice => ({ lane: choice.lane, model: choice.model.trim() || null, effort: choice.effort || null })),
+          ...(usesPaid ? { allowPaid } : {}),
         } : {}),
       });
       setCampaignId("");
       setPublicBrief("");
-      setCodexModel("");
-      setCodexEffort("");
-      setAntigravityModel("");
+      setChoices(defaultChoices());
+      setAllowPaid(false);
       await refresh();
     } catch (failure) { setError(String(failure)); }
     finally { setCreating(false); }
@@ -208,31 +217,55 @@ export function ResearchReport() {
                 aria-describedby="campaign-public-brief-help" />
             </label>
             <p id="campaign-public-brief-help" className="w-full text-sm">
-              When no approved trial is waiting after an audited failure, Codex and Antigravity receive this brief and the failure status. Do not include private information.
+              Your chosen providers receive this brief and the failure status when a new suggestion is needed. Do not include private information.
             </p>
             {publicBrief.trim() && <details className="w-full rounded border p-3">
-              <summary className="cursor-pointer font-semibold">Suggestion model settings</summary>
-              <p className="mt-2 text-sm">Both providers check the same candidate independently. Blank settings use the provider defaults. Enter a model ID supported by your subscription.</p>
-              <div className="mt-2 grid gap-3 sm:grid-cols-3">
-                <label className="grid gap-1 text-sm">Codex model
-                  <input className="h-10 min-w-0 rounded border px-2" maxLength={128}
-                    value={codexModel} onChange={event => setCodexModel(event.target.value)} />
-                </label>
-                <label className="grid gap-1 text-sm">Codex reasoning effort
-                  <select className="h-10 rounded border px-2" value={codexEffort}
-                    onChange={event => setCodexEffort(event.target.value)}>
-                    <option value="">Default</option><option value="low">Low</option>
-                    <option value="medium">Medium</option><option value="high">High</option>
-                    <option value="xhigh">Extra high</option>
-                  </select>
-                </label>
-                <label className="grid gap-1 text-sm">Antigravity model
-                  <input className="h-10 min-w-0 rounded border px-2" maxLength={128}
-                    value={antigravityModel} onChange={event => setAntigravityModel(event.target.value)} />
-                </label>
+              <summary className="cursor-pointer font-semibold">Suggestion providers and model settings</summary>
+              <p className="mt-2">The proposer and independent checker choose separately. A benchmark only starts if they agree.</p>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                {choices.map((choice, index) => {
+                  const role = index === 0 ? "Proposer" : "Independent checker";
+                  const fixedEffort = choice.lane === "antigravity" && /orchestrator/i.test(choice.model);
+                  const update = (next: ProviderChoice) => setChoices(current => current.map((item, i) => i === index ? next : item));
+                  return <fieldset key={role} className="grid gap-2 rounded border p-3">
+                    <legend>{role}</legend>
+                    <label className="grid gap-1">{role} provider
+                      <select className="h-10 rounded border px-2" value={choice.lane} onChange={e => {
+                        setAllowPaid(false);
+                        update({ lane: e.target.value as CampaignLane, model: "", effort: "" });
+                      }}>
+                        {(Object.keys(campaignEfforts) as CampaignLane[]).filter(lane => lane !== choices[1 - index].lane)
+                          .map(lane => <option key={lane} value={lane}>{providers[lane]}</option>)}
+                      </select>
+                    </label>
+                    <label className="grid gap-1">{role} model
+                      {choice.lane === "deepseek" ? <select className="h-10 rounded border px-2" value={choice.model}
+                        onChange={e => update({ ...choice, model: e.target.value })}>
+                        <option value="">Provider default</option>
+                        <option value="deepseek-flash">DeepSeek Flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+                      </select> : <input className="h-10 min-w-0 rounded border px-2" maxLength={128}
+                        placeholder="Provider default" pattern="[A-Za-z0-9][A-Za-z0-9._:/\\-]*"
+                        value={choice.model} onChange={e => {
+                          const model = e.target.value;
+                          update({ ...choice, model, effort: choice.lane === "antigravity" && /orchestrator/i.test(model) ? "" : choice.effort });
+                        }} />}
+                    </label>
+                    {fixedEffort ? <p>Orchestrator sets its own reasoning effort.</p> : <label className="grid gap-1">{role} reasoning effort
+                      <select className="h-10 rounded border px-2" value={choice.effort}
+                        onChange={e => update({ ...choice, effort: e.target.value })}>
+                        <option value="">Provider default</option>
+                        {campaignEfforts[choice.lane].map(effort => <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</option>)}
+                      </select>
+                    </label>}
+                  </fieldset>;
+                })}
               </div>
+              {usesPaid && <button className="mt-3 rounded border px-3 py-2" type="button" role="switch"
+                aria-checked={allowPaid} onClick={() => setAllowPaid(!allowPaid)}>
+                Allow paid DeepSeek requests: {allowPaid ? "On" : "Off"}
+              </button>}
             </details>}
-            <button className="rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy}>Create campaign</button>
+            <button className="rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy || (usesPaid && !allowPaid)}>Create campaign</button>
           </form>
         </details>
         {!!report.campaigns?.length && <section className="mt-3" aria-label="Research campaigns">
@@ -282,7 +315,7 @@ export function ResearchReport() {
               </div>}
               {campaign.can_start && <button type="button" className="mt-2 rounded border px-3 py-1"
                 disabled={starting || busy} onClick={() => void startCampaign(campaign.id)}>
-                Send public brief to Codex and Antigravity
+                Send public brief to selected providers
               </button>}
               {["active", "confirmation_required", "confirming"].includes(campaign.status) &&
                 (stopRequested === campaign.id ? <div className="mt-2 flex flex-wrap items-center gap-2">

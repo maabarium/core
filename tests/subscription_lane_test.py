@@ -18,6 +18,33 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_completed_non_codex_followup_round_is_not_enqueued_again(self):
+        advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
+        with sqlite3.connect(":memory:", isolation_level=None) as db:
+            db.executescript("""CREATE TABLE campaigns(id,status);
+                CREATE TABLE campaign_adaptive(campaign,public_brief);
+                CREATE TABLE campaign_members(loop_id,campaign,ordinal);
+                CREATE TABLE research_loops(id,status);
+                CREATE TABLE campaign_trials(campaign,identity,outcome);
+                CREATE TABLE local_benchmarks(loop_id,spec);
+                CREATE TABLE campaign_proposals(job_id PRIMARY KEY,campaign);
+                CREATE TABLE campaign_provider_options(campaign,lane,model,effort);
+                CREATE TABLE jobs(id PRIMARY KEY,lane,detail,prompt,model,effort,state DEFAULT 'queued',finished_at);
+                INSERT INTO campaigns VALUES ('demo','active');
+                INSERT INTO campaign_adaptive VALUES ('demo','Synthetic brief');
+                INSERT INTO campaign_members VALUES ('first','demo',1);
+                INSERT INTO research_loops VALUES ('first','done');
+                INSERT INTO campaign_trials VALUES ('demo','first','fail');
+                INSERT INTO local_benchmarks VALUES ('first','{}');
+                INSERT INTO campaign_provider_options VALUES
+                    ('demo','claude',NULL,NULL),('demo','deepseek',NULL,NULL);""")
+            advance(db)
+            db.execute("UPDATE jobs SET state='done'")
+            advance(db)
+            self.assertEqual(db.execute("SELECT id FROM jobs ORDER BY id").fetchall(),
+                             [("proposal:demo:auto-after-1:claude",),
+                              ("proposal:demo:auto-after-1:deepseek",)])
+
     def test_followup_proposals_copy_saved_provider_settings(self):
         queue = runpy.run_path(str(SCRIPT))["queue_campaign_proposals"]
         with sqlite3.connect(":memory:") as db:
@@ -27,11 +54,12 @@ class SubscriptionLaneTest(unittest.TestCase):
                 CREATE TABLE campaign_proposals(job_id,campaign);
                 CREATE TABLE campaign_provider_options(campaign,lane,model,effort);
                 CREATE TABLE jobs(id,lane,detail,prompt,model,effort);
-                INSERT INTO campaign_provider_options VALUES ('demo','codex','chosen','high'),
+                INSERT INTO campaign_provider_options VALUES ('demo','claude','chosen','high'),
+                    ('demo','muse',NULL,'ultra'),
                     ('other','antigravity','unrelated','low');""")
             queue(db, "demo", "after-1", "Public synthetic task")
             self.assertEqual(db.execute("SELECT lane,model,effort FROM jobs ORDER BY lane").fetchall(),
-                             [("antigravity", None, None), ("codex", "chosen", "high")])
+                             [("claude", "chosen", "high"), ("muse", None, "ultra")])
 
     @unittest.skipUnless(os.getenv("MAABARIUM_LIVE_ADAPTIVE_PILOT") == "1",
                          "uses live Codex and Antigravity subscriptions")
@@ -52,13 +80,16 @@ class SubscriptionLaneTest(unittest.TestCase):
         invalid = '{"id":"pick","parameters":{"width":40}}'
         duplicate_ids = '{"id":"other","id":"pick","parameters":{"width":4}}'
         duplicate_parameters = '{"id":"pick","parameters":{"width":40,"width":4}}'
-        for answers, bounds, expected in [
+        cases = [
                 (("pick", "pick"), None, "active"), (("pick", "other"), None, "stopped"),
                 (("unknown", "unknown"), None, "stopped"), ((valid, valid), [1, 8], "active"),
                 ((invalid, invalid), [1, 8], "stopped"), (("pick", "pick"), [1, 8], "stopped"),
                 ((duplicate_ids, valid), [1, 8], "stopped"),
-                ((duplicate_parameters, valid), [1, 8], "stopped")]:
-            with self.subTest(answers=answers):
+                ((duplicate_parameters, valid), [1, 8], "stopped")]
+        lanes = [("codex", "antigravity"), ("claude", "muse"), ("deepseek", "codex")]
+        details = runpy.run_path(str(SCRIPT))["PROPOSAL_DETAILS"]
+        for pair, (answers, bounds, expected) in ((pair, case) for pair in lanes for case in cases):
+            with self.subTest(pair=pair, answers=answers):
                 db = sqlite3.connect(":memory:", isolation_level=None)
                 db.executescript("""CREATE TABLE campaigns(id TEXT,status TEXT);
                     CREATE TABLE campaign_members(loop_id TEXT,campaign TEXT,ordinal INTEGER);
@@ -75,8 +106,12 @@ class SubscriptionLaneTest(unittest.TestCase):
                 if bounds:
                     db.execute("UPDATE local_benchmarks SET spec=?",
                                (json.dumps({"parameter_bounds": {"width": bounds}}),))
-                for lane, answer, detail in zip(("codex", "antigravity"), answers,
-                        ("ChatGPT", "Antigravity account; AI credits disabled for run")):
+                if pair != lanes[0]:
+                    db.execute("CREATE TABLE campaign_provider_options(campaign,lane,model,effort)")
+                    db.executemany("INSERT INTO campaign_provider_options VALUES ('demo',?,NULL,NULL)",
+                                   [(lane,) for lane in pair])
+                for lane, answer in zip(pair, answers):
+                    detail = details[lane]
                     job = f"proposal:demo:initial:{lane}"
                     db.execute("INSERT INTO campaign_proposals VALUES (?,'demo')", (job,))
                     db.execute("INSERT INTO jobs(id,lane,state,detail,result) VALUES (?,?,'done',?,?)",

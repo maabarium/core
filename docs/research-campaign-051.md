@@ -8,8 +8,9 @@ Checked items apply to the implemented vetted-catalog workflow and its test
 fixtures. They are not claims about live subscriptions or scientific CODA
 results.
 
-- [ ] Configure a target, trial limit up to 200, provider roles, model/effort,
-  resource limits, and human review policy through the desktop app.
+- [x] Configure a target, trial limit up to 200, and distinct provider roles
+  with provider-specific model and effort settings through the desktop app.
+- [ ] Complete campaign-wide resource limits and configurable human review policy.
 - [x] Preserve proposals, executable candidates, operational failures, and audited
   scientific trials as distinct records. Provider messages cannot declare success.
 - [x] Carry prior failure and bounded rejected public catalog IDs into the next
@@ -90,7 +91,7 @@ was recorded before review.
 
 The benchmark and auditor must be trusted local executables. Code suggestions
 are not automatically executed. `campaign-propose --campaign <campaign> --id
-<round> --public-target <brief>` queues advisory jobs for Codex and Antigravity
+<round> --public-target <brief>` queues advisory jobs for the campaign's selected providers
 without consuming trial slots. Pending proposals and pending trials cannot
 overlap in a campaign, and stopping cancels pending proposals too.
 When enqueueing a vetted benchmark, `--proposal-round <round>` connects
@@ -106,12 +107,15 @@ when creating the campaign from the CLI. An audited failure with no staged
 trial queues one deterministic Codex/Antigravity proposal pair. Only the
 failure bit and the approved brief go to providers; local evidence stays local.
 Start discovery explicitly with `campaign-start --id <campaign>` or
-**Send public brief to Codex and Antigravity** in Research activity. Repeating
+**Send public brief to selected providers** in Research activity. Repeating
 the request does not create a duplicate round or consume a trial.
-When creating an adaptive campaign in the app, **Suggestion model settings**
-can pin the Codex model and reasoning effort and the Antigravity model.
-These settings apply to every round; blank values use the provider defaults.
-The two subscription roles are fixed for this catalog workflow.
+When creating an adaptive campaign in the app, **Suggestion providers and
+model settings** assigns two distinct providers to the proposer and independent
+checker roles. Both must agree before a vetted catalog candidate runs. Codex,
+Claude, Antigravity, Muse, and DeepSeek are supported. Model and effort choices
+apply to every round; blanks use provider defaults. An Antigravity Orchestrator
+model controls its own effort. DeepSeek requires explicit campaign consent and
+a paid-enabled worker. It is never a fallback.
 For an unattended search over a vetted catalog, add
 `--stage --select-by-proposal` when submitting each approved benchmark
 before starting discovery. Use public-safe trial IDs: providers receive
@@ -126,7 +130,7 @@ each setting's name, minimum, and maximum. No JSON is needed in the app.
 For a parameterized trial, the trusted auditor must return
 `parameters_sha256` for the exact `parameters.json` it verified. Missing
 or changed parameters fail closed rather than counting as a trial.
-The worker dispatches a catalog trial only when both subscription results
+The worker dispatches a catalog trial only when both configured providers
 return the same available ID. Disagreement, invalid IDs, or failed proposals
 stop at review. After an audited failure it requests another selection from
 the remaining catalog, unless the trial limit has been reached.
@@ -155,7 +159,7 @@ directory is sent to providers.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
-To stage a catalog entry from the desktop, choose **Let Codex and Antigravity
+To stage a catalog entry from the desktop, choose **Let the campaign providers
 select this candidate** and enter a public-safe candidate ID before starting
 discovery. Preparing new benchmark executables from free-form proposals and
 native release verification remain open.
