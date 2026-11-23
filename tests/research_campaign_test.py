@@ -3,6 +3,7 @@ from pathlib import Path
 import sqlite3
 import unittest
 import tempfile
+import hashlib
 
 spec = importlib.util.spec_from_file_location('campaign', Path(__file__).resolve().parents[1] / 'scripts/research_campaign.py')
 campaign = importlib.util.module_from_spec(spec)
@@ -10,6 +11,27 @@ spec.loader.exec_module(campaign)
 
 
 class CampaignTest(unittest.TestCase):
+    def test_audit_requires_every_scientific_condition(self):
+        evidence = b'fixed evidence'
+        report = dict(contract_sha256='a' * 64,
+                      evidence_sha256=hashlib.sha256(evidence).hexdigest(),
+                      wrong_answers=0, lost_coverage=0, candidate_coverage=12,
+                      baseline_coverage=12, teaching_sha256='b' * 64,
+                      baseline_teaching_sha256='b' * 64,
+                      candidate_total_work=9, baseline_total_work=10,
+                      strongest_comparator=True, complete=True)
+        self.assertEqual(campaign.verified_verdict(report, evidence, 'a' * 64), 'pass')
+        for key, value in [('wrong_answers', 1), ('lost_coverage', 1),
+                           ('candidate_total_work', 10), ('candidate_coverage', 11)]:
+            self.assertEqual(campaign.verified_verdict({**report, key: value}, evidence, 'a' * 64), 'fail')
+        for key, value in [('strongest_comparator', False), ('complete', False),
+                           ('wrong_answers', False), ('baseline_teaching_sha256', 'c' * 64),
+                           ('baseline_coverage', 0), ('baseline_total_work', 0)]:
+            with self.assertRaises(ValueError):
+                campaign.verified_verdict({**report, key: value}, evidence, 'a' * 64)
+        with self.assertRaises(ValueError):
+            campaign.verified_verdict(report, evidence + b'changed', 'a' * 64)
+
     def test_restart_replays_once(self):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / 'campaign.db')
