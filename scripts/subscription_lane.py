@@ -708,7 +708,7 @@ def main():
     parser.add_argument("--antigravity", help="trusted agy CLI; opt in only after confirming account credit overages are off")
     parser.add_argument("--muse", help="trusted Muse CLI; opt in only after confirming the browser account has a subscription")
     parser.add_argument("--enable-deepseek", action="store_true", help="allow paid DeepSeek jobs using the macOS Keychain")
-    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status"])
+    parser.add_argument("action", choices=["enqueue", "tick", "status", "launchd-plist", "export-task", "import-result", "loop-start", "loop-review", "loop-status", "local-checkpoint-start", "local-checkpoint-finish", "local-benchmark-enqueue", "campaign-create", "campaign-status", "campaign-stop"])
     parser.add_argument("--campaign")
     parser.add_argument("--trial-limit", type=int, default=200)
     parser.add_argument("--contract-sha256")
@@ -765,11 +765,11 @@ def main():
         sys.stdout.buffer.write(plistlib.dumps(job))
         return
     with (state / "worker.lock").open("a") as lock:
-        if args.action in ("tick", "loop-review"):
+        if args.action in ("tick", "loop-review", "campaign-stop"):
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                if args.action == "loop-review":
+                if args.action != "tick":
                     parser.error("the worker is active; try reviewing again after this attempt")
                 return
         with sqlite3.connect(state / "queue.db", isolation_level=None) as db:
@@ -802,7 +802,7 @@ def main():
             db.execute("""CREATE TABLE IF NOT EXISTS local_benchmarks (
                 loop_id TEXT PRIMARY KEY, spec TEXT NOT NULL, outcome TEXT)""")
             db.commit()
-            if args.action in ("campaign-create", "campaign-status") or args.campaign:
+            if args.action in ("campaign-create", "campaign-status", "campaign-stop") or args.campaign:
                 from research_campaign import initialize
                 initialize(db)
             if args.action == "campaign-create":
@@ -811,6 +811,19 @@ def main():
                     create(db, args.id, args.trial_limit)
                 except (ValueError, sqlite3.IntegrityError) as error:
                     parser.error(str(error))
+            elif args.action == "campaign-stop":
+                db.execute("BEGIN IMMEDIATE")
+                if db.execute("UPDATE campaigns SET status='stopped' WHERE id=? AND status='active'",
+                              (args.id,)).rowcount != 1:
+                    parser.error("campaign is not active")
+                db.execute("""UPDATE jobs SET state='failed', detail='loop stopped',finished_at=unixepoch()
+                    WHERE state IN ('queued','running') AND id IN (
+                    SELECT 'loop:' || loop_id || ':1' FROM campaign_members WHERE campaign=?
+                    UNION ALL SELECT 'loop:' || loop_id || ':review' FROM campaign_members WHERE campaign=?)""",
+                    (args.id, args.id))
+                db.execute("""UPDATE research_loops SET status='stopped' WHERE status='active'
+                    AND id IN (SELECT loop_id FROM campaign_members WHERE campaign=?)""", (args.id,))
+                db.commit()
             elif args.action == "campaign-status":
                 row = db.execute("""SELECT c.status,c.trial_limit,COUNT(t.identity)
                     FROM campaigns c LEFT JOIN campaign_trials t

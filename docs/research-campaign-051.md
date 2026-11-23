@@ -33,6 +33,8 @@ The worker supports `campaign-create` and `campaign-status` with an experiment
 ID. Submit a frozen trial through `local-benchmark-enqueue` with `--campaign`
 and `--contract-sha256`; the first trial binds the contract for that campaign.
 Only one trial can be pending, and duplicate runner hashes are rejected.
+Use `campaign-stop --id <campaign>` to stop dispatch and cancel its queued work.
+If the worker is in an active attempt, stop is rejected until it releases the lock.
 Trial outcomes and job completion are committed together after the independent
 audit. Operational failures require review rather than counting as scientific
 verdicts. The desktop Research activity report shows campaign progress.

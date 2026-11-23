@@ -68,7 +68,8 @@ export function ResearchReport() {
               <p className="break-all font-semibold">{campaign.id}</p>
               <p>{campaign.audited_trials} of {campaign.limit} audited trials · {
                 campaign.status === "target_achieved" ? "Target achieved" :
-                campaign.status === "human_review" ? "Needs review" : "Active"
+                campaign.status === "human_review" ? "Needs review" :
+                campaign.status === "stopped" ? "Stopped" : "Active"
               }</p>
             </li>)}
           </ul>

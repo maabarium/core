@@ -1032,6 +1032,26 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     #[test]
+    fn campaign_report_counts_only_scientific_verdicts() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(super::campaign_report(&db).unwrap().is_empty());
+        db.execute_batch(
+            "CREATE TABLE campaigns(id TEXT, status TEXT, trial_limit INTEGER);
+             CREATE TABLE campaign_trials(campaign TEXT, outcome TEXT);
+             INSERT INTO campaigns VALUES ('demo','human_review',200);
+             INSERT INTO campaign_trials VALUES ('demo','fail'),('demo','operational_failure'),
+                ('another','pass');",
+        )
+        .unwrap();
+        let rows = super::campaign_report(&db).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "demo");
+        assert_eq!(rows[0].audited_trials, 1);
+        assert_eq!(rows[0].limit, 200);
+        assert_eq!(rows[0].status, "human_review");
+    }
+
+    #[test]
     fn provider_checkpoint_advances_once() {
         let mut db = Connection::open_in_memory().unwrap();
         initialise(&mut db).unwrap();

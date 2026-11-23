@@ -24,6 +24,12 @@ class SubscriptionLaneTest(unittest.TestCase):
     def test_campaign_bad_audit_is_not_counted(self):
         self.managed_benchmark(campaign=True, damage="bad-audit")
 
+    def test_stopped_campaign_never_launches_pending_trial(self):
+        self.managed_benchmark(campaign=True, decision="stop")
+
+    def test_campaign_limit_counts_a_valid_scientific_failure(self):
+        self.managed_benchmark(campaign=True, decision="limit")
+
     def managed_benchmark(self, live=False, damage=None, local_only=False, adaptive=None, decision="accept", campaign=False):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -51,7 +57,7 @@ assert report["scan_work"] == 39 and report["index_work"] == 14
 print(json.dumps(dict(evidence_sha256=hashlib.sha256(raw).hexdigest(),
     outcome="pass", report="PRIVATE-LOCAL-REPORT. Six matches; 14 versus 39 work units.")))
 """)
-            expected_gate = adaptive or "pass"
+            expected_gate = adaptive or ("fail" if decision == "limit" else "pass")
             if campaign:
                 auditor.write_text(auditor.read_text().split("print(json.dumps")[0] + """
 print(json.dumps(dict(contract_sha256="a"*64,
@@ -60,6 +66,8 @@ print(json.dumps(dict(contract_sha256="a"*64,
     baseline_teaching_sha256="b"*64, candidate_total_work=report["index_work"],
     baseline_total_work=report["scan_work"], strongest_comparator=True, complete=True)))
 """)
+                if decision == "limit":
+                    auditor.write_text(auditor.read_text().replace('wrong_answers=0', 'wrong_answers=1'))
             if expected_gate == "fail":
                 auditor.write_text(auditor.read_text().replace('outcome="pass"', 'outcome="fail"'))
             fake = root / "codex"
@@ -88,8 +96,9 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return result.stdout
             adaptive_args = ()
+            limit = 1 if decision == "limit" else 2
             if campaign:
-                successful("campaign-create", "--id", "demo", "--trial-limit", "2")
+                successful("campaign-create", "--id", "demo", "--trial-limit", str(limit))
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
             if adaptive:
                 branches = {}
@@ -111,9 +120,17 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                        "--auditor", str(auditor),
                        "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(), *adaptive_args)
             if campaign:
+                if decision == "stop":
+                    successful("campaign-stop", "--id", "demo")
+                    successful("tick")
+                    job, = json.loads(successful("status"))
+                    self.assertEqual((job["attempts"], job["detail"]), (0, "loop stopped"))
+                    self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")),
+                                     {"status": "stopped", "limit": 2, "audited_trials": 0})
+                    return
                 successful("tick")
-                expected = {"status": "human_review" if damage else "target_achieved",
-                            "limit": 2, "audited_trials": 0 if damage else 1}
+                expected = {"status": "human_review" if damage or decision == "limit" else "target_achieved",
+                            "limit": limit, "audited_trials": 0 if damage else 1}
                 self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")), expected)
                 successful("tick")
                 self.assertEqual(json.loads(successful("campaign-status", "--id", "demo")), expected)
