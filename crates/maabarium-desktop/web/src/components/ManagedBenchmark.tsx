@@ -21,6 +21,8 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
   const [campaignId, setCampaignId] = useState("");
   const [contractHash, setContractHash] = useState("");
   const [proposalRound, setProposalRound] = useState("");
+  const [confirmSealed, setConfirmSealed] = useState(false);
+  const [panelHash, setPanelHash] = useState("");
 
   async function choose(set: (file?: Executable) => void) {
     setBusy(true);
@@ -47,7 +49,8 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         reviewer: shareAutomatically ? reviewer : null, timeout, runner, auditor, confirmed,
         campaign: campaignId.trim() ? {
           id: campaignId.trim(), contractSha256: contractHash.trim(),
-          proposalRound: proposalRound.trim() || null,
+          proposalRound: confirmSealed ? null : proposalRound.trim() || null,
+          confirmationPanelSha256: confirmSealed ? panelHash.trim() : null,
         } : null,
       });
       setQueued(id);
@@ -76,10 +79,19 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
               <input className="rounded border px-2 py-1" required pattern="[a-f0-9]{64}" maxLength={64} value={contractHash}
                 onChange={event => { setContractHash(event.target.value); setConfirmed(false); }} />
             </label>
-            <label className="grid gap-1 text-sm">Completed proposal round (optional)
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" role="switch" className="workspace-switch" checked={confirmSealed}
+                onChange={event => { setConfirmSealed(event.target.checked); setConfirmed(false); }} />
+              Run sealed confirmation instead
+            </label>
+            {confirmSealed ? <label className="grid gap-1 text-sm">Sealed panel SHA-256
+              <input className="rounded border px-2 py-1" required pattern="[a-f0-9]{64}" maxLength={64} value={panelHash}
+                onChange={event => { setPanelHash(event.target.value); setConfirmed(false); }} />
+              <span>Use separate trusted programs and the winning trial’s contract. Turn off sharing with an AI evaluator.</span>
+            </label> : <label className="grid gap-1 text-sm">Completed proposal round (optional)
               <input className="rounded border px-2 py-1" maxLength={64} value={proposalRound}
                 onChange={event => { setProposalRound(event.target.value); setConfirmed(false); }} />
-            </label>
+            </label>}
           </>}
         </div>
       </Disclosure>
@@ -128,8 +140,8 @@ export function ManagedBenchmark({ onQueued }: { onQueued: () => Promise<void> }
         I trust these two programs to run on this computer.
       </label>
       <button type="submit" className="min-h-10 rounded-md bg-[var(--accent)] px-3 font-semibold text-[var(--on-accent)] disabled:opacity-60"
-        disabled={busy || !runner || !auditor || !confirmed || !title.trim() || (shareAutomatically && !brief.trim())}>
-        {campaignId.trim() ? "Approve and stage trial" : "Queue benchmark"}
+        disabled={busy || !runner || !auditor || !confirmed || !title.trim() || (shareAutomatically && (!brief.trim() || (confirmSealed && !!campaignId.trim())))}>
+        {campaignId.trim() ? (confirmSealed ? "Approve sealed confirmation" : "Approve and stage trial") : "Queue benchmark"}
       </button>
       {queued && <p role="status" className="text-sm">Benchmark submitted. Check its status in Research activity.</p>}
       {error && <p role="alert" className="break-words text-sm">{error}</p>}

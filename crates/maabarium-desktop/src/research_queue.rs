@@ -818,6 +818,7 @@ pub(crate) struct CampaignTrial {
     id: String,
     contract_sha256: String,
     proposal_round: Option<String>,
+    confirmation_panel_sha256: Option<String>,
 }
 
 fn stage_campaign_trial(
@@ -832,6 +833,7 @@ fn stage_campaign_trial(
         id: campaign,
         contract_sha256,
         proposal_round,
+        confirmation_panel_sha256,
     } = campaign;
     let valid_id = |id: &str| {
         !id.is_empty()
@@ -866,6 +868,65 @@ fn stage_campaign_trial(
         job_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id));",
     )
     .map_err(err)?;
+    if let Some(panel) = confirmation_panel_sha256 {
+        if panel.len() != 64
+            || !panel
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            || proposal_round.is_some()
+            || !spec["reviewer"].is_null()
+        {
+            return Err("Confirmation needs a sealed panel hash and stays local without a proposal or AI evaluator.".into());
+        }
+        let (winner_evidence, winner_spec): (String, String) = tx
+            .query_row(
+                "SELECT t.evidence_sha256,b.spec FROM campaigns c
+             JOIN campaign_trials t ON t.campaign=c.id AND t.outcome='pass'
+             JOIN local_benchmarks b ON b.loop_id=t.identity
+             WHERE c.id=? AND c.status='confirmation_required'",
+                [&campaign],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    "Campaign must have an audited development pass awaiting confirmation.".into()
+                }
+                _ => err(error),
+            })?;
+        let winner: serde_json::Value =
+            serde_json::from_str(&winner_spec).map_err(|error| error.to_string())?;
+        if winner["contract_sha256"].as_str() != Some(contract_sha256.as_str())
+            || winner["runner_sha256"] == spec["runner_sha256"]
+            || winner["auditor_sha256"] == spec["auditor_sha256"]
+        {
+            return Err(
+                "Use the original contract and separate pinned confirmation programs.".into(),
+            );
+        }
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS campaign_confirmations (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id), loop_id TEXT NOT NULL UNIQUE,
+            outcome TEXT, evidence_sha256 TEXT);",
+        )
+        .map_err(err)?;
+        tx.execute(
+            "INSERT INTO campaign_confirmations(campaign,loop_id) VALUES (?,?)",
+            rusqlite::params![campaign, id],
+        )
+        .map_err(err)?;
+        tx.execute(
+            "UPDATE campaigns SET status='confirming' WHERE id=?",
+            [&campaign],
+        )
+        .map_err(err)?;
+        spec["confirmation"] = serde_json::json!({
+            "panel_sha256": panel, "development_evidence_sha256": winner_evidence,
+        });
+        spec["campaign"] = campaign.into();
+        spec["contract_sha256"] = contract_sha256.into();
+        insert_benchmark_rows(&tx, id, title, &spec.to_string(), "active").map_err(err)?;
+        return tx.commit().map_err(err);
+    }
     let limit: i64 = tx
         .query_row(
             "SELECT trial_limit FROM campaigns WHERE id=? AND status='active'",
@@ -924,19 +985,7 @@ fn stage_campaign_trial(
         rusqlite::params![id, campaign, count + 1],
     )
     .map_err(err)?;
-    tx.execute(
-        "INSERT INTO research_loops(id,target,plan,step,status,review_every)
-        VALUES (?,?,'[\"Local evidence\"]',1,'staged',1)",
-        rusqlite::params![id, title],
-    )
-    .map_err(err)?;
-    tx.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,'Local evidence','Approved; waiting for campaign dispatch')",
-        [format!("loop:{id}:1")]).map_err(err)?;
-    tx.execute(
-        "INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)",
-        rusqlite::params![id, spec.to_string()],
-    )
-    .map_err(err)?;
+    insert_benchmark_rows(&tx, id, title, &spec.to_string(), "staged").map_err(err)?;
     tx.commit().map_err(err)
 }
 
@@ -947,18 +996,29 @@ fn insert_local_benchmark(
     spec: String,
 ) -> rusqlite::Result<()> {
     let tx = db.transaction()?;
-    tx.execute(
+    insert_benchmark_rows(&tx, id, title, &spec, "active")?;
+    tx.commit()
+}
+
+fn insert_benchmark_rows(
+    db: &Connection,
+    id: &str,
+    title: &str,
+    spec: &str,
+    status: &str,
+) -> rusqlite::Result<()> {
+    db.execute(
         "INSERT INTO research_loops(id,target,plan,step,status,review_every)
-        VALUES (?,?,'[\"Local evidence\"]',1,'active',1)",
-        rusqlite::params![id, title],
+        VALUES (?,?,'[\"Local evidence\"]',1,?,1)",
+        rusqlite::params![id, title, status],
     )?;
-    tx.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,'Local evidence','Waiting for the managed benchmark worker')",
+    db.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,'Local evidence','Waiting for the managed benchmark worker')",
         [format!("loop:{id}:1")])?;
-    tx.execute(
+    db.execute(
         "INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)",
         rusqlite::params![id, spec],
     )?;
-    tx.commit()
+    Ok(())
 }
 
 fn dismiss_local_checkpoint(db: &Connection, job_id: &str, approved: bool) -> Result<(), String> {
@@ -1324,6 +1384,54 @@ pub(crate) async fn research_queue_enqueue(lane: String) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     #[test]
+    fn desktop_confirmation_binds_winner_and_cannot_be_queued_twice() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::initialise(&mut db).unwrap();
+        super::create_campaign(&mut db, "demo", 1, Some("public")).unwrap();
+        let winner = serde_json::json!({
+            "runner_sha256": "b".repeat(64), "auditor_sha256": "c".repeat(64),
+            "contract_sha256": "a".repeat(64),
+        });
+        super::insert_local_benchmark(&mut db, "winner", "Winner", winner.to_string()).unwrap();
+        db.execute(
+            "INSERT INTO campaign_trials VALUES ('demo','winner','pass',?)",
+            ["d".repeat(64)],
+        )
+        .unwrap();
+        db.execute("UPDATE campaigns SET status='confirmation_required'", [])
+            .unwrap();
+        let confirmation = || super::CampaignTrial {
+            id: "demo".into(),
+            contract_sha256: "a".repeat(64),
+            proposal_round: None,
+            confirmation_panel_sha256: Some("e".repeat(64)),
+        };
+        assert!(
+            super::stage_campaign_trial(&mut db, "bad", "Bad", winner, confirmation()).is_err()
+        );
+        let spec =
+            serde_json::json!({"runner_sha256": "f".repeat(64), "auditor_sha256": "0".repeat(64)});
+        super::stage_campaign_trial(&mut db, "confirm", "Confirm", spec.clone(), confirmation())
+            .unwrap();
+        assert!(
+            super::stage_campaign_trial(&mut db, "second", "Second", spec, confirmation()).is_err()
+        );
+        let raw: String = db
+            .query_row(
+                "SELECT spec FROM local_benchmarks WHERE loop_id='confirm'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            raw["confirmation"]["development_evidence_sha256"],
+            "d".repeat(64)
+        );
+        assert_eq!(super::campaign_report(&db).unwrap()[0].status, "confirming");
+    }
+
+    #[test]
     fn desktop_start_enqueues_only_one_proposal_pair() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();
         super::initialise(&mut db).unwrap();
@@ -1370,6 +1478,7 @@ mod tests {
             id: "demo".into(),
             contract_sha256: "a".repeat(64),
             proposal_round: None,
+            confirmation_panel_sha256: None,
         };
         let spec = serde_json::json!({"runner_sha256": "b".repeat(64), "reviewer": null});
         super::stage_campaign_trial(&mut db, "trial-1", "One", spec.clone(), campaign()).unwrap();

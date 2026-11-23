@@ -63,7 +63,9 @@ An adaptive development pass stops dispatch at **Sealed confirmation
 required**, not **Target achieved**. This prevents a search over many
 development trials from declaring success on the same evidence it used to
 choose the candidate. A trusted operator can enqueue the single sealed
-confirmation through the CLI with `--confirm-panel-sha256`, the original
+confirmation from **Set up a local benchmark → Attach to a research campaign →
+Run sealed confirmation instead**, or through the CLI with
+`--confirm-panel-sha256`. Both paths require the original
 contract hash, and separate pinned runner and auditor executables. The auditor
 must bind its result to the approved panel and the winning development
 evidence. Confirmation stays local and does not consume another development

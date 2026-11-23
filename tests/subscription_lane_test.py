@@ -20,6 +20,9 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 class SubscriptionLaneTest(unittest.TestCase):
     def test_adaptive_success_requires_separate_confirmation(self):
         self.managed_benchmark(campaign=True, decision="confirm")
+
+    def test_adaptive_confirmation_rejects_mismatched_panel(self):
+        self.managed_benchmark(campaign=True, decision="confirm-tamper")
     def test_adaptive_start_is_explicit_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = [sys.executable, str(SCRIPT), "--state", tmp]
@@ -215,7 +218,7 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             adaptive_args = ()
             limit = 1 if decision == "limit" else 2
             if campaign:
-                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm") else ()
+                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm", "confirm-tamper") else ()
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
@@ -260,15 +263,16 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                                      {"status": "stopped", "limit": 2, "audited_trials": 0})
                     return
                 successful("tick")
-                if decision == "confirm":
+                if decision in ("confirm", "confirm-tamper"):
                     status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
                     self.assertEqual(status()["status"], "confirmation_required")
                     with sqlite3.connect(state / "queue.db") as db:
                         digest, = db.execute("SELECT evidence_sha256 FROM campaign_trials").fetchone()
                     fixture.write_text(fixture.read_text().replace(
                         "baseline=[", "sealed_fixture=True,\n    baseline=["))
+                    reported_panel = ("d" if decision == "confirm-tamper" else "c") * 64
                     auditor.write_text(auditor.read_text().replace(
-                        "complete=True", f"complete=True, panel_sha256={'c' * 64!r}, development_evidence_sha256={digest!r}"))
+                        "complete=True", f"complete=True, panel_sha256={reported_panel!r}, development_evidence_sha256={digest!r}"))
                     successful("local-benchmark-enqueue", "--id", "confirmation",
                                "--local-title", "Sealed confirmation", "--public-target", "Public synthetic check",
                                "--reviewer", "codex", "--runner", str(fixture),
@@ -277,7 +281,8 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                                "--confirm-panel-sha256", "c" * 64, *adaptive_args)
                     self.assertEqual(status()["status"], "confirming")
                     successful("tick")
-                    self.assertEqual(status(), {"status": "target_achieved", "limit": 2, "audited_trials": 1})
+                    self.assertEqual(status(), {"status": "human_review" if decision == "confirm-tamper" else "target_achieved",
+                                                "limit": 2, "audited_trials": 1})
                     return
                 if decision == "adaptive":
                     db = sqlite3.connect(state / "queue.db")
