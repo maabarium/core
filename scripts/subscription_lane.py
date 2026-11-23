@@ -184,7 +184,7 @@ def process_local_benchmark(db, lock_fd, state):
         stage = "executable identity check"
         if campaign:
             status = db.execute("SELECT status FROM campaigns WHERE id=?", (campaign,)).fetchone()
-            if status != ("active",):
+            if status != (("confirming" if spec.get("confirmation") else "active"),):
                 raise ValueError("campaign is not active")
         reviewer_lane = spec["reviewer"]
         if reviewer_lane is not None and reviewer_lane not in ("codex", "claude", "antigravity"):
@@ -241,6 +241,11 @@ def process_local_benchmark(db, lock_fd, state):
         report = json.loads(audit_file.read_text(encoding="utf-8"))
         if campaign:
             from research_campaign import verified_verdict
+            if confirmation := spec.get("confirmation"):
+                if (evidence_digest == confirmation["development_evidence_sha256"]
+                        or not isinstance(report, dict) or report.pop("panel_sha256", None) != confirmation["panel_sha256"]
+                        or report.pop("development_evidence_sha256", None) != confirmation["development_evidence_sha256"]):
+                    raise ValueError("confirmation identity mismatch")
             outcome = verified_verdict(report, evidence.read_bytes(), spec["contract_sha256"])
             report = {"evidence_sha256": evidence_digest, "outcome": outcome,
                       "report": "Matched-learner audit: " + json.dumps(report, sort_keys=True)}
@@ -254,7 +259,14 @@ def process_local_benchmark(db, lock_fd, state):
                     if path.name in {"runner.json", "runner.stderr", "runner.exit", "auditor.json", "auditor.stderr", "auditor.exit", "spec.json"}}
         (directory / "hashes.json").write_text(json.dumps(manifest, indent=2) + "\n")
         db.execute("BEGIN IMMEDIATE")
-        if campaign:
+        if campaign and spec.get("confirmation"):
+            if db.execute("""UPDATE campaign_confirmations SET outcome=?, evidence_sha256=?
+                WHERE campaign=? AND loop_id=? AND outcome IS NULL""",
+                (report["outcome"], evidence_digest, campaign, loop_id)).rowcount != 1:
+                raise ValueError("confirmation has already been recorded")
+            db.execute("UPDATE campaigns SET status=? WHERE id=? AND status='confirming'",
+                       ("target_achieved" if report["outcome"] == "pass" else "human_review", campaign))
+        elif campaign:
             from research_campaign import record
             record(db, campaign, loop_id, report["outcome"], evidence_digest, in_transaction=True)
         db.execute("UPDATE local_benchmarks SET outcome=? WHERE loop_id=?", (report["outcome"], loop_id))
@@ -301,7 +313,7 @@ def process_local_benchmark(db, lock_fd, state):
             db.rollback()
         db.execute("BEGIN IMMEDIATE")
         if campaign:
-            db.execute("UPDATE campaigns SET status='human_review' WHERE id=? AND status='active'", (campaign,))
+            db.execute("UPDATE campaigns SET status='human_review' WHERE id=? AND status IN ('active','confirming')", (campaign,))
         db.execute("UPDATE jobs SET state='failed',finished_at=unixepoch(),detail=? WHERE id=?",
                    (f"Operational failure: {stage}. No automatic rerun.", job))
         db.commit()
@@ -768,6 +780,7 @@ def main():
     parser.add_argument("--contract-sha256")
     parser.add_argument("--proposal-round", help="Completed campaign proposal round used to design this trusted trial")
     parser.add_argument("--stage", action="store_true", help="Stage a pre-approved campaign trial for automatic dispatch")
+    parser.add_argument("--confirm-panel-sha256", help="Approve a separate sealed confirmation panel")
     parser.add_argument("--local-title", help="Local-only experiment title; never sent to a provider")
     parser.add_argument("--runner", type=Path)
     parser.add_argument("--runner-sha256")
@@ -789,6 +802,11 @@ def main():
     args = parser.parse_args()
     if args.stage and (args.action != "local-benchmark-enqueue" or not args.campaign):
         parser.error("--stage requires a campaign benchmark")
+    if args.confirm_panel_sha256 is not None and (
+            args.action != "local-benchmark-enqueue" or not args.campaign or args.stage
+            or args.proposal_round or args.adaptive_branches
+            or not re.fullmatch(r"[0-9a-f]{64}", args.confirm_panel_sha256)):
+        parser.error("confirmation requires a campaign, a sealed panel hash, and no staged successor or proposal")
     CHILD_TIMEOUT = max(1, args.child_timeout)
     os.umask(0o077)
     state = args.state.expanduser().resolve()
@@ -903,17 +921,20 @@ def main():
                 db.commit()
             elif args.action == "campaign-stop":
                 db.execute("BEGIN IMMEDIATE")
-                if db.execute("UPDATE campaigns SET status='stopped' WHERE id=? AND status='active'",
+                if db.execute("UPDATE campaigns SET status='stopped' WHERE id=? AND status IN ('active','confirmation_required','confirming')",
                               (args.id,)).rowcount != 1:
                     parser.error("campaign is not active")
                 db.execute("""UPDATE jobs SET state='failed', detail='loop stopped',finished_at=unixepoch()
                     WHERE state IN ('queued','running') AND id IN (
                     SELECT 'loop:' || loop_id || ':1' FROM campaign_members WHERE campaign=?
                     UNION ALL SELECT 'loop:' || loop_id || ':review' FROM campaign_members WHERE campaign=?
-                    UNION ALL SELECT job_id FROM campaign_proposals WHERE campaign=?)""",
-                    (args.id, args.id, args.id))
+                    UNION ALL SELECT job_id FROM campaign_proposals WHERE campaign=?
+                    UNION ALL SELECT 'loop:' || loop_id || ':1' FROM campaign_confirmations WHERE campaign=?)""",
+                    (args.id, args.id, args.id, args.id))
                 db.execute("""UPDATE research_loops SET status='stopped' WHERE status IN ('active','staged')
                     AND id IN (SELECT loop_id FROM campaign_members WHERE campaign=?)""", (args.id,))
+                db.execute("""UPDATE research_loops SET status='stopped' WHERE status='active'
+                    AND id IN (SELECT loop_id FROM campaign_confirmations WHERE campaign=?)""", (args.id,))
                 db.commit()
             elif args.action == "campaign-status":
                 row = db.execute("""SELECT c.status,c.trial_limit,COUNT(t.identity)
@@ -959,7 +980,25 @@ def main():
                                     reviewer=args.reviewer, public_brief=public, timeout=args.benchmark_timeout)
                         if args.proposal_round and not args.campaign:
                             parser.error("proposal rounds must belong to a campaign")
-                        if args.campaign:
+                        if args.confirm_panel_sha256:
+                            winner = db.execute("""SELECT t.evidence_sha256,b.spec FROM campaigns c
+                                JOIN campaign_trials t ON t.campaign=c.id AND t.outcome='pass'
+                                JOIN local_benchmarks b ON b.loop_id=t.identity
+                                WHERE c.id=? AND c.status='confirmation_required'""", (args.campaign,)).fetchone()
+                            if not winner:
+                                parser.error("campaign must have an audited development pass awaiting confirmation")
+                            winner_spec = json.loads(winner[1])
+                            if (args.contract_sha256 != winner_spec["contract_sha256"]
+                                    or args.runner_sha256 == winner_spec["runner_sha256"]
+                                    or args.auditor_sha256 == winner_spec["auditor_sha256"]):
+                                parser.error("confirmation needs the frozen contract and separate pinned programs")
+                            db.execute("INSERT INTO campaign_confirmations(campaign,loop_id) VALUES (?,?)",
+                                       (args.campaign, args.id))
+                            db.execute("UPDATE campaigns SET status='confirming' WHERE id=?", (args.campaign,))
+                            spec.update(campaign=args.campaign, contract_sha256=args.contract_sha256, reviewer=None,
+                                        confirmation=dict(panel_sha256=args.confirm_panel_sha256,
+                                                          development_evidence_sha256=winner[0]))
+                        elif args.campaign:
                             if (args.adaptive_branches or not re.fullmatch(r"[0-9a-f]{64}", args.contract_sha256 or "")
                                     or args.reviewer not in ("codex", "antigravity")):
                                 parser.error("campaign trials require a pinned contract and Codex or Antigravity review")

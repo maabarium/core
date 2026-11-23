@@ -23,6 +23,9 @@ def initialize(db):
         CREATE INDEX IF NOT EXISTS campaign_proposals_by_campaign ON campaign_proposals(campaign);
         CREATE TABLE IF NOT EXISTS campaign_adaptive (
             campaign TEXT PRIMARY KEY REFERENCES campaigns(id), public_brief TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS campaign_confirmations (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id), loop_id TEXT NOT NULL UNIQUE,
+            outcome TEXT, evidence_sha256 TEXT);
     """)
 
 

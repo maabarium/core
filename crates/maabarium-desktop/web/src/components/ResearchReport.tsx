@@ -122,6 +122,7 @@ export function ResearchReport() {
               <p>{campaign.audited_trials} of {campaign.limit} audited trials · {
                 campaign.status === "target_achieved" ? "Target achieved" :
                 campaign.status === "confirmation_required" ? "Development pass; sealed confirmation required" :
+                campaign.status === "confirming" ? "Sealed confirmation pending" :
                 campaign.status === "human_review" ? "Needs review" :
                 campaign.status === "stopped" ? "Stopped" : "Active"
               }</p>

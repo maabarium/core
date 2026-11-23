@@ -18,6 +18,8 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "subscription_lane.py
 
 
 class SubscriptionLaneTest(unittest.TestCase):
+    def test_adaptive_success_requires_separate_confirmation(self):
+        self.managed_benchmark(campaign=True, decision="confirm")
     def test_adaptive_start_is_explicit_and_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = [sys.executable, str(SCRIPT), "--state", tmp]
@@ -213,7 +215,7 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
             adaptive_args = ()
             limit = 1 if decision == "limit" else 2
             if campaign:
-                create_args = ("--public-target", "Public adaptive brief") if decision == "adaptive" else ()
+                create_args = ("--public-target", "Public adaptive brief") if decision in ("adaptive", "confirm") else ()
                 successful("campaign-create", "--id", "demo", "--trial-limit", str(limit), *create_args)
                 adaptive_args = ("--campaign", "demo", "--contract-sha256", "a" * 64)
                 if decision in ("stage", "stage-next"):
@@ -258,6 +260,25 @@ pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("
                                      {"status": "stopped", "limit": 2, "audited_trials": 0})
                     return
                 successful("tick")
+                if decision == "confirm":
+                    status = lambda: json.loads(successful("campaign-status", "--id", "demo"))
+                    self.assertEqual(status()["status"], "confirmation_required")
+                    with sqlite3.connect(state / "queue.db") as db:
+                        digest, = db.execute("SELECT evidence_sha256 FROM campaign_trials").fetchone()
+                    fixture.write_text(fixture.read_text().replace(
+                        "baseline=[", "sealed_fixture=True,\n    baseline=["))
+                    auditor.write_text(auditor.read_text().replace(
+                        "complete=True", f"complete=True, panel_sha256={'c' * 64!r}, development_evidence_sha256={digest!r}"))
+                    successful("local-benchmark-enqueue", "--id", "confirmation",
+                               "--local-title", "Sealed confirmation", "--public-target", "Public synthetic check",
+                               "--reviewer", "codex", "--runner", str(fixture),
+                               "--runner-sha256", hashlib.sha256(fixture.read_bytes()).hexdigest(),
+                               "--auditor", str(auditor), "--auditor-sha256", hashlib.sha256(auditor.read_bytes()).hexdigest(),
+                               "--confirm-panel-sha256", "c" * 64, *adaptive_args)
+                    self.assertEqual(status()["status"], "confirming")
+                    successful("tick")
+                    self.assertEqual(status(), {"status": "target_achieved", "limit": 2, "audited_trials": 1})
+                    return
                 if decision == "adaptive":
                     db = sqlite3.connect(state / "queue.db")
                     pairs = db.execute("SELECT lane,prompt FROM jobs WHERE id LIKE 'proposal:demo:auto-after-1:%'").fetchall()

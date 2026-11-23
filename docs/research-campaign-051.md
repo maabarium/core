@@ -62,8 +62,13 @@ the request does not create a duplicate round or consume a trial.
 An adaptive development pass stops dispatch at **Sealed confirmation
 required**, not **Target achieved**. This prevents a search over many
 development trials from declaring success on the same evidence it used to
-choose the candidate. The separately pinned confirmation workflow is not
-yet implemented.
+choose the candidate. A trusted operator can enqueue the single sealed
+confirmation through the CLI with `--confirm-panel-sha256`, the original
+contract hash, and separate pinned runner and auditor executables. The auditor
+must bind its result to the approved panel and the winning development
+evidence. Confirmation stays local and does not consume another development
+trial. The auditor is trusted to verify panel separation and candidate
+identity; different file hashes alone do not prove those properties.
 The desktop can create campaigns, display counts, and approve a frozen trial
 through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
