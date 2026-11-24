@@ -30,6 +30,8 @@ Approve a research plan once and let Maabarium run and check successive experime
 - **Automatic trials:** Try new settings inside the approved bounds, skip repeats, and move on after a failed trial.
 - **Independent checks:** Check each result locally and require a pass on a separate final test before reporting success.
 - **Progress:** See audited trial counts and why a campaign is paused, blocked, or finished.
+- **Accessibility:** Read the selected update channel in either theme and confirm workflow group deletion once, in the app.
+- **Security:** Use the patched KaTeX version throughout math rendering.
 
 Autonomous campaigns require the companion worker from this release. See the [setup guide](https://github.com/maabarium/core/blob/desktop-v0.5.2/docs/AUTONOMOUS_CAMPAIGNS.md) to configure it and prepare a plan. Existing manual campaigns still work.
 

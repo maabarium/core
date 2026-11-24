@@ -7,6 +7,10 @@ it("renders report structure and math without activating provider-supplied HTML 
 
 - **Answer:** $A \to B$
 
+$$
+x + y
+$$
+
 ![remote](https://example.invalid/track.png)
 
 [link text](https://example.invalid/)
@@ -14,7 +18,8 @@ it("renders report structure and math without activating provider-supplied HTML 
 <iframe src="https://example.invalid/"></iframe>`} />);
   expect(screen.getByRole("heading", { name: "Example" })).toBeTruthy();
   expect(screen.getByRole("listitem")).toBeTruthy();
-  expect(container.querySelector("math")).not.toBeNull();
+  expect(container.querySelector(".katex:not(.katex-display) math")).toBeTruthy();
+  expect(container.querySelector(".katex-display math")).toBeTruthy();
   expect(container.querySelector("img, iframe, a")).toBeNull();
   expect(screen.getByText("link text")).toBeTruthy();
 });

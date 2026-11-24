@@ -311,6 +311,9 @@ body {
   border: 1px solid var(--line);
 }
 .maabarium-app .workspace-primary { background: var(--accent); color: var(--on-accent); }
+.maabarium-app .update-channel-button { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.maabarium-app .update-channel-button:not([aria-pressed="true"]):not(:disabled):hover { background: var(--subtle); }
+.maabarium-app .update-channel-button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .maabarium-app .workspace-secondary { background: var(--surface); color: var(--ink); }
 .maabarium-app .workspace-primary[data-run-state="running"] { background: var(--surface); color: var(--danger); }
 .workspace-heading button:disabled { opacity: 0.55; cursor: not-allowed; }
