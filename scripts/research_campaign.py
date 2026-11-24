@@ -56,6 +56,11 @@ def initialize(db):
             campaign TEXT NOT NULL, round INTEGER NOT NULL, reason TEXT NOT NULL,
             PRIMARY KEY(campaign,round),
             FOREIGN KEY(campaign,round) REFERENCES campaign_admissions(campaign,round));
+        CREATE TABLE IF NOT EXISTS campaign_replenishments (
+            campaign TEXT NOT NULL REFERENCES campaigns(id), ordinal INTEGER NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('queued','running','done','blocked')),
+            menu TEXT, report_sha256 TEXT,
+            PRIMARY KEY(campaign,ordinal));
     """)
 
 

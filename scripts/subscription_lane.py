@@ -1282,6 +1282,13 @@ def main():
                         (args.id, args.id)).fetchone()
                     if latest:
                         report["last_admission"]["reason"] = latest[0]
+                replenishment = db.execute("""SELECT ordinal,state,menu,report_sha256
+                    FROM campaign_replenishments WHERE campaign=? ORDER BY ordinal DESC LIMIT 1""",
+                    (args.id,)).fetchone()
+                if replenishment:
+                    number, phase, menu, pin = replenishment
+                    report["last_replenishment"] = dict(number=number, state=phase,
+                        candidates=len(json.loads(menu)) if menu is not None else 0, report_sha256=pin)
                 print(json.dumps(report))
             elif args.action == "enqueue":
                 if args.id.startswith("loop:"):

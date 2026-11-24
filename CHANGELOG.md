@@ -8,6 +8,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- Supervised campaigns can replenish exhausted menus through a pinned local preparer without resetting their ledger or trial cap.
+
 - A campaign supervisor that asks Codex for fresh candidates, has Antigravity review them, and uses an approved local vetter to admit new benchmark identities under one shared budget.
 
 ### Changed
