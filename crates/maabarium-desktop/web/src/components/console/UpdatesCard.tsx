@@ -68,7 +68,7 @@ export function UpdatesCard({
         <div className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
           Channel
         </div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
+        <div role="group" aria-label="Update channel" className="mt-2 grid grid-cols-2 gap-2">
           {UPDATE_CHANNEL_OPTIONS.map((channel) => {
             const selected = selectedChannel === channel;
             return (
@@ -77,7 +77,8 @@ export function UpdatesCard({
                 type="button"
                 onClick={() => onSelectChannel(channel)}
                 disabled={savingPreferences}
-                className={`rounded-lg border px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] transition ${selected ? "border-teal-400/30 bg-teal-500/10 text-teal-100" : "border-white/10 bg-slate-950/60 text-slate-400 hover:bg-white/5"} disabled:cursor-not-allowed disabled:opacity-70`}
+                aria-pressed={selected}
+                className="update-channel-button rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-wider transition disabled:cursor-not-allowed"
               >
                 {channel}
               </button>

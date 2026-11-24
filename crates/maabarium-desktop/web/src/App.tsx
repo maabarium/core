@@ -2125,13 +2125,7 @@ export default function App() {
                 })();
               }}
               onDeleteGroup={(groupName) => {
-                if (
-                  window.confirm(
-                    `Delete workflow run group "${groupName}"?`,
-                  )
-                ) {
-                  void deleteRunGroup(groupName);
-                }
+                void deleteRunGroup(groupName);
               }}
               onSetSchedule={(groupName, scheduleType, value, enabled) =>
                 void setRunGroupSchedule(
