@@ -141,6 +141,9 @@ print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, devel
         self.assertEqual(self.query("SELECT distinct lane FROM jobs ORDER BY lane"),
                          [("Local evidence",), ("antigravity",), ("codex",)])
         self.assertEqual(self.query("SELECT outcome FROM campaign_confirmations"), [("pass",)])
+        self.assertEqual(self.query("SELECT DISTINCT status FROM research_loops"), [("done",)])
+        self.assertEqual(self.query("SELECT DISTINCT detail FROM jobs WHERE lane='Local evidence'"),
+                         [("Independent audit recorded in the campaign",)])
         before = self.query("SELECT id, state, attempts FROM jobs ORDER BY id")
         self.cli("tick")
         self.assertEqual(before, self.query("SELECT id, state, attempts FROM jobs ORDER BY id"))

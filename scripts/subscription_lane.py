@@ -445,6 +445,7 @@ def process_local_benchmark(db, lock_fd, state):
             parameter_file.chmod(0o400)
             parameter_digest = hashlib.sha256(parameter_bytes).hexdigest()
         confirmation = spec.get("confirmation") or {}
+        development_panel = spec.get("development_panel_sha256")
         if confirmation:
             stage = "sealed confirmation development binding"
             # Both manual entry points historically stored only the digest.
@@ -507,12 +508,12 @@ def process_local_benchmark(db, lock_fd, state):
                         or parameter_file.stat().st_size != len(parameter_bytes)
                         or parameter_file.read_bytes() != parameter_bytes):
                     raise ValueError("parameter audit identity mismatch")
-            if confirmation := spec.get("confirmation"):
+            if confirmation:
                 if (evidence_digest == confirmation["development_evidence_sha256"]
                         or not isinstance(report, dict) or report.pop("panel_sha256", None) != confirmation["panel_sha256"]
                         or report.pop("development_evidence_sha256", None) != confirmation["development_evidence_sha256"]):
                     raise ValueError("confirmation identity mismatch")
-            if development_panel := spec.get("development_panel_sha256"):
+            if development_panel:
                 if not isinstance(report, dict) or report.pop("panel_sha256", None) != development_panel:
                     raise ValueError("development panel identity mismatch")
             audit_type = "Matched-learner audit"
@@ -560,9 +561,13 @@ def process_local_benchmark(db, lock_fd, state):
             if spec.get("confirmation_plan") and report["outcome"] == "pass":
                 queue_preapproved_confirmation(db, campaign, loop_id, spec, evidence_digest)
         db.execute("UPDATE local_benchmarks SET outcome=? WHERE loop_id=?", (report["outcome"], loop_id))
+        detail = ("Local check complete; waiting for AI evaluation" if reviewer_lane
+                  else "Local check complete; waiting for human review")
+        if development_panel or confirmation.get("supervised") is True:
+            db.execute("UPDATE research_loops SET status='done' WHERE id=? AND status='active'", (loop_id,))
+            detail = "Independent audit recorded in the campaign"
         db.execute("UPDATE jobs SET state='done',finished_at=unixepoch(),detail=?,result=? WHERE id=?",
-                   ("Local check complete; waiting for AI evaluation" if reviewer_lane
-                    else "Local check complete; waiting for human review",
+                   (detail,
                     f"Finding: **Local gate {report['outcome']}**\n\n" + report["report"].strip(), job))
         if "adaptive" in spec:
             branch = spec["adaptive"][report["outcome"]].copy()
