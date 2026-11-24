@@ -371,6 +371,7 @@ export function ResearchReport() {
                 campaign.status === "policy_pending" ? "Waiting for the worker to check the approved plan" :
                 campaign.autonomy_phase === "trial" ? "Approved trial queued or running" :
                 campaign.autonomy_phase === "vetting" ? "Checking the next candidate before it can run" :
+                campaign.autonomy_phase === "replenishing" ? "Preparing new candidates" :
                 campaign.autonomy_phase === "waiting_for_worker" ? "Waiting for the campaign worker" :
                 campaign.autonomy_phase === "discovery" ? "Selecting the next experiment" : "Active"
               }</p>

@@ -66,12 +66,19 @@ else:
     def status(self):
         return json.loads(self.cli("campaign-status", "--id", "test").stdout)
 
-    def launch(self, mode="normal", limit=4, rounds=5, menu=None):
+    def launch(self, mode="normal", limit=4, rounds=5, menu=None, replenishments=None):
         vetter = self.executable("vetter", rf"""
 import hashlib, json, pathlib, sys
 proposal = json.load(sys.stdin)
-number = int(proposal["id"].split("-")[-1])
 mode = {mode!r}
+if sys.argv[1:] == ["--replenish"]:
+    assert proposal["schema"] == 1 and "test-1" in proposal["offered"]
+    assert proposal["reviewed"]["test-1"] == "cost"
+    menu = {{"test-1": "reused ID"}} if mode == "repeat-menu" else (
+        {{}} if mode == "empty-menu" else {{"test-2": "fresh exact learner"}})
+    print(json.dumps(dict(candidates=menu)))
+    sys.exit(0)
+number = int(proposal["id"].split("-")[-1])
 sha = lambda data: hashlib.sha256(data).hexdigest()
 if number == 1:
     print(json.dumps(dict(outcome="reject", reason="cost")))
@@ -124,6 +131,8 @@ print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, devel
             vetter_sha256=digest(vetter.read_bytes()), metrics={"wrong": ["eq", 0]})
         if menu is not None:
             policy["candidates"] = menu
+        if replenishments is not None:
+            policy["replenishments"] = replenishments
         raw = json.dumps(policy).encode()
         path = self.root / "policy.json"
         path.write_bytes(raw)
@@ -203,6 +212,42 @@ print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, devel
                          ("blocked", 1, 2))
         self.assertEqual(self.query("SELECT reason FROM campaign_admission_rejections"), [("cost",)])
         self.assertIn("No untried designs", status["reason"])
+
+    def test_replenishment_preserves_campaign_and_charges_one_trial(self):
+        self.launch(menu={"test-1": "first method"}, replenishments=1)
+        status = self.converge()
+        self.assertEqual((status["status"], status["audited_trials"], status["limit"]), ("blocked", 1, 4))
+        self.assertEqual(self.query("SELECT proposal_id,state FROM campaign_admissions ORDER BY round"),
+                         [("test-1", "rejected"), ("test-2", "admitted")])
+        self.assertEqual(self.query("SELECT count(*) FROM campaigns"), [(1,)])
+        self.assertEqual(status["last_replenishment"]["candidates"], 1)
+        receipt = self.state / "campaign-replenishments" / "test" / "1" / "replenishment.json"
+        self.assertEqual(status["last_replenishment"]["report_sha256"], digest(receipt.read_bytes()))
+
+    def test_replenishment_refuses_reuse_or_reports_no_more(self):
+        for mode, expected in (("repeat-menu", "blocked"), ("empty-menu", "done")):
+            with self.subTest(mode=mode):
+                self.state = self.root / mode
+                self.launch(mode=mode, menu={"test-1": "first method"}, replenishments=2)
+                status = self.converge()
+                self.assertEqual((status["status"], status["audited_trials"]), ("blocked", 0))
+                self.assertEqual(status["last_replenishment"]["state"], expected)
+                self.assertEqual(self.query("SELECT count(*) FROM campaign_replenishments"), [(1,)])
+
+    def test_interrupted_replenishment_is_not_replayed(self):
+        self.launch(menu={"test-1": "first method"}, replenishments=1)
+        for _ in range(10):
+            if self.status()["phase"] == "replenishing":
+                break
+            self.cli("tick")
+        else:
+            self.fail("did not reach replenishment")
+        self.query("UPDATE campaign_replenishments SET state='running'")
+        self.cli("tick")
+        status = self.status()
+        self.assertEqual((status["status"], status["audited_trials"]), ("blocked", 0))
+        self.assertEqual(status["last_replenishment"]["state"], "blocked")
+        self.assertFalse((self.state / "campaign-replenishments").exists())
 
     def test_malformed_admissions_never_queue_evidence(self):
         for mode in ("error", "escape", "rules"):

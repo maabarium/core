@@ -124,6 +124,7 @@ The policy contains `schema: 3`, `brief`, `rounds`, `trials`,
 | `vetter_sha256` | The reviewed program's SHA-256. Changed bytes stop the campaign. |
 | `vet_timeout` | Maximum reserved seconds for each vetting attempt, 1–300. |
 | `candidates` | Optional public menu of up to 24 named, locally supported designs. Names and short descriptions can be shared; no local paths. |
+| `replenishments` | Optional limit (1–200) on preparing a replacement menu. Requires an initial `candidates` menu. |
 
 Codex proposes a public mechanism, hypothesis, exact control and rejection
 test. Antigravity checks the proposal. Their agreement only allows the
@@ -160,6 +161,19 @@ Subsequent proposals receive bounded, built-in descriptions of rejection
 codes, not vetter logs or evidence files. When no untried design remains,
 the worker reports why it stopped instead of continuing to spend provider
 quota on unsupported ideas.
+
+With replenishment enabled, exhaustion runs the same pinned vetter with
+`--replenish`. Standard input is a bounded JSON request with `schema: 1`,
+`ordinal`, the previously `offered` IDs, and `reviewed` IDs mapped to
+built-in rejection codes or null. Return exactly `{"candidates":{...}}`
+with new, publicly describable IDs, or an empty object as the value of
+`candidates` if there are none. Names cannot be reoffered. No executable
+paths, source, raw evidence or policy edits are accepted via this mode.
+The same trusted research authority must prepare the next approved
+designs and still independently vet any selected candidate. Preparation,
+review and execution share the original budget and campaign ledger.
+An interrupted preparation is not replayed automatically; its receipt
+and bounded diagnostics are in the worker's private state.
 
 The vetter is a trusted research authority, not an unrestricted coding
 agent. It must itself enforce the study's independent comparator, checks,
