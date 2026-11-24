@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.5.2] - 2026-11-24
+
 Approve a research plan once and let Maabarium run and check successive experiments within the limits you set.
 
 - **Plan approval:** Open a plan in Research activity, choose who proposes and who checks, and decide when to pause for human review.
