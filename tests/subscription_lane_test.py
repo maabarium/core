@@ -177,6 +177,39 @@ class SubscriptionLaneTest(unittest.TestCase):
                              [("proposal:demo:auto-after-1:claude",),
                               ("proposal:demo:auto-after-1:deepseek",)])
 
+    def test_exhausted_catalog_reaches_review_without_more_provider_work(self):
+        advance = runpy.run_path(str(SCRIPT))["advance_campaigns"]
+        with sqlite3.connect(":memory:", isolation_level=None) as db:
+            db.executescript("""CREATE TABLE campaigns(id,status);
+                CREATE TABLE campaign_adaptive(campaign,public_brief);
+                CREATE TABLE campaign_members(loop_id,campaign,ordinal);
+                CREATE TABLE research_loops(id,status);
+                CREATE TABLE campaign_trials(campaign,identity,outcome);
+                CREATE TABLE local_benchmarks(loop_id,spec);
+                CREATE TABLE campaign_proposals(job_id PRIMARY KEY,campaign);
+                CREATE TABLE jobs(id PRIMARY KEY,lane,detail,prompt,model,effort,state DEFAULT 'queued',finished_at);
+                INSERT INTO campaigns VALUES ('demo','active');
+                INSERT INTO campaign_adaptive VALUES ('demo','Synthetic brief');
+                INSERT INTO campaign_members VALUES ('first','demo',1);
+                INSERT INTO research_loops VALUES ('first','active');
+                INSERT INTO campaign_trials VALUES ('demo','first','fail');
+                INSERT INTO local_benchmarks VALUES ('first','{"selected_round":"initial"}');
+                INSERT INTO jobs(id,lane,state) VALUES
+                    ('loop:first:1','Local evidence','done'),('loop:first:review','codex','queued'),
+                    ('proposal:demo:initial:codex','codex','done'),
+                    ('proposal:demo:auto-after-1:codex','codex','queued');
+                INSERT INTO campaign_proposals VALUES ('proposal:demo:initial:codex','demo'),
+                    ('proposal:demo:auto-after-1:codex','demo');""")
+            advance(db)
+            advance(db)
+            self.assertEqual(db.execute("SELECT status FROM campaigns").fetchone(), ("human_review",))
+            self.assertEqual(db.execute("SELECT identity,outcome FROM campaign_trials").fetchall(),
+                             [("first", "fail")])
+            self.assertEqual(db.execute("SELECT id,state FROM jobs ORDER BY id").fetchall(),
+                             [("loop:first:1", "done"), ("loop:first:review", "queued"),
+                              ("proposal:demo:auto-after-1:codex", "failed"),
+                              ("proposal:demo:initial:codex", "done")])
+
     def test_followup_proposals_copy_saved_provider_settings(self):
         queue = runpy.run_path(str(SCRIPT))["queue_campaign_proposals"]
         with sqlite3.connect(":memory:") as db:

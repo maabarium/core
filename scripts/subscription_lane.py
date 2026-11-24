@@ -284,6 +284,24 @@ def advance_campaigns(db):
                 JOIN research_loops l ON l.id=m.loop_id
                 WHERE m.campaign=c.id AND l.status='active' AND j.state IN ('queued','running'))
         )""")
+        # A frozen catalog cannot acquire new entries once selection starts.
+        # Reaching its end is a review checkpoint, not open-ended discovery.
+        exhausted = db.execute("""UPDATE campaigns AS c SET status='human_review'
+            WHERE c.status='active'
+            AND EXISTS (SELECT 1 FROM campaign_trials t JOIN local_benchmarks b ON b.loop_id=t.identity
+                WHERE t.campaign=c.id AND t.outcome='fail'
+                AND json_extract(b.spec,'$.selected_round') IS NOT NULL)
+            AND NOT EXISTS (SELECT 1 FROM campaign_members m JOIN research_loops l ON l.id=m.loop_id
+                JOIN jobs j ON j.id='loop:' || l.id || ':1'
+                WHERE m.campaign=c.id AND l.status IN ('active','staged','catalog')
+                AND j.state IN ('queued','running'))
+            RETURNING id""").fetchall()
+        for (campaign,) in exhausted:
+            prefix = f"proposal:{campaign}:auto-after-"
+            db.execute("""UPDATE jobs SET state='failed', detail='No approved benchmarks remain',
+                finished_at=unixepoch() WHERE state IN ('queued','running') AND id IN
+                (SELECT job_id FROM campaign_proposals WHERE campaign=? AND substr(job_id,1,length(?))=?)""",
+                (campaign, prefix, prefix))
         db.execute("""UPDATE jobs SET state='failed',detail='loop stopped',finished_at=unixepoch()
             WHERE state='queued' AND id IN (
                 SELECT 'loop:' || l.id || ':1' FROM research_loops l JOIN campaign_members m ON m.loop_id=l.id

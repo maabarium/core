@@ -241,7 +241,9 @@ or changed parameters fail closed rather than counting as a trial.
 The worker dispatches a catalog trial only when both configured providers
 return the same available ID. Disagreement, invalid IDs, or failed proposals
 stop at review. After an audited failure it requests another selection from
-the remaining catalog, unless the trial limit has been reached.
+the remaining catalog. If no approved benchmarks remain, it stops for
+human review without asking providers for another selection. The trial
+limit is a maximum, not a requirement to run that many benchmarks.
 An adaptive development pass stops dispatch at **Sealed confirmation
 required**, not **Target achieved**. This prevents a search over many
 development trials from declaring success on the same evidence it used to
