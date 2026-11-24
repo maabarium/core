@@ -1,12 +1,13 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use maabarium_core::error::UpdaterError;
+use maabarium_core::logging::cli_log_path;
 use maabarium_core::telegram::TelegramConfig;
 use maabarium_core::{
     ApiKeyStore, BlueprintFile, Engine, EngineConfig, EngineTimingSummary, EvaluatorRegistry,
     ExportFormat, GitDependencyEnsureOutcome, Persistence, PromotionOutcome, ReadinessLevel,
     ReadinessScanner, SecretStore, UpdaterConfiguration, analyze_workspace, apply_all_fixes,
-    check_for_cli_update, default_db_path, default_log_path, detect_recommended_profile,
-    ensure_git_dependency, install_cli_update,
+    check_for_cli_update, default_db_path, detect_recommended_profile, ensure_git_dependency,
+    install_cli_update,
 };
 use secrecy::{ExposeSecret, SecretString};
 use std::io::{self, Read, Write};
@@ -236,9 +237,8 @@ fn cli_updater_configuration() -> Result<UpdaterConfiguration, UpdaterError> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _log_guard = init_tracing()?;
-
     let cli = Cli::parse();
+    let _log_guard = init_tracing();
 
     match cli.command {
         Commands::Run { blueprint_path, db } => {
@@ -448,42 +448,61 @@ fn ensure_git_runtime_dependency() -> anyhow::Result<()> {
     }
 }
 
-fn init_tracing() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
-    let log_path = default_log_path();
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let log_directory = log_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Log path is missing a parent directory"))?;
-    let log_file_name = log_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Log path is missing a file name"))?;
-
-    let file_appender = tracing_appender::rolling::never(log_directory, log_file_name);
-    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
-    let env_filter =
-        tracing_subscriber::EnvFilter::from_default_env().add_directive("maabarium=info".parse()?);
+fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    let log_path = cli_log_path();
+    let (file_writer, guard) = log_path
+        .as_deref()
+        .and_then(|path| match open_cli_log(path) {
+            Ok(file) => Some(tracing_appender::non_blocking(file)),
+            Err(error) => {
+                eprintln!(
+                    "Could not open CLI log {}: {error}; using stderr",
+                    path.display()
+                );
+                None
+            }
+        })
+        .unzip();
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("maabarium=info".parse().expect("static tracing directive"));
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)
-                .with_writer(std::io::stdout),
+                .with_writer(std::io::stderr),
         )
-        .with(
+        .with(file_writer.map(|writer| {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_target(true)
-                .with_writer(file_writer),
-        )
+                .with_writer(writer)
+        }))
         .init();
 
-    info!(log_path = %log_path.display(), "Tracing initialized");
-    Ok(guard)
+    if let Some(path) = log_path.filter(|_| guard.is_some()) {
+        info!(log_path = %path.display(), "Tracing initialized");
+    }
+    guard
+}
+
+fn open_cli_log(path: &std::path::Path) -> io::Result<std::fs::File> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing CLI log directory"))?;
+    let mut directories = std::fs::DirBuilder::new();
+    directories.recursive(true);
+    let mut file = std::fs::OpenOptions::new();
+    file.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        directories.mode(0o700);
+        file.mode(0o600);
+    }
+    directories.create(parent)?;
+    file.open(path)
 }
 
 fn select_evaluator(

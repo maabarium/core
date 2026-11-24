@@ -32,6 +32,7 @@ Approve a research plan once and let Maabarium run and check successive experime
 - **Progress:** See audited trial counts and why a campaign is paused, blocked, or finished.
 - **Accessibility:** Read the selected update channel in either theme and confirm workflow group deletion once, in the app.
 - **Security:** Use the patched KaTeX version throughout math rendering.
+- **Bundled CLI:** Write logs to your user account rather than the build machine's path, and keep commands usable if the log cannot be written.
 
 Autonomous campaigns require the companion worker from this release. See the [setup guide](https://github.com/maabarium/core/blob/desktop-v0.5.2/docs/AUTONOMOUS_CAMPAIGNS.md) to configure it and prepare a plan. Existing manual campaigns still work.
 
