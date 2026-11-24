@@ -413,8 +413,18 @@ def process_local_benchmark(db, lock_fd, state):
             parameter_file.chmod(0o400)
             parameter_digest = hashlib.sha256(parameter_bytes).hexdigest()
         confirmation = spec.get("confirmation") or {}
-        if development_id := confirmation.get("development_loop_id"):
+        if confirmation:
             stage = "sealed confirmation development binding"
+            # Both manual entry points historically stored only the digest.
+            # Resolve the source from the audited ledger, never a user path.
+            winner = db.execute("""SELECT identity FROM campaign_trials
+                WHERE campaign=? AND outcome='pass' AND evidence_sha256=? LIMIT 2""",
+                (campaign, confirmation["development_evidence_sha256"])).fetchall()
+            if len(winner) != 1:
+                raise ValueError
+            development_id, = winner[0]
+            if confirmation.get("development_loop_id", development_id) != development_id:
+                raise ValueError
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", development_id):
                 raise ValueError
             source = state / "local-evidence" / development_id / "runner.json"

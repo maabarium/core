@@ -681,7 +681,10 @@ else:
                     self.assertEqual(status()["status"], "confirmation_required")
                     with sqlite3.connect(state / "queue.db") as db:
                         digest, = db.execute("SELECT evidence_sha256 FROM campaign_trials").fetchone()
-                    fixture.write_text(fixture.read_text().replace(
+                    fixture.write_text(fixture.read_text().replace("import json", (
+                        "import hashlib, json\n"
+                        f"assert hashlib.sha256(open('development.json', 'rb').read()).hexdigest() == {digest!r}"
+                    )).replace(
                         "baseline=[", "sealed_fixture=True,\n    baseline=["))
                     reported_panel = ("d" if decision == "confirm-tamper" else "c") * 64
                     auditor.write_text(auditor.read_text().replace(

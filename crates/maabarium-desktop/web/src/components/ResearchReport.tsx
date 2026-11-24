@@ -221,7 +221,7 @@ export function ResearchReport() {
                     value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
                 </label>
                 <label className="grid min-w-0 gap-1 text-sm">Pause for review every
-                  <input className="h-10 w-full min-w-0 rounded border px-2" type="number" min={1} max={campaignLimit}
+                  <input className="h-10 w-full min-w-0 rounded border px-2 placeholder:text-[var(--muted)] placeholder:opacity-100" type="number" min={1} max={campaignLimit}
                     placeholder="Final review only" value={reviewEvery} aria-describedby="campaign-review-interval-help"
                   onChange={event => setReviewEvery(event.target.value)} />
                 </label>

@@ -49,8 +49,9 @@ results.
 - [x] Walk through the offline practice exercise in the native app using an
   isolated profile: first test, separate final check, and finish. Zero jobs
   were created.
-- [ ] Finish native visual, security, and performance release checks on the
-  final build before publishing.
+- [x] Complete the release-candidate campaign QA: native light and dark
+  layouts, accessible controls, transactional stop, final-check evidence
+  binding, dependency advisories, and a full 200-trial report.
 - [x] Verify the published 0.5.0 app upgrades in place to the exact notarized
   0.5.1 verification archive, without changing production or the installed app.
 - [x] Build an optimized app-only QA bundle and verify the campaign controls
@@ -116,6 +117,23 @@ credentials configured, Gatekeeper rejected the unnotarized bundle, and
 there was no stapled ticket. No artifact was installed or published.
 
 ## Current implementation
+
+Final campaign QA used an optimized app-only 0.5.1 build and a disposable
+macOS profile. The campaign form was aligned in light mode; the dark-mode
+stop prompt named both choices and preserved completed evidence. The
+test campaign reached Stopped with zero jobs. A synthetic campaign at the
+200-trial limit displayed Needs review and retained all 200 visible
+outcomes. One refresh took 0.68 seconds including accessibility automation;
+this is a local interaction observation, not a latency benchmark.
+The optimized build was rebuilt after raising the review placeholder
+contrast in both themes.
+
+The worker regression confirmed that a manually approved final check now
+receives the audited development bytes, resolved from the same campaign
+and checked against its recorded digest before either executable runs.
+Rust dependency policy and frontend tests passed; the production frontend
+dependency scan reported one low-severity item and no high-severity items.
+No production profile or updater channel was modified during QA.
 
 Upgrade QA used GitHub verification run `45331718204` on commit `aa1db38`.
 The independently verified 0.5.1 updater archive SHA-256 was
@@ -271,8 +289,8 @@ through **Set up a local benchmark → Attach to a research campaign**. The
 optional completed-round ID pins the two proposal results to that trial.
 To stage a catalog entry from the desktop, choose **Let the campaign providers
 select this candidate** and enter a public-safe candidate ID before starting
-discovery. Preparing new benchmark executables from free-form proposals and
-native release verification remain open.
+discovery. Preparing new benchmark executables from free-form proposals is
+outside this release.
 
 The synthetic end-to-end worker test
 `test_full_adaptive_catalog_with_subscriptions_and_confirmation` exercises
@@ -281,5 +299,5 @@ sealed confirmation across independent worker invocations. Its provider
 clients are fixtures, not live accounts. The test audits two development
 trials and one separate confirmation; it does not run CODA evidence.
 
-Do not publish 0.5.1 or start the real 200-trial CODA campaign until these
-acceptance requirements are implemented and verified.
+The stable publish workflow signs and notarizes the actual release artifact.
+Successful release verification does not imply a CODA research result.

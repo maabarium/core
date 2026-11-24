@@ -6,27 +6,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-- Run reviewed synthetic membership packages through the campaign audit contract without treating them as CODA evidence.
+Maabarium can now run a bounded research campaign against approved benchmarks, record what happened, and stop for your review.
 
-- Prepare and independently review exact membership benchmarks as well as subset-existence benchmarks.
+- **Campaigns:** Set trial and local benchmark time limits, pause for review, or stop queued work from Research activity.
+- **Provider choice:** Choose two suggestion providers and save their model settings; paid requests require explicit consent.
+- **Independent checks:** Run pinned benchmarks and use a separate final check before declaring a result confirmed.
+- **Reports:** See trial decisions, operational failures, and token usage when the provider reports it.
+- **Practice:** Try a ready-made campaign offline, with no provider account or files required.
+- **Fixes:** Exhausted catalogs stop for review, and manually approved final checks receive the verified development evidence.
 
-- Align the campaign setup fields and offer an explicit reasoning-off setting for DeepSeek.
-
-- Review prepared data-only benchmark packages against trusted templates without executing their programs.
-
-- Reserve local benchmark and checker time against a shared campaign budget before either program runs.
-- Prepare new data-only subset benchmarks from a bounded JSON fixture and fixed trusted templates.
-
-- Pause campaigns after a configurable number of audited trials and approve or stop from Research activity.
-
-- Choose two independent adaptive campaign providers from Codex, Claude, Antigravity, Muse, and DeepSeek, with provider-specific model and effort settings and explicit consent for paid requests.
-
-- Save optional subscription model settings for all suggestion rounds in a research campaign.
-
-- Reject provider selections with duplicate candidate or parameter fields before dispatching a benchmark.
-
-- Research activity separates audited rejections from operational failures and shows reported suggestion token usage by provider for each campaign.
-- Campaign reports show ordered trial outcomes and identify how the separate final check ended.
+For unattended campaigns, update the companion subscription worker from the same source release.
 
 ## [0.5.0] - 2026-11-22
 
