@@ -43,6 +43,9 @@ def decode_policy(data, expected, pin_program, unique_fields):
         raise ValueError("policy must match the separately approved SHA-256 (64 KiB maximum)")
     policy = json.loads(data, object_pairs_hook=unique_fields)
     schema = policy.get("schema") if isinstance(policy, dict) else None
+    if type(schema) is int and schema == 3:
+        from campaign_supervisor import validate_policy
+        return validate_policy(policy, pin_program)
     fields(policy, "schema brief rounds trials lifetime_seconds work_seconds templates"
            + (" variants" if schema == 1 else ""))
     if (type(schema) is not int or schema not in (1, 2)
@@ -204,7 +207,7 @@ def halt(db, campaign, reason):
         (campaign, campaign))
 
 
-def advance(db, queue_proposals, parse_choice, providers, details, enabled_lanes):
+def advance(db, queue_proposals, parse_choice, providers, details, enabled_lanes, unique_fields):
     rows = db.execute("""SELECT a.campaign,a.policy,a.policy_sha256,a.deadline,a.round,c.status
         FROM campaign_autonomy a JOIN campaigns c ON c.id=a.campaign
         WHERE c.status IN ('active','confirming')
@@ -224,8 +227,13 @@ def advance(db, queue_proposals, parse_choice, providers, details, enabled_lanes
                 continue
             db.execute("""UPDATE campaign_autonomy SET phase='discovery',reason=NULL
                 WHERE campaign=? AND phase='waiting_for_worker'""", (campaign,))
-            advance_active(db, campaign, json.loads(raw), policy_sha, round_no,
-                           queue_proposals, parse_choice, providers, details)
+            policy = json.loads(raw)
+            if policy["schema"] == 3:
+                from campaign_supervisor import advance as supervise
+                supervise(db, campaign, policy, round_no, queue_proposals, providers, details, unique_fields)
+            else:
+                advance_active(db, campaign, policy, policy_sha, round_no,
+                               queue_proposals, parse_choice, providers, details)
 
 
 def advance_active(db, campaign, policy, policy_sha, round_no, queue, parse, providers, details):
@@ -277,13 +285,16 @@ def advance_active(db, campaign, policy, policy_sha, round_no, queue, parse, pro
                (next_round, campaign))
 
 
-def prepare_trial(db, campaign, policy_sha, round_id, key, template_id, template, parameters, jobs, ordinal, title):
+def prepare_trial(db, campaign, policy_sha, round_id, key, template_id, template, parameters, jobs, ordinal, title,
+                  *, development_panel=None):
     loop = "auto-" + digest(canonical([campaign, policy_sha, key]).encode())[:48]
     spec = {**template["development"], "campaign": campaign, "timeout": template["timeout"],
             "reviewer": None, "public_brief": "", "parameters": parameters, "template_id": template_id,
             "metric_rules": template["metrics"], "contract_sha256": policy_sha,
             "confirmation_plan": {**template["confirmation"], "panel_sha256": template["panel_sha256"]},
             "proposal_round": round_id, "proposal_sha256": [digest(job[2].encode()) for job in jobs]}
+    if development_panel is not None:
+        spec["development_panel_sha256"] = development_panel
     db.execute("INSERT INTO campaign_autonomy_trials VALUES (?,?,?)", (campaign, key, loop))
     db.execute("INSERT INTO campaign_members VALUES (?,?,?)", (loop, campaign, ordinal))
     db.execute("""INSERT INTO research_loops(id,target,plan,step,status,review_every)

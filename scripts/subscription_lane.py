@@ -132,6 +132,8 @@ def queue_preapproved_confirmation(db, campaign, loop_id, spec, evidence_digest)
     successor = "sealed-" + hashlib.sha256(loop_id.encode()).hexdigest()[:40]
     confirmation = dict(panel_sha256=plan["panel_sha256"],
                         development_evidence_sha256=evidence_digest, development_loop_id=loop_id)
+    if "development_panel_sha256" in spec:
+        confirmation["supervised"] = True
     runner_spec = {key: plan[key] for key in ("runner", "auditor", "runner_sha256", "auditor_sha256")}
     runner_spec.update(campaign=campaign, contract_sha256=spec["contract_sha256"], confirmation=confirmation,
                        timeout=spec["timeout"], reviewer=None, public_brief="")
@@ -357,7 +359,7 @@ def advance_campaigns(db, enabled_lanes=()):
         if autonomous:
             from autonomous_campaign import advance
             advance(db, queue_campaign_proposals, parse_catalog_choice, campaign_providers,
-                    PROPOSAL_DETAILS, set(enabled_lanes))
+                    PROPOSAL_DETAILS, set(enabled_lanes), unique_json_fields)
         db.commit()
     except Exception:
         db.rollback()
@@ -510,6 +512,9 @@ def process_local_benchmark(db, lock_fd, state):
                         or not isinstance(report, dict) or report.pop("panel_sha256", None) != confirmation["panel_sha256"]
                         or report.pop("development_evidence_sha256", None) != confirmation["development_evidence_sha256"]):
                     raise ValueError("confirmation identity mismatch")
+            if development_panel := spec.get("development_panel_sha256"):
+                if not isinstance(report, dict) or report.pop("panel_sha256", None) != development_panel:
+                    raise ValueError("development panel identity mismatch")
             audit_type = "Matched-learner audit"
             if "metric_rules" in spec:
                 from autonomous_campaign import verdict
@@ -536,8 +541,19 @@ def process_local_benchmark(db, lock_fd, state):
                 WHERE campaign=? AND loop_id=? AND outcome IS NULL""",
                 (report["outcome"], evidence_digest, campaign, loop_id)).rowcount != 1:
                 raise ValueError("confirmation has already been recorded")
+            next_status = "target_achieved" if report["outcome"] == "pass" else "human_review"
+            if report["outcome"] == "fail" and confirmation.get("supervised") is True:
+                db.execute("INSERT INTO campaign_confirmation_failures VALUES (?,?,?)",
+                           (campaign, loop_id, evidence_digest))
+                db.execute("DELETE FROM campaign_confirmations WHERE campaign=? AND loop_id=?",
+                           (campaign, loop_id))
+                count, limit = db.execute("""SELECT
+                    (SELECT COUNT(*) FROM campaign_trials WHERE campaign=c.id),c.trial_limit
+                    FROM campaigns c WHERE c.id=?""", (campaign,)).fetchone()
+                if count < limit:
+                    next_status = "active"
             db.execute("UPDATE campaigns SET status=? WHERE id=? AND status='confirming'",
-                       ("target_achieved" if report["outcome"] == "pass" else "human_review", campaign))
+                       (next_status, campaign))
         elif campaign:
             from research_campaign import record
             record(db, campaign, loop_id, report["outcome"], evidence_digest, in_transaction=True)
@@ -1251,6 +1267,10 @@ def main():
                     phase, reason, rounds, policy_pin = autonomy
                     report.update(phase=phase if row[0] == "active" else row[0],
                                   reason=reason, discovery_rounds=rounds, policy_sha256=policy_pin)
+                admission = db.execute("""SELECT proposal_id,state FROM campaign_admissions
+                    WHERE campaign=? ORDER BY round DESC LIMIT 1""", (args.id,)).fetchone()
+                if admission:
+                    report["last_admission"] = dict(zip(("candidate", "state"), admission))
                 print(json.dumps(report))
             elif args.action == "enqueue":
                 if args.id.startswith("loop:"):
@@ -1516,11 +1536,16 @@ def main():
                         runners[lane] = os.path.abspath(binary)
                 if args.enable_deepseek:
                     runners["deepseek"] = None
+                from research_campaign import initialize
+                initialize(db)
                 from autonomous_campaign import activate_pending
+                from campaign_supervisor import process as process_admission
                 activate_pending(db, frozen_executable, unique_json_fields)
                 advance_completed_loops(db)
                 advance_campaigns(db, runners)
-                if not process_local_benchmark(db, lock.fileno(), state):
+                if (not process_local_benchmark(db, lock.fileno(), state)
+                        and not process_admission(db, state, lock.fileno(), LOCAL_GUARD,
+                                                  frozen_executable, unique_json_fields)):
                     worker(db, runners, lock.fileno(), state)
                 advance_campaigns(db, runners)
                 advance_completed_loops(db)

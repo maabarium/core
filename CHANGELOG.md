@@ -8,7 +8,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- A campaign supervisor that asks Codex for fresh candidates, has Antigravity review them, and uses an approved local vetter to admit new benchmark identities under one shared budget.
 
 ### Changed
 
