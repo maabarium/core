@@ -76,6 +76,33 @@ it("creates a campaign without queuing a benchmark", async () => {
   });
 });
 
+it("shows an imported plan before approving it and saves the exact reviewed text", async () => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValueOnce({ experiments: 0, lanes: [] })
+    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce({ experiments: 0, lanes: [], campaigns: [{
+      id: "demo", status: "policy_pending", limit: 2, audited_trials: 0, rejected_trials: 0, operational_failures: 0,
+    }] });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByRole("button", { name: "Load report" }));
+  fireEvent.click(await screen.findByText("Create a research campaign"));
+  const raw = JSON.stringify({ schema: 2, brief: "Compare two search methods.", trials: 2, rounds: 4 }, null, 2);
+  expect(screen.getByRole("button", { name: "Choose a research plan…" })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Research plan file"), {
+    target: { files: [{ name: "plan.json", size: raw.length, text: async () => raw }] },
+  });
+  expect(await screen.findByText("plan.json")).toBeTruthy();
+  expect(screen.getByText("Compare two search methods.", { exact: false, selector: "p" })).toBeTruthy();
+  expect(vi.mocked(invoke)).toHaveBeenCalledTimes(1);
+  fireEvent.change(screen.getByLabelText("Campaign ID"), { target: { value: "demo" } });
+  fireEvent.click(screen.getByRole("button", { name: "Approve plan and start campaign" }));
+  expect(await screen.findByText(/Waiting for the worker to check the approved plan/)).toBeTruthy();
+  expect(invoke).toHaveBeenCalledWith("research_campaign_approve_plan", {
+    id: "demo", approvedPlan: raw, allowPaid: false,
+    providers: [{ lane: "codex", model: null, effort: null }, { lane: "antigravity", model: null, effort: null }],
+  });
+});
+
 it("approves the displayed checkpoint without creating a new campaign", async () => {
   const checkpoint = { id: "demo", status: "checkpoint", limit: 10,
     audited_trials: 2, rejected_trials: 2, operational_failures: 0 };
@@ -109,6 +136,20 @@ it("shows audited campaigns separately from provider jobs", async () => {
   expect(screen.getByText("Token usage for suggestions").closest("details")?.open).toBe(false);
   expect(screen.getByText("Usage reported for 2 of 3 jobs.")).toBeTruthy();
   expect(screen.getByText("Output").nextElementSibling?.textContent).toBe("0");
+});
+
+it("distinguishes blocked autonomy from an idle active campaign", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce({
+    experiments: 0,
+    lanes: [],
+    campaigns: [{ id: "study", status: "blocked", limit: 20, audited_trials: 1,
+      rejected_trials: 1, operational_failures: 0, autonomy_reason: "Approved experiments exhausted" }],
+  });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByRole("button", { name: "Load report" }));
+  expect(await screen.findByText("1 of 20 audited trials · Blocked")).toBeTruthy();
+  expect(screen.getByText("Approved experiments exhausted")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Send public brief to selected providers" })).toBeNull();
 });
 
 it("shows terminal rates and reveals provider details only with the switch", async () => {

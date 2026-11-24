@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ResearchTrends, type TrendDay } from "./ResearchTrends";
 
 const tokenLabels = { input: "Input", output: "Output", cached: "Cache reads", cache_write: "Cache writes", reasoning: "Reasoning" };
@@ -9,7 +9,7 @@ type Lane = TokenUsage & {
   pending: number; attempts: number; observed_jobs: number;
 };
 type ProposalUsage = TokenUsage & { lane: string; jobs: number; observed_jobs: number };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[]; trial_outcomes?: string[]; confirmation_outcome?: string | null };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[]; trial_outcomes?: string[]; confirmation_outcome?: string | null; autonomy_phase?: string | null; autonomy_reason?: string | null };
 type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
 type Starter = { stage: string; first: PracticeResult | null; final_result: PracticeResult | null };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
@@ -56,7 +56,34 @@ export function ResearchReport() {
   const [choices, setChoices] = useState(defaultChoices);
   const [allowPaid, setAllowPaid] = useState(false);
   const [publicBrief, setPublicBrief] = useState("");
-  const usesPaid = Boolean(publicBrief.trim()) && choices.some(choice => choice.lane === "deepseek");
+  const [plan, setPlan] = useState<{ name: string; raw: string; brief: string; trials: number; rounds: number }>();
+  const [readingPlan, setReadingPlan] = useState(false);
+  const planRead = useRef(0);
+  const planPicker = useRef<HTMLInputElement>(null);
+  const usesPaid = Boolean(plan || publicBrief.trim()) && choices.some(choice => choice.lane === "deepseek");
+  async function loadPlan(file: File | undefined) {
+    setError("");
+    if (!file) return;
+    const read = ++planRead.current;
+    setReadingPlan(true);
+    try {
+      if (file.size > 65536) throw new Error("Choose a research plan smaller than 64 KiB.");
+      const raw = await file.text();
+      if (read !== planRead.current) return;
+      const value = JSON.parse(raw);
+      if (![1, 2].includes(value?.schema) || typeof value?.brief !== "string"
+        || !value.brief.trim() || !Number.isInteger(value.trials) || value.trials < 1 || value.trials > 200
+        || !Number.isInteger(value.rounds) || value.rounds < 1 || value.rounds > 200) {
+        throw new Error("This file does not have the required Maabarium plan settings.");
+      }
+      setPlan({ name: file.name, raw, brief: value.brief, trials: value.trials, rounds: value.rounds });
+    } catch (failure) {
+      if (read !== planRead.current) return;
+      setError(failure instanceof SyntaxError ? "That file is not a valid JSON research plan." : String(failure));
+    } finally {
+      if (read === planRead.current) setReadingPlan(false);
+    }
+  }
   const [creating, setCreating] = useState(false);
   const [starting, setStarting] = useState(false);
   const [practice, setPractice] = useState<PracticeResult>();
@@ -106,12 +133,20 @@ export function ResearchReport() {
     setCreating(true);
     setError("");
     try {
-      await invoke("research_campaign_create", {
+      const providerSettings = choices.map(choice => ({
+        lane: choice.lane, model: choice.model.trim() || null, effort: choice.effort || null,
+      }));
+      if (plan) {
+        await invoke("research_campaign_approve_plan", {
+          id: campaignId.trim(), approvedPlan: plan.raw, providers: providerSettings, allowPaid,
+          ...(reviewEvery ? { reviewEvery: Number(reviewEvery) } : {}),
+        });
+      } else await invoke("research_campaign_create", {
         id: campaignId.trim(), limit: campaignLimit, publicBrief: publicBrief.trim() || null,
         ...(reviewEvery ? { reviewEvery: Number(reviewEvery) } : {}),
         ...(localBudget ? { localBudgetSeconds: Number(localBudget) } : {}),
         ...(publicBrief.trim() ? {
-          providers: choices.map(choice => ({ lane: choice.lane, model: choice.model.trim() || null, effort: choice.effort || null })),
+          providers: providerSettings,
           ...(usesPaid ? { allowPaid } : {}),
         } : {}),
       });
@@ -121,6 +156,7 @@ export function ResearchReport() {
       setPublicBrief("");
       setChoices(defaultChoices());
       setAllowPaid(false);
+      setPlan(undefined);
       await refresh();
     } catch (failure) { setError(String(failure)); }
     finally { setCreating(false); }
@@ -204,33 +240,58 @@ export function ResearchReport() {
       {report && <>
         <details className="mt-3 rounded border p-3">
           <summary className="cursor-pointer font-semibold">Create a research campaign</summary>
-          <p className="mt-2 text-sm">Set a trial limit. This does not queue or run any benchmark.</p>
+          <p className="mt-2 text-sm">Start from a research plan to run automatically, or create an empty campaign and add benchmarks yourself.</p>
           <form className="mt-3 grid gap-4" onSubmit={(event) => {
             event.preventDefault();
             void createCampaign();
           }}>
             <fieldset className="grid min-w-0 gap-3">
               <legend className="sr-only">Campaign settings</legend>
-              <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-3">
+              <div className={plan ? "grid grid-cols-1 items-end gap-3 md:grid-cols-2" : "grid grid-cols-1 items-end gap-3 md:grid-cols-3"}>
                 <label className="grid min-w-0 gap-1 text-sm">Campaign ID
                   <input className="h-10 w-full min-w-0 rounded border px-2" required maxLength={64} pattern="[A-Za-z0-9_\\-]+"
                     value={campaignId} onChange={(event) => setCampaignId(event.target.value)} />
                 </label>
-                <label className="grid min-w-0 gap-1 text-sm">Trial limit
+                {!plan && <label className="grid min-w-0 gap-1 text-sm">Trial limit
                   <input className="h-10 w-full min-w-0 rounded border px-2" required type="number" min={1} max={200}
                     value={campaignLimit || ""} onChange={(event) => setCampaignLimit(Number(event.target.value))} />
-                </label>
+                </label>}
                 <label className="grid min-w-0 gap-1 text-sm">Pause for review every
-                  <input className="h-10 w-full min-w-0 rounded border px-2 placeholder:text-[var(--muted)] placeholder:opacity-100" type="number" min={1} max={campaignLimit}
+                  <input className="h-10 w-full min-w-0 rounded border px-2 placeholder:text-[var(--muted)] placeholder:opacity-100" type="number" min={1} max={plan?.trials ?? campaignLimit}
                     placeholder="Final review only" value={reviewEvery} aria-describedby="campaign-review-interval-help"
                   onChange={event => setReviewEvery(event.target.value)} />
                 </label>
               </div>
               <p className="text-sm" id="campaign-review-interval-help">
-                Enter the number of audited trials between reviews, or leave blank to review only at the end.
+                Enter the number of audited trials between reviews, or leave blank for no scheduled pauses during the run.
               </p>
             </fieldset>
-            <label className="grid w-full gap-1 text-sm">Public brief for adaptive proposals (optional)
+            <div className="grid gap-2 rounded-lg border p-3 text-sm">
+              <p className="font-semibold">Run automatically from a research plan</p>
+              {!plan && <>
+                <button className="min-h-12 rounded-md border border-dashed px-3 font-semibold" type="button"
+                  disabled={creating || readingPlan} onClick={() => planPicker.current?.click()}>
+                  {readingPlan ? "Reading plan…" : "Choose a research plan…"}
+                </button>
+                <input ref={planPicker} hidden type="file" aria-label="Research plan file"
+                  accept=".json,application/json" onChange={event => {
+                    void loadPlan(event.target.files?.[0]);
+                    event.target.value = "";
+                  }} />
+              </>}
+              {plan && <>
+                <p className="break-all font-semibold">{plan.name}</p>
+                <p>Up to {plan.trials} audited trials and {plan.rounds} rounds of suggestions. The campaign stops if the separate final check passes or a limit is reached.</p>
+                <p className="whitespace-pre-wrap break-words"><strong>Public brief:</strong> {plan.brief}</p>
+                <p>Only approve a plan you trust: it can run the listed local programs. The selected providers receive the public brief and public experiment settings, not local paths, private evidence, or the final test data.</p>
+                <details>
+                  <summary className="cursor-pointer font-semibold">View the exact plan and program identities</summary>
+                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border p-2" tabIndex={0}>{plan.raw}</pre>
+                </details>
+                <button type="button" className="min-h-10 justify-self-start rounded border px-3" disabled={creating} onClick={() => setPlan(undefined)}>Remove plan</button>
+              </>}
+            </div>
+            {!plan && <><label className="grid w-full gap-1 text-sm">Public brief for adaptive proposals (optional)
               <textarea className="rounded border px-2 py-1" rows={3} maxLength={4096}
                 value={publicBrief} onChange={(event) => setPublicBrief(event.target.value)}
                 aria-describedby="campaign-public-brief-help" />
@@ -242,10 +303,10 @@ export function ResearchReport() {
             </label>
             <p id="campaign-public-brief-help" className="w-full text-sm">
               Your chosen providers receive this brief and the failure status when a new suggestion is needed. Do not include private information.
-            </p>
-            {publicBrief.trim() && <details className="w-full rounded border p-3">
+            </p></>}
+            {(plan || publicBrief.trim()) && <details className="w-full rounded border p-3">
               <summary className="cursor-pointer font-semibold">Suggestion providers and model settings</summary>
-              <p className="mt-2">The proposer and independent checker choose separately. A benchmark only starts if they agree.</p>
+              <p className="mt-2">A benchmark only starts after both providers agree. Current selection: {providers[choices[0].lane]} proposes; {providers[choices[1].lane]} checks.</p>
               <div className="mt-2 grid gap-3 sm:grid-cols-2">
                 {choices.map((choice, index) => {
                   const role = index === 0 ? "Proposer" : "Independent checker";
@@ -289,7 +350,9 @@ export function ResearchReport() {
                 Allow paid DeepSeek requests: {allowPaid ? "On" : "Off"}
               </button>}
             </details>}
-            <button className="justify-self-start rounded border px-3 py-1 text-sm" type="submit" disabled={creating || busy || (usesPaid && !allowPaid)}>Create campaign</button>
+            <button className="min-h-10 justify-self-start rounded border px-3 text-sm" type="submit" disabled={creating || readingPlan || busy || (usesPaid && !allowPaid)}>
+              {plan ? "Approve plan and start campaign" : "Create campaign"}
+            </button>
           </form>
         </details>
         {!!report.campaigns?.length && <section className="mt-3" aria-label="Research campaigns">
@@ -303,8 +366,14 @@ export function ResearchReport() {
                 campaign.status === "confirming" ? "Sealed confirmation pending" :
                 campaign.status === "human_review" ? "Needs review" :
                 campaign.status === "checkpoint" ? "Paused for your review" :
-                campaign.status === "stopped" ? "Stopped" : "Active"
+                campaign.status === "stopped" ? "Stopped" :
+                campaign.status === "blocked" ? "Blocked" :
+                campaign.status === "policy_pending" ? "Waiting for the worker to check the approved plan" :
+                campaign.autonomy_phase === "trial" ? "Approved trial queued or running" :
+                campaign.autonomy_phase === "waiting_for_worker" ? "Waiting for the campaign worker" :
+                campaign.autonomy_phase === "discovery" ? "Selecting the next experiment" : "Active"
               }</p>
+              {campaign.autonomy_reason && <p className="mt-1">{campaign.autonomy_reason}</p>}
               <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
                 <div><dt>Passed</dt><dd className="font-semibold">{campaign.audited_trials - campaign.rejected_trials}</dd></div>
                 <div><dt>Did not meet the target</dt><dd className="font-semibold">{campaign.rejected_trials}</dd></div>
@@ -347,7 +416,7 @@ export function ResearchReport() {
                 onClick={() => void startCampaign(campaign.id, campaign.audited_trials)}>
                 Approve and resume campaign
               </button>}
-              {["active", "checkpoint", "confirmation_required", "confirming"].includes(campaign.status) &&
+              {["policy_pending", "active", "checkpoint", "confirmation_required", "confirming"].includes(campaign.status) &&
                 (stopRequested === campaign.id ? <div className="mt-2 flex flex-wrap items-center gap-2">
                   <p className="w-full">Cancel queued work and close this campaign? Completed evidence will be kept.</p>
                   <button type="button" className="rounded border px-3 py-1" disabled={stopping}

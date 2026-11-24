@@ -136,6 +136,9 @@ cargo run -p maabarium-cli -- run blueprints/example.toml --db data/maabarium.db
 For the experimental ChatGPT-backed local queue, see
 [Unattended subscription research lane](docs/SUBSCRIPTION_LANE.md).
 
+To let the worker advance research from one approved policy without manual
+trial handoffs, see [Autonomous research campaigns](docs/AUTONOMOUS_CAMPAIGNS.md).
+
 ### Inspect Recent Experiment History
 
 
