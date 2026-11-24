@@ -38,6 +38,9 @@ else:
     prompt = sys.stdin.read()
     assert "Do not repeat these previously vetted IDs: " in prompt
     prior = json.loads(prompt.split("Do not repeat these previously vetted IDs: ")[-1])
+    if "locally supported designs" in prompt and prior:
+        assert "Local vetting feedback" in prompt
+        assert "work screen rejected" in prompt
     number = 1 + max([0] + [int(p.split("-")[-1]) for p in prior])
     answer = dict(id=f"test-{number}", mechanism="Use exact teaching",
                   hypothesis="Count fewer operations", control="Exact lazy",
@@ -63,7 +66,7 @@ else:
     def status(self):
         return json.loads(self.cli("campaign-status", "--id", "test").stdout)
 
-    def launch(self, mode="normal", limit=4, rounds=5):
+    def launch(self, mode="normal", limit=4, rounds=5, menu=None):
         vetter = self.executable("vetter", rf"""
 import hashlib, json, pathlib, sys
 proposal = json.load(sys.stdin)
@@ -71,7 +74,7 @@ number = int(proposal["id"].split("-")[-1])
 mode = {mode!r}
 sha = lambda data: hashlib.sha256(data).hexdigest()
 if number == 1:
-    print(json.dumps(dict(outcome="reject")))
+    print(json.dumps(dict(outcome="reject", reason="cost")))
     sys.exit(0)
 if mode == "error":
     sys.exit(3)
@@ -116,9 +119,12 @@ else:
 template = dict(**stages, timeout=3, bounds={{}}, metrics={{"wrong": wrong_rule}}, panel_sha256=sealed)
 print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, development_panel_sha256=panel)))
 """)
-        raw = json.dumps(dict(schema=3, brief="Public exact teaching", rounds=rounds, trials=limit,
+        policy = dict(schema=3, brief="Public exact teaching", rounds=rounds, trials=limit,
             lifetime_seconds=300, work_seconds=120, vet_timeout=4, vetter=str(vetter),
-            vetter_sha256=digest(vetter.read_bytes()), metrics={"wrong": ["eq", 0]})).encode()
+            vetter_sha256=digest(vetter.read_bytes()), metrics={"wrong": ["eq", 0]})
+        if menu is not None:
+            policy["candidates"] = menu
+        raw = json.dumps(policy).encode()
         path = self.root / "policy.json"
         path.write_bytes(raw)
         self.cli("campaign-autostart", "--id", "test", "--policy", str(path), "--policy-sha256", digest(raw))
@@ -188,6 +194,15 @@ print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, devel
         status = self.converge()
         self.assertEqual((status["status"], status["audited_trials"]), ("blocked", 0))
         self.assertEqual(status["last_admission"]["state"], "rejected")
+        self.assertEqual(status["last_admission"]["reason"], "cost")
+
+    def test_public_menu_moves_to_untried_candidate_with_feedback(self):
+        self.launch(menu={"test-1": "first method", "test-2": "distinct method"})
+        status = self.converge()
+        self.assertEqual((status["status"], status["audited_trials"], status["discovery_rounds"]),
+                         ("blocked", 1, 2))
+        self.assertEqual(self.query("SELECT reason FROM campaign_admission_rejections"), [("cost",)])
+        self.assertIn("No untried designs", status["reason"])
 
     def test_malformed_admissions_never_queue_evidence(self):
         for mode in ("error", "escape", "rules"):
