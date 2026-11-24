@@ -581,6 +581,7 @@ fn main() {
             research_queue::research_campaign_practice,
             research_queue::research_starter_campaign,
             research_queue::research_campaign_create,
+            research_queue::research_campaign_approve_plan,
             research_queue::research_campaign_start,
             research_queue::research_campaign_stop,
             research_queue::research_muse_allowance,

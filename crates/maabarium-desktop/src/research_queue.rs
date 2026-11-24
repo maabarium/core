@@ -690,6 +690,28 @@ fn create_configured_campaign(
     review_every: Option<u16>,
     local_budget_seconds: Option<u32>,
 ) -> Result<(), String> {
+    let tx = db.transaction().map_err(|error| error.to_string())?;
+    write_configured_campaign(
+        &tx,
+        id,
+        limit,
+        public_brief,
+        providers,
+        review_every,
+        local_budget_seconds,
+    )?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+fn write_configured_campaign(
+    tx: &Connection,
+    id: &str,
+    limit: u16,
+    public_brief: Option<&str>,
+    providers: &[ResearchStep],
+    review_every: Option<u16>,
+    local_budget_seconds: Option<u32>,
+) -> Result<(), String> {
     if id.is_empty()
         || id.len() > 64
         || !id
@@ -719,7 +741,6 @@ fn create_configured_campaign(
             "Choose two different providers with valid settings and provide a public brief.".into(),
         );
     }
-    let tx = db.transaction().map_err(|error| error.to_string())?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS campaigns (
             id TEXT PRIMARY KEY, trial_limit INTEGER NOT NULL CHECK(trial_limit BETWEEN 1 AND 200),
@@ -790,7 +811,102 @@ fn create_configured_campaign(
         )
         .map_err(|error| error.to_string())?;
     }
-    tx.commit().map_err(|error| error.to_string())
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct PolicyEnvelope {
+    schema: u8,
+    brief: String,
+    trials: u16,
+    work_seconds: u32,
+    lifetime_seconds: u32,
+}
+
+fn queue_autonomous_campaign(
+    db: &mut Connection,
+    id: &str,
+    approved_plan: &str,
+    providers: &[ResearchStep],
+    allow_paid: bool,
+    review_every: Option<u16>,
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    if id.len() > 48 || !id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric) {
+        return Err("Use up to 48 letters, digits, hyphens or underscores, starting with a letter or digit.".into());
+    }
+    if approved_plan.len() > 65_536 {
+        return Err("Choose a research plan smaller than 64 KiB.".into());
+    }
+    let plan: PolicyEnvelope = serde_json::from_str(approved_plan)
+        .map_err(|_| "This file is not a Maabarium research plan.".to_string())?;
+    if !matches!(plan.schema, 1 | 2)
+        || plan.brief.trim().is_empty()
+        || plan.brief.len() > 2048
+        || !(4..=120_600).contains(&plan.work_seconds)
+        || !(1..=604_800).contains(&plan.lifetime_seconds)
+    {
+        return Err("Check the plan format, public brief and time limits.".into());
+    }
+    if providers.len() != 2 {
+        return Err("Choose a proposer and a different checker.".into());
+    }
+    if !allow_paid && providers.iter().any(|step| step.fields().0 == "deepseek") {
+        return Err("Confirm paid DeepSeek API use before starting this campaign.".into());
+    }
+    let pin = format!("{:x}", Sha256::digest(approved_plan.as_bytes()));
+    let err = |error: rusqlite::Error| error.to_string();
+    let tx = db.transaction().map_err(err)?;
+    write_configured_campaign(
+        &tx,
+        id,
+        plan.trials,
+        Some(&plan.brief),
+        providers,
+        review_every,
+        Some(plan.work_seconds),
+    )?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS campaign_autonomy (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id), policy TEXT NOT NULL,
+            policy_sha256 TEXT NOT NULL, deadline INTEGER NOT NULL, round INTEGER NOT NULL DEFAULT 0,
+            phase TEXT NOT NULL, reason TEXT);",
+    )
+    .map_err(err)?;
+    tx.execute(
+        "UPDATE campaigns SET status='policy_pending' WHERE id=?",
+        [id],
+    )
+    .map_err(err)?;
+    tx.execute(
+        "INSERT INTO campaign_autonomy(campaign,policy,policy_sha256,deadline,phase)
+         VALUES (?,?,?,unixepoch()+?,'checking_plan')",
+        rusqlite::params![id, approved_plan, pin, plan.lifetime_seconds],
+    )
+    .map_err(err)?;
+    tx.commit().map_err(err)
+}
+
+#[tauri::command]
+pub(crate) async fn research_campaign_approve_plan(
+    id: String,
+    approved_plan: String,
+    providers: Vec<ResearchStep>,
+    allow_paid: bool,
+    review_every: Option<u16>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        queue_autonomous_campaign(
+            &mut connect()?,
+            &id,
+            &approved_plan,
+            &providers,
+            allow_paid,
+            review_every,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -892,7 +1008,7 @@ fn stop_campaign(db: &mut Connection, id: &str) -> Result<(), String> {
     if tx
         .execute(
             "UPDATE campaigns SET status='stopped' WHERE id=?
-        AND status IN ('active','checkpoint','confirmation_required','confirming')",
+        AND status IN ('policy_pending','active','checkpoint','confirmation_required','confirming')",
             [id],
         )
         .map_err(err)?
@@ -2393,6 +2509,47 @@ mod tests {
             .unwrap();
         assert_eq!(status, "staged");
         assert_eq!(super::campaign_report(&db).unwrap()[0].audited_trials, 0);
+    }
+
+    #[test]
+    fn desktop_plan_approval_saves_exact_text_without_dispatch_and_can_be_stopped() {
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE jobs (id TEXT PRIMARY KEY, state TEXT, detail TEXT, finished_at INTEGER);
+            CREATE TABLE research_loops (id TEXT PRIMARY KEY, status TEXT);",
+        )
+        .unwrap();
+        let plan = r#"{"schema":2,"brief":"Public question","trials":4,"work_seconds":64,"lifetime_seconds":90}"#;
+        let codex = || super::ResearchStep::Lane("codex".into());
+        let paid = [codex(), super::ResearchStep::Lane("deepseek".into())];
+        assert!(
+            super::queue_autonomous_campaign(&mut db, "study", plan, &paid, false, None).is_err()
+        );
+        let roles = [codex(), super::ResearchStep::Lane("antigravity".into())];
+        super::queue_autonomous_campaign(&mut db, "study", plan, &roles, false, Some(2)).unwrap();
+        assert!(
+            super::queue_autonomous_campaign(&mut db, "study", plan, &roles, false, None).is_err()
+        );
+        assert_eq!(
+            super::campaign_report(&db).unwrap()[0].status,
+            "policy_pending"
+        );
+        let saved: String = db
+            .query_row("SELECT policy FROM campaign_autonomy", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(saved, plan);
+        let interval: u16 = db
+            .query_row("SELECT interval FROM campaign_review_policy", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(interval, 2);
+        super::stop_campaign(&mut db, "study").unwrap();
+        assert_eq!(super::campaign_report(&db).unwrap()[0].status, "stopped");
+        let jobs: i64 = db
+            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(jobs, 0);
     }
 
     #[test]

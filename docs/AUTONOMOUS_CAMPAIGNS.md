@@ -13,11 +13,19 @@ The desktop Research activity page shows progress and the reason for a block.
    Codex and Antigravity. The service advances the loop without the console
    open or a separate Codex automation. On other hosts, invoke the worker's
    `tick` command periodically through the host's service manager.
-2. Review and pin the experiment programs and a public-safe policy file.
-   Save the policy's SHA-256 independently of the file. The policy may
-   contain private local paths; only the public brief, public variant IDs
-   and public summaries go to providers.
-3. Start the campaign and use the same worker state directory as the desktop.
+2. Have the study owner prepare a research plan with trusted local programs.
+   Keep the brief, template names, summaries, bounds and settings safe to share.
+   Local paths, raw evidence and the confirmation panel stay on this computer.
+3. In **Research activity**, load the report and open **Create a research
+   campaign**. Choose the plan file, review the brief and the file details,
+   choose two different providers, and select **Approve plan and start
+   campaign**. Optionally set how often Maabarium should pause for review.
+   The worker validates the exact approved plan and all program identities
+   before any provider runs. If you set a review pause, time spent paused
+   still counts against the campaign deadline.
+
+For scripted setup, use the same worker state directory as the desktop.
+Save the approved plan's SHA-256 separately before launching it:
 
 ```sh
 python3 scripts/subscription_lane.py campaign-autostart \
@@ -53,6 +61,22 @@ the same metric rules. Each stage contains absolute `runner` and
 executable identities must be distinct. A model can choose a public ID or
 `NONE`; it cannot add or change variants, metrics, executables or identities.
 
+## Policy schema 2: let providers propose new settings
+
+Use `"schema": 2`, omit `variants`, and give each template a public
+`summary` (1–96 UTF-8 bytes) and one to eight bounded integer parameters.
+The first provider proposes a template and a new set of settings. The second
+provider sees that exact proposal and either approves or rejects it.
+Maabarium checks every setting against the approved bounds and never runs the
+same runner with the same settings twice within a campaign. The proposer can
+see up to ten recent settings that did not advance, but not their evidence
+files or scores. Bad proposals, disagreement and duplicates consume a
+discovery round, not an audited trial.
+
+Use schema 1 for a fixed list of alternatives. Use schema 2 when the
+experiment programs can use different settings without changing the study
+rules. Neither mode installs or writes new experiment programs.
+
 ## Adapter contract
 
 The trusted runner receives `spec.json` and `parameters.json` in its private
@@ -75,7 +99,7 @@ domain. Use fixed-scale integers if the domain requires decimals.
 
 Local programs are operator-trusted and hash-pinned, not a sandbox for
 untrusted code. Provider prose is never executed or accepted as a verdict.
-Both subscription providers must agree on the same available public ID.
+Both selected providers must agree before a local benchmark starts.
 If no approved option fits the remaining budget, or agreement never
 arrives before the round or time cap, the campaign reports **Blocked**.
 An interrupted local attempt, corrupt audit, or failed final confirmation

@@ -35,11 +35,17 @@ def fields(value, expected):
 def read_policy(path, expected, pin_program, unique_fields):
     with path.open("rb") as handle:
         data = handle.read(65537)
+    return decode_policy(data, expected, pin_program, unique_fields)
+
+
+def decode_policy(data, expected, pin_program, unique_fields):
     if len(data) > 65536 or not valid(expected, DIGEST) or digest(data) != expected:
         raise ValueError("policy must match the separately approved SHA-256 (64 KiB maximum)")
     policy = json.loads(data, object_pairs_hook=unique_fields)
-    fields(policy, "schema brief rounds trials lifetime_seconds work_seconds templates variants")
-    if (type(policy["schema"]) is not int or policy["schema"] != 1
+    schema = policy.get("schema") if isinstance(policy, dict) else None
+    fields(policy, "schema brief rounds trials lifetime_seconds work_seconds templates"
+           + (" variants" if schema == 1 else ""))
+    if (type(schema) is not int or schema not in (1, 2)
             or not integer(policy["rounds"], 1, 200)
             or not integer(policy["trials"], 1, 200)
             or not integer(policy["lifetime_seconds"], 1, 604800)
@@ -47,19 +53,22 @@ def read_policy(path, expected, pin_program, unique_fields):
             or not isinstance(policy["brief"], str) or not policy["brief"].strip()
             or len(policy["brief"].encode()) > 2048):
         raise ValueError("invalid campaign schema, public brief or budget")
-    templates, variants = policy["templates"], policy["variants"]
+    templates, variants = policy["templates"], policy.get("variants", {})
     if (not isinstance(templates, dict) or not 1 <= len(templates) <= 16
-            or not isinstance(variants, dict) or not 1 <= len(variants) <= 64):
+            or not isinstance(variants, dict) or (schema == 1 and not 1 <= len(variants) <= 64)):
         raise ValueError("approve 1–16 templates and 1–64 variants")
     common_rules = None
     for key, template in templates.items():
-        fields(template, "timeout bounds metrics development confirmation panel_sha256")
-        if not valid(key, IDENTITY) or not integer(template["timeout"], 1, 300):
+        fields(template, "timeout bounds metrics development confirmation panel_sha256"
+               + (" summary" if schema == 2 else ""))
+        if (not valid(key, IDENTITY) or not integer(template["timeout"], 1, 300)
+                or (schema == 2 and (key == "NONE" or not isinstance(template["summary"], str)
+                    or not template["summary"].strip() or len(template["summary"].encode()) > 96))):
             raise ValueError("invalid template identity or timeout")
         if not valid(template["panel_sha256"], DIGEST):
             raise ValueError("invalid confirmation panel digest")
         bounds = template["bounds"]
-        if (not isinstance(bounds, dict) or len(bounds) > 8
+        if (not isinstance(bounds, dict) or not (1 if schema == 2 else 0) <= len(bounds) <= 8
                 or any(not valid(name, IDENTITY) or not isinstance(pair, list) or len(pair) != 2
                        or not all(integer(n, -10**9, 10**9) for n in pair) or pair[0] > pair[1]
                        for name, pair in bounds.items())):
@@ -94,14 +103,49 @@ def read_policy(path, expected, pin_program, unique_fields):
             raise ValueError("invalid public variant description")
         template = templates[variant["template"]]
         values = variant["parameters"]
-        if (not isinstance(values, dict) or values.keys() != template["bounds"].keys()
-                or any(not integer(value, *template["bounds"][name]) for name, value in values.items())):
+        if not valid_parameters(values, template):
             raise ValueError("variant exceeds approved parameter bounds")
         fingerprint = canonical([template["development"]["runner_sha256"], values])
         if fingerprint in fingerprints:
             raise ValueError("duplicate experiment under different public IDs")
         fingerprints.add(fingerprint)
     return policy
+
+
+def activate_pending(db, pin_program, unique_fields):
+    if not db.execute("SELECT 1 FROM sqlite_schema WHERE name='campaign_autonomy'").fetchone():
+        return
+    row = db.execute("""SELECT c.id,a.policy,a.policy_sha256,a.deadline
+        FROM campaigns c JOIN campaign_autonomy a ON a.campaign=c.id
+        WHERE c.status='policy_pending' ORDER BY c.rowid LIMIT 1""").fetchone()
+    if not row:
+        return
+    from research_campaign import initialize
+    initialize(db)
+    campaign, raw, pin, deadline = row
+    try:
+        if deadline <= time.time():
+            raise ValueError("deadline reached")
+        policy = decode_policy(raw.encode(), pin, pin_program, unique_fields)
+        reason = None
+    except (OSError, ValueError, RecursionError):
+        reason = "Could not verify the approved plan. Check its format, deadline, and local program identities."
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        changed = db.execute("UPDATE campaigns SET status=? WHERE id=? AND status='policy_pending'",
+                             ("blocked" if reason else "active", campaign)).rowcount
+        if changed:
+            if reason:
+                db.execute("UPDATE campaign_autonomy SET phase='blocked',reason=? WHERE campaign=?", (reason, campaign))
+            else:
+                db.execute("UPDATE campaign_autonomy SET policy=?,phase='waiting_for_worker' WHERE campaign=?",
+                           (canonical(policy), campaign))
+
+
+def valid_parameters(values, template):
+    bounds = template["bounds"]
+    return (isinstance(values, dict) and values.keys() == bounds.keys()
+            and all(integer(value, *bounds[name]) for name, value in values.items()))
 
 
 def metric_rules(rules):
@@ -193,6 +237,10 @@ def advance_active(db, campaign, policy, policy_sha, round_no, queue, parse, pro
     used = {key for (key,) in db.execute(
         "SELECT variant FROM campaign_autonomy_trials WHERE campaign=?", (campaign,))}
     budget, = db.execute("SELECT remaining_seconds FROM campaign_local_budget WHERE campaign=?", (campaign,)).fetchone()
+    if policy["schema"] == 2:
+        advance_generated(db, campaign, policy, policy_sha, round_no, used, budget,
+                          queue, parse, providers, details)
+        return
     variants, templates = policy["variants"], policy["templates"]
     # Reserve headroom for both development and sealed confirmation before proposing.
     available = {k: v for k, v in variants.items()
@@ -214,20 +262,8 @@ def advance_active(db, campaign, policy, policy_sha, round_no, queue, parse, pro
             key = chosen[0]
             variant = available[key]
             template = templates[variant["template"]]
-            loop = "auto-" + digest(canonical([campaign, policy_sha, key]).encode())[:48]
-            spec = {**template["development"], "campaign": campaign, "timeout": template["timeout"],
-                    "reviewer": None, "public_brief": "", "parameters": variant["parameters"],
-                    "metric_rules": template["metrics"], "contract_sha256": policy_sha,
-                    "confirmation_plan": {**template["confirmation"], "panel_sha256": template["panel_sha256"]},
-                    "proposal_round": round_id, "proposal_sha256": [digest(j[2].encode()) for j in jobs]}
-            db.execute("INSERT INTO campaign_autonomy_trials VALUES (?,?,?)", (campaign, key, loop))
-            db.execute("INSERT INTO campaign_members VALUES (?,?,?)", (loop, campaign, len(used) + 1))
-            db.execute("""INSERT INTO research_loops(id,target,plan,step,status,review_every)
-                VALUES (?,?,'["Local evidence"]',1,'active',1)""", (loop, key))
-            db.execute("INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)", (loop, canonical(spec)))
-            db.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,?,?)",
-                       (f"loop:{loop}:1", "Local evidence", "Approved variant prepared; waiting for worker"))
-            db.execute("UPDATE campaign_autonomy SET phase='trial',reason=NULL WHERE campaign=?", (campaign,))
+            prepare_trial(db, campaign, policy_sha, round_id, key, variant["template"],
+                          template, variant["parameters"], jobs, len(used) + 1, key)
             return
     if round_no >= policy["rounds"]:
         halt(db, campaign, "Discovery round limit reached without another approved experiment")
@@ -239,3 +275,87 @@ def advance_active(db, campaign, policy, policy_sha, round_no, queue, parse, pro
     queue(db, campaign, f"autonomy-{next_round}", brief, approved_ids=list(available))
     db.execute("UPDATE campaign_autonomy SET round=?,phase='discovery',reason=NULL WHERE campaign=?",
                (next_round, campaign))
+
+
+def prepare_trial(db, campaign, policy_sha, round_id, key, template_id, template, parameters, jobs, ordinal, title):
+    loop = "auto-" + digest(canonical([campaign, policy_sha, key]).encode())[:48]
+    spec = {**template["development"], "campaign": campaign, "timeout": template["timeout"],
+            "reviewer": None, "public_brief": "", "parameters": parameters, "template_id": template_id,
+            "metric_rules": template["metrics"], "contract_sha256": policy_sha,
+            "confirmation_plan": {**template["confirmation"], "panel_sha256": template["panel_sha256"]},
+            "proposal_round": round_id, "proposal_sha256": [digest(job[2].encode()) for job in jobs]}
+    db.execute("INSERT INTO campaign_autonomy_trials VALUES (?,?,?)", (campaign, key, loop))
+    db.execute("INSERT INTO campaign_members VALUES (?,?,?)", (loop, campaign, ordinal))
+    db.execute("""INSERT INTO research_loops(id,target,plan,step,status,review_every)
+        VALUES (?,?,'["Local evidence"]',1,'active',1)""", (loop, title))
+    db.execute("INSERT INTO local_benchmarks(loop_id,spec) VALUES (?,?)", (loop, canonical(spec)))
+    db.execute("INSERT INTO jobs(id,lane,detail) VALUES (?,?,?)",
+               (f"loop:{loop}:1", "Local evidence", "Approved experiment prepared; waiting for worker"))
+    db.execute("UPDATE campaign_autonomy SET phase='trial',reason=NULL WHERE campaign=?", (campaign,))
+
+
+def advance_generated(db, campaign, policy, policy_sha, round_no, used, budget, queue, parse, providers, details):
+    available = {key: template for key, template in policy["templates"].items()
+                 if 4 * template["timeout"] <= budget}
+    if not available:
+        halt(db, campaign, "No approved experiments fit the remaining work budget")
+        return
+    proposer, checker = (lane for lane, _, _ in providers(db, campaign))
+    round_id = f"autonomy-{round_no}"
+
+    def lookup(lane):
+        return db.execute("SELECT state,detail,result FROM jobs WHERE id=? AND lane=?",
+                          (f"proposal:{campaign}:{round_id}:{lane}", lane)).fetchone()
+
+    proposal = lookup(proposer)
+    rejection = None
+    if proposal:
+        if proposal[0] not in ("done", "failed"):
+            return
+        selection = parse(proposal[2]) if proposal[:2] == ("done", details[proposer]) else None
+        template_id, parameters = selection or (None, None)
+        template = available.get(template_id)
+        if template and valid_parameters(parameters, template):
+            candidate = canonical({"id": template_id, "parameters": parameters})
+            key = digest(canonical([template["development"]["runner_sha256"], parameters]).encode())
+            if key not in used:
+                review = lookup(checker)
+                if not review:
+                    queue(db, campaign, round_id, policy["brief"] + "\nProposed settings: " + candidate,
+                          lane=checker,
+                          instruction="Is this exact proposal a useful experiment for the question? "
+                                      "Reply with only APPROVE or REJECT. Do not propose replacements.")
+                    return
+                if review[0] not in ("done", "failed"):
+                    return
+                if (review[:2] == ("done", details[checker]) and isinstance(review[2], str)
+                        and review[2].strip() == "APPROVE"):
+                    prepare_trial(db, campaign, policy_sha, round_id, key, template_id, template,
+                                  parameters, (proposal, review), len(used) + 1, template["summary"])
+                    return
+                rejection = "The previous proposal did not get approval. Try different settings."
+            else:
+                rejection = "The previous proposal repeated an experiment that already ran."
+        else:
+            rejection = "The previous reply did not provide valid settings for an approved experiment."
+    if round_no >= policy["rounds"]:
+        halt(db, campaign, "Discovery round limit reached without another approved experiment")
+        return
+    history = []
+    for template_id, parameters in db.execute("""SELECT json_extract(b.spec,'$.template_id'),
+        json_extract(b.spec,'$.parameters') FROM campaign_autonomy_trials t
+        JOIN local_benchmarks b ON b.loop_id=t.loop_id JOIN campaign_members m ON m.loop_id=t.loop_id
+        WHERE t.campaign=? ORDER BY m.ordinal DESC LIMIT 10""", (campaign,)):
+        history.append({"id": template_id, "parameters": json.loads(parameters)})
+    public = policy["brief"] + "\nApproved experiments: " + canonical({
+        key: {"summary": value["summary"], "bounds": value["bounds"]} for key, value in available.items()})
+    if history:
+        public += "\nRecent settings already tested and not promoted: " + canonical(history)
+    if rejection:
+        public += "\n" + rejection
+    queue(db, campaign, f"autonomy-{round_no + 1}", public, lane=proposer,
+          instruction='Choose a new experiment and reply only with JSON of the form '
+                      '{"id":"approved-id","parameters":{"setting":1}}, or NONE. '
+                      'Use all and only the listed settings, inside their inclusive integer bounds.')
+    db.execute("UPDATE campaign_autonomy SET round=?,phase='discovery',reason=NULL WHERE campaign=?",
+               (round_no + 1, campaign))

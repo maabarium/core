@@ -33,8 +33,20 @@ elif args == ["models"]:
 else:
     antigravity = "-p" in args
     prompt = args[args.index("-p") + 1] if antigravity else sys.stdin.read()
-    ids, _ = json.JSONDecoder().raw_decode(prompt.split("Approved IDs: ", 1)[1])
-    pick = ids[0] if not antigravity or "Disagree" not in prompt else "NONE"
+    if "Proposed settings: " in prompt:
+        candidate = json.loads(prompt.split("Proposed settings: ", 1)[1])
+        pick = "REJECT" if "Reject reviews" in prompt else "APPROVE"
+        assert antigravity and "/var/" not in prompt and "_sha256" not in prompt
+        assert candidate["id"] in ("learner", "citation")
+    elif "Approved experiments: " in prompt:
+        assert not antigravity and "/var/" not in prompt and "_sha256" not in prompt
+        templates, _ = json.JSONDecoder().raw_decode(prompt.split("Approved experiments: ", 1)[1])
+        choice = 3 if "Invalid settings" in prompt else (
+            2 if "Recent settings" in prompt and "Repeat settings" not in prompt else 1)
+        pick = json.dumps({"id": next(iter(templates)), "parameters": {"choice": choice}})
+    else:
+        ids, _ = json.JSONDecoder().raw_decode(prompt.split("Approved IDs: ", 1)[1])
+        pick = ids[0] if not antigravity or "Disagree" not in prompt else "NONE"
     if antigravity:
         print(json.dumps({"status": "SUCCESS", "response": pick}))
     else:
@@ -119,6 +131,15 @@ print(json.dumps(report))
         return self.run_cli("campaign-autostart", "--id", "test", "--policy", str(policy),
                             "--policy-sha256", pin or sha(policy), check=check)
 
+    def generated_policy(self, study, **kwargs):
+        path = self.policy(study, **kwargs)
+        policy = json.loads(path.read_bytes())
+        del policy["variants"]
+        policy["schema"] = 2
+        policy["templates"][study]["summary"] = "Compare an approximate method to exact evidence"
+        path.write_text(json.dumps(policy))
+        return path
+
     def converge(self):
         for _ in range(12):
             if self.status()["status"] not in ("active", "confirming"):
@@ -152,6 +173,60 @@ print(json.dumps(report))
                          ("blocked", 0, 2))
         self.assertIn("round limit", result["reason"])
         self.assertFalse((self.state / "local-evidence").exists())
+
+    def test_generated_settings_learn_from_prior_trial_and_confirm(self):
+        self.start(self.generated_policy("learner"))
+        self.assertEqual(self.converge()["status"], "target_achieved")
+        with sqlite3.connect(self.state / "queue.db") as db:
+            self.assertEqual(db.execute("""SELECT t.outcome,json_extract(b.spec,'$.parameters.choice')
+                FROM campaign_trials t JOIN local_benchmarks b ON b.loop_id=t.identity
+                ORDER BY t.rowid""").fetchall(), [("fail", 1), ("pass", 2)])
+            self.assertEqual(db.execute("SELECT outcome FROM campaign_confirmations").fetchall(), [("pass",)])
+            self.assertEqual(db.execute("SELECT attempts FROM jobs ORDER BY rowid").fetchall(), [(1,)] * 7)
+
+    def test_generated_rejected_or_invalid_settings_never_run(self):
+        for brief, expected_reviews in (("Reject reviews", 2), ("Invalid settings", 0)):
+            with self.subTest(brief=brief):
+                self.state = self.root / brief
+                self.start(self.generated_policy("citation", brief=brief, rounds=2))
+                result = self.converge()
+                self.assertEqual((result["status"], result["audited_trials"], result["discovery_rounds"]),
+                                 ("blocked", 0, 2))
+                with sqlite3.connect(self.state / "queue.db") as db:
+                    self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs WHERE lane='antigravity'").fetchone(),
+                                     (expected_reviews,))
+                self.assertFalse((self.state / "local-evidence").exists())
+
+    def test_generated_duplicate_never_consumes_another_audited_trial(self):
+        self.start(self.generated_policy("learner", brief="Repeat settings", rounds=3))
+        result = self.converge()
+        self.assertEqual((result["status"], result["audited_trials"], result["discovery_rounds"]),
+                         ("blocked", 1, 3))
+        with sqlite3.connect(self.state / "queue.db") as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs WHERE lane='antigravity'").fetchone(), (1,))
+
+    def test_worker_checks_the_exact_desktop_approved_plan_before_dispatch(self):
+        for change in ("none", "plan", "program", "stopped"):
+            with self.subTest(change=change):
+                self.state = self.root / change
+                path = self.generated_policy("learner")
+                # Seed the durable state written by the desktop approval command.
+                self.start(path)
+                with sqlite3.connect(self.state / "queue.db") as db:
+                    db.execute("DROP TABLE campaign_autonomy_trials")
+                    db.execute("UPDATE campaigns SET status=?", ("stopped" if change == "stopped" else "policy_pending",))
+                    db.execute("UPDATE campaign_autonomy SET phase='checking_plan',policy=?",
+                               (path.read_text() + ("\n" if change == "plan" else ""),))
+                if change == "program":
+                    runner = self.root / "development-runner"
+                    runner.write_bytes(runner.read_bytes() + b"\n# changed")
+                self.run_cli("tick")
+                result = self.status()
+                self.assertEqual(result["status"], {"none": "active", "stopped": "stopped"}.get(change, "blocked"))
+                self.assertEqual(result["discovery_rounds"], int(change == "none"))
+                with sqlite3.connect(self.state / "queue.db") as db:
+                    self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone(),
+                                     (2 if change == "none" else 0,))
 
     def test_templates_cannot_change_the_campaign_goalposts(self):
         path = self.policy("learner")
