@@ -6,25 +6,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-- Run an opt-in autonomous research campaign from one approved policy, with provider selection, automatic trial preparation, independent metric checks, and a separate final check.
-- Approve a research plan from the desktop and let one provider propose new settings within reviewed limits while a second checks each proposal.
-- Show autonomous campaign progress and explain when the approved experiments, budget, or discovery rounds run out.
+Approve a research plan once and let Maabarium run and check successive experiments within the limits you set.
 
-### Added
+- **Plan approval:** Open a plan in Research activity, choose who proposes and who checks, and decide when to pause for human review.
+- **Automatic trials:** Try new settings inside the approved bounds, skip repeats, and move on after a failed trial.
+- **Independent checks:** Check each result locally and require a pass on a separate final test before reporting success.
+- **Progress:** See audited trial counts and why a campaign is paused, blocked, or finished.
 
-- None.
-
-### Changed
-
-- None.
-
-### Fixed
-
-- None.
-
-### Breaking Changes
-
-- None.
+Autonomous campaigns require the companion worker from this release. See the [setup guide](https://github.com/maabarium/core/blob/desktop-v0.5.2/docs/AUTONOMOUS_CAMPAIGNS.md) to configure it and prepare a plan. Existing manual campaigns still work.
 
 ## [0.5.1] - 2026-11-24
 
