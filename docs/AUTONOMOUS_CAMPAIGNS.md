@@ -47,7 +47,8 @@ Each template has exactly `timeout` (1–300 seconds per program), `bounds`
 (parameter name to inclusive integer `[min,max]`, at most eight),
 `metrics` (metric name to `["eq"|"le"|"ge", integer]`, 1–16 rules),
 `development`, `confirmation`, and `panel_sha256`. The last field identifies
-the sealed confirmation panel. Each stage contains absolute `runner` and
+the sealed confirmation panel. All templates in a campaign share exactly
+the same metric rules. Each stage contains absolute `runner` and
 `auditor` paths and their `runner_sha256` and `auditor_sha256`. All four
 executable identities must be distinct. A model can choose a public ID or
 `NONE`; it cannot add or change variants, metrics, executables or identities.

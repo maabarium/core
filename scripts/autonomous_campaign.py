@@ -51,6 +51,7 @@ def read_policy(path, expected, pin_program, unique_fields):
     if (not isinstance(templates, dict) or not 1 <= len(templates) <= 16
             or not isinstance(variants, dict) or not 1 <= len(variants) <= 64):
         raise ValueError("approve 1–16 templates and 1–64 variants")
+    common_rules = None
     for key, template in templates.items():
         fields(template, "timeout bounds metrics development confirmation panel_sha256")
         if not valid(key, IDENTITY) or not integer(template["timeout"], 1, 300):
@@ -64,6 +65,10 @@ def read_policy(path, expected, pin_program, unique_fields):
                        for name, pair in bounds.items())):
             raise ValueError("invalid parameter bounds")
         metric_rules(template["metrics"])
+        if common_rules is None:
+            common_rules = template["metrics"]
+        elif template["metrics"] != common_rules:
+            raise ValueError("all variants must answer the same frozen campaign metric rules")
         pins = set()
         for stage in ("development", "confirmation"):
             program = template[stage]

@@ -153,6 +153,16 @@ print(json.dumps(report))
         self.assertIn("round limit", result["reason"])
         self.assertFalse((self.state / "local-evidence").exists())
 
+    def test_templates_cannot_change_the_campaign_goalposts(self):
+        path = self.policy("learner")
+        policy = json.loads(path.read_bytes())
+        policy["templates"]["weaker"] = {**policy["templates"]["learner"],
+                                         "metrics": {"wrong_answers": ["le", 2]}}
+        path.write_text(json.dumps(policy))
+        result = self.start(path, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("same frozen campaign metric rules", result.stderr)
+
     def test_catalog_exhaustion_blocks_instead_of_discovering_forever(self):
         self.start(self.policy("citation", variants=1))
         result = self.converge()
