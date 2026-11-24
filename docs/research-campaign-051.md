@@ -51,6 +51,8 @@ results.
   were created.
 - [ ] Finish native visual, security, and performance release checks on the
   final build before publishing.
+- [x] Verify the published 0.5.0 app upgrades in place to the exact notarized
+  0.5.1 verification archive, without changing production or the installed app.
 - [x] Build an optimized app-only QA bundle and verify the campaign controls
   in a fresh macOS profile, without installing or publishing it.
 - [x] Create and stop a campaign through the optimized native UI, including
@@ -114,6 +116,15 @@ credentials configured, Gatekeeper rejected the unnotarized bundle, and
 there was no stapled ticket. No artifact was installed or published.
 
 ## Current implementation
+
+Upgrade QA used GitHub verification run `45331718204` on commit `aa1db38`.
+The independently verified 0.5.1 updater archive SHA-256 was
+`477a5b2b67d65a99a3fb7ff0cb83bae6e2f328d82ed8c2d889e8d0d84cd6ea9f`.
+The published 0.5.0 app detected and installed that archive in a disposable
+profile using a loopback HTTPS manifest. After relaunch the app reported
+0.5.1 and that it was up to date. The installed executable matched the
+verified artifact byte-for-byte; strict code signing and stapling validation
+passed again after installation. No artifact was promoted.
 
 Set **Pause for review every** when creating a campaign to hold after that
 many audited trials. **Approve and resume campaign** releases the hold;
