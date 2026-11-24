@@ -59,6 +59,7 @@ export function ResearchReport() {
   const [plan, setPlan] = useState<{ name: string; raw: string; brief: string; trials: number; rounds: number }>();
   const [readingPlan, setReadingPlan] = useState(false);
   const planRead = useRef(0);
+  const planPicker = useRef<HTMLInputElement>(null);
   const usesPaid = Boolean(plan || publicBrief.trim()) && choices.some(choice => choice.lane === "deepseek");
   async function loadPlan(file: File | undefined) {
     setError("");
@@ -267,14 +268,17 @@ export function ResearchReport() {
             </fieldset>
             <div className="grid gap-2 rounded-lg border p-3 text-sm">
               <p className="font-semibold">Run automatically from a research plan</p>
-              {!plan && <label className="relative grid min-h-12 cursor-pointer place-items-center rounded-md border border-dashed px-3 font-semibold focus-within:outline focus-within:outline-2 focus-within:outline-offset-2">
-                {readingPlan ? "Reading plan…" : "Choose a research plan…"}
-                <input className="absolute inset-0 h-full w-full cursor-pointer opacity-0" type="file"
+              {!plan && <>
+                <button className="min-h-12 rounded-md border border-dashed px-3 font-semibold" type="button"
+                  disabled={creating || readingPlan} onClick={() => planPicker.current?.click()}>
+                  {readingPlan ? "Reading plan…" : "Choose a research plan…"}
+                </button>
+                <input ref={planPicker} hidden type="file" aria-label="Research plan file"
                   accept=".json,application/json" onChange={event => {
                     void loadPlan(event.target.files?.[0]);
                     event.target.value = "";
-                  }} disabled={creating} />
-              </label>}
+                  }} />
+              </>}
               {plan && <>
                 <p className="break-all font-semibold">{plan.name}</p>
                 <p>Up to {plan.trials} audited trials and {plan.rounds} rounds of suggestions. The campaign stops if the separate final check passes or a limit is reached.</p>

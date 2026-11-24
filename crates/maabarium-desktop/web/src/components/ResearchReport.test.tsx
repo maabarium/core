@@ -87,7 +87,8 @@ it("shows an imported plan before approving it and saves the exact reviewed text
   fireEvent.click(screen.getByRole("button", { name: "Load report" }));
   fireEvent.click(await screen.findByText("Create a research campaign"));
   const raw = JSON.stringify({ schema: 2, brief: "Compare two search methods.", trials: 2, rounds: 4 }, null, 2);
-  fireEvent.change(screen.getByLabelText("Choose a research plan…"), {
+  expect(screen.getByRole("button", { name: "Choose a research plan…" })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Research plan file"), {
     target: { files: [{ name: "plan.json", size: raw.length, text: async () => raw }] },
   });
   expect(await screen.findByText("plan.json")).toBeTruthy();
