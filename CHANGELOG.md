@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Fixed
+
+- None.
+
+### Breaking Changes
+
+- None.
+
+## [0.5.1] - 2026-11-24
+
 Maabarium can now run a bounded research campaign against approved benchmarks, record what happened, and stop for your review.
 
 - **Campaigns:** Set trial and local benchmark time limits, pause for review, or stop queued work from Research activity.
