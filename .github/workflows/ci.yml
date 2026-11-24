@@ -32,6 +32,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p research_campaign_test.py
       - name: Test autonomous campaign lifecycle
         run: python3 -m unittest discover -s tests -p autonomous_campaign_test.py
+      - name: Campaign supervisor lifecycle
+        run: python3 -m unittest discover -s tests -p campaign_supervisor_test.py
 
   cargo-deny:
     runs-on: ubuntu-latest

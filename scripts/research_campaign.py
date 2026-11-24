@@ -42,6 +42,16 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_autonomy_trials (
             campaign TEXT NOT NULL REFERENCES campaigns(id), variant TEXT NOT NULL,
             loop_id TEXT NOT NULL UNIQUE, PRIMARY KEY(campaign,variant));
+        CREATE TABLE IF NOT EXISTS campaign_admissions (
+            campaign TEXT NOT NULL REFERENCES campaigns(id), round INTEGER NOT NULL,
+            proposal_id TEXT NOT NULL, proposal TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('queued','running','admitted','rejected','blocked')),
+            runner_sha256 TEXT, report_sha256 TEXT,
+            development_panel TEXT, confirmation_panel TEXT,
+            PRIMARY KEY(campaign,round), UNIQUE(campaign,proposal_id), UNIQUE(campaign,runner_sha256));
+        CREATE TABLE IF NOT EXISTS campaign_confirmation_failures (
+            campaign TEXT NOT NULL REFERENCES campaigns(id), loop_id TEXT NOT NULL UNIQUE,
+            evidence_sha256 TEXT NOT NULL);
     """)
 
 

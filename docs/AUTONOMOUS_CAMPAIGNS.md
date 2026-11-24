@@ -104,5 +104,59 @@ If no approved option fits the remaining budget, or agreement never
 arrives before the round or time cap, the campaign reports **Blocked**.
 An interrupted local attempt, corrupt audit, or failed final confirmation
 stops for review without an automatic rerun. A new executable, data grant,
-or expanded policy needs a new approved campaign. Manual 0.5.1 campaigns
-and their audit contracts remain supported.
+or expanded policy needs a new approved campaign in schemas 1 and 2.
+Manual 0.5.1 campaigns and their audit contracts remain supported.
+
+## Policy schema 3: let an approved vetter admit new benchmarks
+
+Use this mode when new candidates need their own benchmark programs. It
+keeps discovery, local vetting, audited trials and sealed confirmation
+within one campaign instead of creating a new campaign for each candidate.
+Start it with the same `campaign-autostart` command and check progress with
+`campaign-status`; the latter includes the latest admission state.
+
+The policy contains `schema: 3`, `brief`, `rounds`, `trials`,
+`lifetime_seconds`, `work_seconds`, the frozen `metrics` rules, and:
+
+| Field | Meaning |
+| --- | --- |
+| `vetter` | Absolute path to a trusted, self-contained local admission program. |
+| `vetter_sha256` | The reviewed program's SHA-256. Changed bytes stop the campaign. |
+| `vet_timeout` | Maximum reserved seconds for each vetting attempt, 1–300. |
+
+Codex proposes a public mechanism, hypothesis, exact control and rejection
+test. Antigravity checks the proposal. Their agreement only allows the
+local vetter to examine it. Neither provider gets paths, raw panels,
+credentials, audit results, or permission to supply executable code.
+Other providers cannot take either role in this mode.
+
+The vetter reads the bounded proposal JSON on stdin and runs in its own
+private attempt directory. Its stdout must be either
+`{"outcome":"reject"}`, or a JSON object with:
+
+- `outcome: "admit"`;
+- `template`: the schema 1 template shape, with four distinct program
+  basenames written into this directory, their hashes and the frozen
+  confirmation panel identity;
+- `parameters`: the permitted settings for this exact candidate;
+- `development_panel_sha256`: the separately pinned development panel.
+
+Development auditors must report `panel_sha256`, as confirmation auditors
+already do. Maabarium checks program identity, distinct panels, metric
+rules and the remaining budget before dispatch. A rejected proposal costs
+no audited trial. The same development program or panel cannot be admitted
+twice under a new name. Development failure returns to discovery; a
+development pass enters independent sealed confirmation. A valid scientific
+confirmation failure closes that candidate and returns to discovery if budget
+remains. Sealed success or the audited-trial cap stops the campaign. Running
+out of discovery rounds, time, or work budget can stop it earlier. Vetting
+crashes, interrupted attempts, and malformed reports stop for review.
+
+The vetter is a trusted research authority, not an unrestricted coding
+agent. It must itself enforce the study's independent comparator, checks,
+review and provenance requirements before reporting admission. Run only
+approved deterministic preparation code; never invoke a proposal as code
+or give it shell authority. The child guard bounds time and file size, and
+removes inherited credentials, but is not a filesystem or network sandbox.
+A CODA deployment still needs a project-specific vetter that enforces the
+CODA repository's reviewed-merge and frozen-evidence policy.
