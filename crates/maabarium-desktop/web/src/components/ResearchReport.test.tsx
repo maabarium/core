@@ -111,6 +111,20 @@ it("shows audited campaigns separately from provider jobs", async () => {
   expect(screen.getByText("Output").nextElementSibling?.textContent).toBe("0");
 });
 
+it("distinguishes blocked autonomy from an idle active campaign", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce({
+    experiments: 0,
+    lanes: [],
+    campaigns: [{ id: "study", status: "blocked", limit: 20, audited_trials: 1,
+      rejected_trials: 1, operational_failures: 0, autonomy_reason: "Approved experiments exhausted" }],
+  });
+  render(<ResearchReport />);
+  fireEvent.click(screen.getByRole("button", { name: "Load report" }));
+  expect(await screen.findByText("1 of 20 audited trials · Blocked")).toBeTruthy();
+  expect(screen.getByText("Approved experiments exhausted")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Send public brief to selected providers" })).toBeNull();
+});
+
 it("shows terminal rates and reveals provider details only with the switch", async () => {
   vi.mocked(invoke).mockResolvedValueOnce({
     experiments: 2,

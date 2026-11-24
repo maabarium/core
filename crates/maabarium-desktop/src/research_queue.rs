@@ -239,6 +239,26 @@ struct CampaignReport {
     confirmation_outcome: Option<String>,
     ready_proposal_rounds: Vec<String>,
     can_start: bool,
+    autonomy_phase: Option<String>,
+    autonomy_reason: Option<String>,
+}
+
+fn autonomy_state(db: &Connection, id: &str) -> rusqlite::Result<Option<(String, Option<String>)>> {
+    use rusqlite::OptionalExtension;
+    let available: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='campaign_autonomy')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !available {
+        return Ok(None);
+    }
+    db.query_row(
+        "SELECT phase,reason FROM campaign_autonomy WHERE campaign=?",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
 }
 
 #[derive(Serialize)]
@@ -281,6 +301,8 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
             confirmation_outcome: None,
             ready_proposal_rounds: Vec::new(),
             can_start: false,
+            autonomy_phase: None,
+            autonomy_reason: None,
         })
     })?;
     let mut reports = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -293,6 +315,10 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
         |row| row.get(0),
     )?;
     for campaign in &mut reports {
+        if let Some((phase, reason)) = autonomy_state(db, &campaign.id)? {
+            campaign.autonomy_phase = Some(phase);
+            campaign.autonomy_reason = reason;
+        }
         campaign.trial_outcomes = outcomes
             .query_map([&campaign.id], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -319,7 +345,10 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
                 WHERE m.campaign=?1 AND l.status!='catalog')
             AND NOT EXISTS(SELECT 1 FROM campaign_proposals WHERE campaign=?1)",
         )?;
-        for campaign in reports.iter_mut().filter(|item| item.status == "active") {
+        for campaign in reports
+            .iter_mut()
+            .filter(|item| item.status == "active" && item.autonomy_phase.is_none())
+        {
             campaign.can_start = can_start.query_row([&campaign.id], |row| row.get(0))?;
         }
     }
@@ -382,7 +411,7 @@ fn campaign_report(db: &Connection) -> rusqlite::Result<Vec<CampaignReport>> {
         )?;
         for campaign in reports
             .iter_mut()
-            .filter(|campaign| campaign.status == "active")
+            .filter(|campaign| campaign.status == "active" && campaign.autonomy_phase.is_none())
         {
             let rounds = ready.query_map([&campaign.id], |row| row.get(0))?;
             campaign.ready_proposal_rounds = rounds.collect::<rusqlite::Result<_>>()?;
@@ -895,6 +924,9 @@ fn start_campaign(db: &mut Connection, id: &str) -> Result<(), String> {
     let tx = db
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
+    if autonomy_state(&tx, id).map_err(err)?.is_some() {
+        return Err("The autonomous worker owns this campaign's proposals.".into());
+    }
     let brief: String = tx
         .query_row(
             "SELECT a.public_brief FROM campaigns c JOIN campaign_adaptive a
@@ -1379,6 +1411,9 @@ fn stage_campaign_trial(
     let tx = db
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
+    if autonomy_state(&tx, &campaign).map_err(err)?.is_some() {
+        return Err("This campaign admits trials only from its approved policy.".into());
+    }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS campaign_members (
         loop_id TEXT PRIMARY KEY, campaign TEXT NOT NULL REFERENCES campaigns(id),

@@ -30,6 +30,8 @@ jobs:
         run: python3 tests/subscription_lane_test.py
       - name: Test audited research campaign
         run: python3 -m unittest discover -s tests -p research_campaign_test.py
+      - name: Test autonomous campaign lifecycle
+        run: python3 -m unittest discover -s tests -p autonomous_campaign_test.py
 
   cargo-deny:
     runs-on: ubuntu-latest

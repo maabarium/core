@@ -6,6 +6,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+- Run an opt-in autonomous research campaign from one approved policy, with provider selection, automatic trial preparation, independent metric checks, and a separate final check.
+- Show autonomous campaign progress and explain when the approved experiments, budget, or discovery rounds run out.
+
 ### Added
 
 - None.

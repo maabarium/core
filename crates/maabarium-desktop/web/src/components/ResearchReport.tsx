@@ -9,7 +9,7 @@ type Lane = TokenUsage & {
   pending: number; attempts: number; observed_jobs: number;
 };
 type ProposalUsage = TokenUsage & { lane: string; jobs: number; observed_jobs: number };
-type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[]; trial_outcomes?: string[]; confirmation_outcome?: string | null };
+type Campaign = { id: string; status: string; limit: number; audited_trials: number; rejected_trials: number; operational_failures: number; ready_proposal_rounds?: string[]; can_start?: boolean; proposal_usage?: ProposalUsage[]; trial_outcomes?: string[]; confirmation_outcome?: string | null; autonomy_phase?: string | null; autonomy_reason?: string | null };
 type PracticeResult = { questions: number; matches: number; scan_checks: number; lookup_checks: number };
 type Starter = { stage: string; first: PracticeResult | null; final_result: PracticeResult | null };
 type Report = { experiments: number; lanes: Lane[]; trend?: TrendDay[]; campaigns?: Campaign[] };
@@ -303,8 +303,13 @@ export function ResearchReport() {
                 campaign.status === "confirming" ? "Sealed confirmation pending" :
                 campaign.status === "human_review" ? "Needs review" :
                 campaign.status === "checkpoint" ? "Paused for your review" :
-                campaign.status === "stopped" ? "Stopped" : "Active"
+                campaign.status === "stopped" ? "Stopped" :
+                campaign.status === "blocked" ? "Blocked" :
+                campaign.autonomy_phase === "trial" ? "Approved trial queued or running" :
+                campaign.autonomy_phase === "waiting_for_worker" ? "Waiting for the campaign worker" :
+                campaign.autonomy_phase === "discovery" ? "Selecting the next experiment" : "Active"
               }</p>
+              {campaign.autonomy_reason && <p className="mt-1">{campaign.autonomy_reason}</p>}
               <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-2">
                 <div><dt>Passed</dt><dd className="font-semibold">{campaign.audited_trials - campaign.rejected_trials}</dd></div>
                 <div><dt>Did not meet the target</dt><dd className="font-semibold">{campaign.rejected_trials}</dd></div>

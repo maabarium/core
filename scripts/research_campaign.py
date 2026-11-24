@@ -35,6 +35,13 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_confirmations (
             campaign TEXT PRIMARY KEY REFERENCES campaigns(id), loop_id TEXT NOT NULL UNIQUE,
             outcome TEXT, evidence_sha256 TEXT);
+        CREATE TABLE IF NOT EXISTS campaign_autonomy (
+            campaign TEXT PRIMARY KEY REFERENCES campaigns(id), policy TEXT NOT NULL,
+            policy_sha256 TEXT NOT NULL, deadline INTEGER NOT NULL, round INTEGER NOT NULL DEFAULT 0,
+            phase TEXT NOT NULL, reason TEXT);
+        CREATE TABLE IF NOT EXISTS campaign_autonomy_trials (
+            campaign TEXT NOT NULL REFERENCES campaigns(id), variant TEXT NOT NULL,
+            loop_id TEXT NOT NULL UNIQUE, PRIMARY KEY(campaign,variant));
     """)
 
 
