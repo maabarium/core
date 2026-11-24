@@ -52,6 +52,10 @@ def initialize(db):
         CREATE TABLE IF NOT EXISTS campaign_confirmation_failures (
             campaign TEXT NOT NULL REFERENCES campaigns(id), loop_id TEXT NOT NULL UNIQUE,
             evidence_sha256 TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS campaign_admission_rejections (
+            campaign TEXT NOT NULL, round INTEGER NOT NULL, reason TEXT NOT NULL,
+            PRIMARY KEY(campaign,round),
+            FOREIGN KEY(campaign,round) REFERENCES campaign_admissions(campaign,round));
     """)
 
 

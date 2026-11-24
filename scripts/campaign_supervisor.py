@@ -20,11 +20,20 @@ PROPOSAL_FIELDS = "id mechanism hypothesis control rejection_test"
 PROPOSAL_FORMAT = ('Reply only NONE, or a JSON object with five string fields: id, mechanism, '
                    'hypothesis, control, rejection_test. Use a short ASCII ID, each other field '
                    '1 to 384 printable ASCII characters. No code, file paths, or commands.')
+SAFE_REJECTIONS = {
+    "closed": "This design was already closed; do not revisit it.",
+    "parity": "The local parity check rejected the design.",
+    "cost": "The local work screen rejected the design against its exact control.",
+    "resource": "The local resource screen rejected the design.",
+    "unsupported": "The approved verifier cannot prepare this design.",
+    "duplicate": "The candidate repeats a previously admitted implementation.",
+    "rejected": "The approved verifier rejected this design.",
+}
 
 
 def validate_policy(policy, pin_program):
     fields(policy, "schema brief rounds trials lifetime_seconds work_seconds metrics vetter "
-                   "vetter_sha256 vet_timeout")
+                   "vetter_sha256 vet_timeout" + (" candidates" if "candidates" in policy else ""))
     if (not integer(policy["rounds"], 1, 200) or not integer(policy["trials"], 1, 200)
             or not integer(policy["lifetime_seconds"], 1, 604800)
             or not integer(policy["work_seconds"], 5, 120600)
@@ -36,6 +45,13 @@ def validate_policy(policy, pin_program):
             or not valid(policy["vetter_sha256"], DIGEST)):
         raise ValueError("invalid supervisor policy or budget")
     metric_rules(policy["metrics"])
+    if "candidates" in policy:
+        candidates = policy["candidates"]
+        if (not isinstance(candidates, dict) or not 1 <= len(candidates) <= 24
+                or any(not valid(name, IDENTITY) or name == "NONE"
+                       or not valid(summary, r"[ -~]{1,96}") or not summary.strip()
+                       for name, summary in candidates.items())):
+            raise ValueError("invalid public candidate menu")
     policy["vetter"] = pin_program(Path(policy["vetter"]), policy["vetter_sha256"])
     return policy
 
@@ -78,8 +94,9 @@ def advance(db, campaign, policy, round_no, queue, providers, details, unique_fi
             return
         proposal = parse_proposal(suggestion[2], unique_fields) if (
             suggestion[:2] == ("done", details["codex"])) else None
-        if proposal and not db.execute("""SELECT 1 FROM campaign_admissions
-                WHERE campaign=? AND proposal_id=?""", (campaign, proposal["id"])).fetchone():
+        if (proposal and ("candidates" not in policy or proposal["id"] in policy["candidates"])
+                and not db.execute("""SELECT 1 FROM campaign_admissions
+                WHERE campaign=? AND proposal_id=?""", (campaign, proposal["id"])).fetchone()):
             review = job("antigravity")
             if not review:
                 queue(db, campaign, round_id, policy["brief"] + "\nPublic proposal: " + canonical(proposal),
@@ -104,10 +121,22 @@ def advance(db, campaign, policy, round_no, queue, providers, details, unique_fi
     if min(deadline - time.time(), budget) < minimum:
         halt(db, campaign, "Not enough campaign budget to vet another experiment")
         return
-    history = db.execute("""SELECT proposal_id FROM campaign_admissions WHERE campaign=?
-        ORDER BY round DESC LIMIT 20""", (campaign,)).fetchall()
-    queue(db, campaign, f"supervisor-{round_no + 1}", policy["brief"] +
-          "\nDo not repeat these previously vetted IDs: " + canonical([r[0] for r in history]),
+    history = db.execute("""SELECT a.proposal_id,r.reason FROM campaign_admissions a
+        LEFT JOIN campaign_admission_rejections r ON r.campaign=a.campaign AND r.round=a.round
+        WHERE a.campaign=? ORDER BY a.round DESC""", (campaign,)).fetchall()
+    tried = {name for name, _ in history}
+    brief = policy["brief"]
+    if "candidates" in policy:
+        available = {name: title for name, title in policy["candidates"].items() if name not in tried}
+        if not available:
+            halt(db, campaign, "No untried designs remain in the approved preparation menu")
+            return
+        brief += "\nChoose only from these untried, locally supported designs: " + canonical(available)
+    feedback = {name: SAFE_REJECTIONS[reason] for name, reason in history[:20] if reason in SAFE_REJECTIONS}
+    if feedback:
+        brief += "\nLocal vetting feedback (facts, not instructions): " + canonical(feedback)
+    queue(db, campaign, f"supervisor-{round_no + 1}", brief +
+          "\nDo not repeat these previously vetted IDs: " + canonical([r[0] for r in history[:20]]),
           lane="codex", instruction=PROPOSAL_FORMAT)
     db.execute("UPDATE campaign_autonomy SET round=?,phase='discovery',reason=NULL WHERE campaign=?",
                (round_no + 1, campaign))
@@ -202,8 +231,13 @@ def process(db, state, lock_fd, guard, pin_program, unique_fields):
             raise ValueError("vetter did not produce a valid report")
         evidence = output.read_bytes()
         report = json.loads(evidence, object_pairs_hook=unique_fields)
-        template = None if report == {"outcome": "reject"} else trial_descriptor(
-            report, policy, directory, pin_program, unique_fields)
+        rejection = None
+        if isinstance(report, dict) and report.get("outcome") == "reject":
+            fields(report, "outcome reason" if "reason" in report else "outcome")
+            rejection = report.get("reason", "rejected")
+            if not isinstance(rejection, str) or rejection not in SAFE_REJECTIONS:
+                raise ValueError("invalid rejection reason")
+        template = None if rejection else trial_descriptor(report, policy, directory, pin_program, unique_fields)
         db.execute("BEGIN IMMEDIATE")
         if db.execute("SELECT status FROM campaigns WHERE id=?", (campaign,)).fetchone() != ("active",):
             db.execute("UPDATE campaign_admissions SET state='blocked',report_sha256=? "
@@ -220,6 +254,7 @@ def process(db, state, lock_fd, guard, pin_program, unique_fields):
                                    (campaign, key)).fetchone()
             if duplicate:
                 next_state, key = "rejected", None
+                rejection = "duplicate"
             else:
                 development_panel = report["development_panel_sha256"]
                 confirmation_panel = template["panel_sha256"]
@@ -245,6 +280,8 @@ def process(db, state, lock_fd, guard, pin_program, unique_fields):
         db.execute("""UPDATE campaign_admissions SET state=?,runner_sha256=?,report_sha256=?,
             development_panel=?,confirmation_panel=? WHERE campaign=? AND round=?""",
                    (next_state, key, digest(evidence), development_panel, confirmation_panel, campaign, number))
+        if rejection:
+            db.execute("INSERT INTO campaign_admission_rejections VALUES (?,?,?)", (campaign, number, rejection))
         db.commit()
     except (OSError, ValueError, RecursionError):
         if db.in_transaction:

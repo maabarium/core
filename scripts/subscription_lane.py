@@ -1276,6 +1276,12 @@ def main():
                     WHERE campaign=? ORDER BY round DESC LIMIT 1""", (args.id,)).fetchone()
                 if admission:
                     report["last_admission"] = dict(zip(("candidate", "state"), admission))
+                    latest = db.execute("""SELECT r.reason FROM campaign_admissions a
+                        JOIN campaign_admission_rejections r ON r.campaign=a.campaign AND r.round=a.round
+                        WHERE a.campaign=? AND a.round=(SELECT MAX(round) FROM campaign_admissions WHERE campaign=?)""",
+                        (args.id, args.id)).fetchone()
+                    if latest:
+                        report["last_admission"]["reason"] = latest[0]
                 print(json.dumps(report))
             elif args.action == "enqueue":
                 if args.id.startswith("loop:"):

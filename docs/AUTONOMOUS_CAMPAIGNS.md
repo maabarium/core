@@ -123,6 +123,7 @@ The policy contains `schema: 3`, `brief`, `rounds`, `trials`,
 | `vetter` | Absolute path to a trusted, self-contained local admission program. |
 | `vetter_sha256` | The reviewed program's SHA-256. Changed bytes stop the campaign. |
 | `vet_timeout` | Maximum reserved seconds for each vetting attempt, 1–300. |
+| `candidates` | Optional public menu of up to 24 named, locally supported designs. Names and short descriptions can be shared; no local paths. |
 
 Codex proposes a public mechanism, hypothesis, exact control and rejection
 test. Antigravity checks the proposal. Their agreement only allows the
@@ -132,7 +133,9 @@ Other providers cannot take either role in this mode.
 
 The vetter reads the bounded proposal JSON on stdin and runs in its own
 private attempt directory. Its stdout must be either
-`{"outcome":"reject"}`, or a JSON object with:
+`{"outcome":"reject"}` (optionally with a reason code: `closed`,
+`parity`, `cost`, `resource`, `unsupported`, `duplicate`, or
+`rejected`), or a JSON object with:
 
 - `outcome: "admit"`;
 - `template`: the schema 1 template shape, with four distinct program
@@ -151,6 +154,12 @@ confirmation failure closes that candidate and returns to discovery if budget
 remains. Sealed success or the audited-trial cap stops the campaign. Running
 out of discovery rounds, time, or work budget can stop it earlier. Vetting
 crashes, interrupted attempts, and malformed reports stop for review.
+
+When a menu is supplied, only untried IDs are offered and dispatched.
+Subsequent proposals receive bounded, built-in descriptions of rejection
+codes, not vetter logs or evidence files. When no untried design remains,
+the worker reports why it stopped instead of continuing to spend provider
+quota on unsupported ideas.
 
 The vetter is a trusted research authority, not an unrestricted coding
 agent. It must itself enforce the study's independent comparator, checks,
