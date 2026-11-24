@@ -6,6 +6,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+Maabarium can now run a bounded research campaign against approved benchmarks, record what happened, and stop for your review.
+
+- **Campaigns:** Set trial and local benchmark time limits, pause for review, or stop queued work from Research activity.
+- **Provider choice:** Choose two suggestion providers and save their model settings; paid requests require explicit consent.
+- **Independent checks:** Run pinned benchmarks and use a separate final check before declaring a result confirmed.
+- **Reports:** See trial decisions, operational failures, and token usage when the provider reports it.
+- **Practice:** Try a ready-made campaign offline, with no provider account or files required.
+- **Fixes:** Exhausted catalogs stop for review, and manually approved final checks receive the verified development evidence.
+
+For unattended campaigns, update the companion subscription worker from the same source release.
+
 ## [0.5.0] - 2026-11-22
 
 The local research queue supports ordered subscription-provider plans with

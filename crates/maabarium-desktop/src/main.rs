@@ -578,6 +578,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             research_queue::research_queue_list,
             research_queue::research_queue_report,
+            research_queue::research_campaign_practice,
+            research_queue::research_starter_campaign,
+            research_queue::research_campaign_create,
+            research_queue::research_campaign_start,
+            research_queue::research_campaign_stop,
             research_queue::research_muse_allowance,
             research_queue::research_queue_enqueue,
             research_queue::research_subscription_check,
