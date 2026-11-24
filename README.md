@@ -129,6 +129,8 @@ Use the native-tuned command only for local benchmarking or personal builds. Dis
 
 ### Run The CLI With The Example Blueprint
 
+The CLI writes its own log to `~/Library/Logs/com.maabarium.cli/maabarium.log` on macOS. On Linux it uses `$XDG_STATE_HOME/maabarium/cli/maabarium.log` (defaulting to `~/.local/state`); on Windows it uses `%LOCALAPPDATA%\Maabarium CLI\Logs\maabarium.log`. If the log cannot be opened, diagnostics go to stderr without blocking commands.
+
 ```bash
 cargo run -p maabarium-cli -- run blueprints/example.toml --db data/maabarium.db
 ```

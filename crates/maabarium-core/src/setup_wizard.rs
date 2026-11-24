@@ -371,9 +371,12 @@ impl ReadinessScanner {
 
     fn check_diagnostics() -> ReadinessItem {
         let db_path = crate::persistence::default_db_path();
-        let log_path = crate::logging::default_log_path();
+        let log_path = crate::logging::cli_log_path();
         let db_ok = db_path.parent().is_some_and(|p| p.exists());
-        let log_ok = log_path.parent().is_some_and(|p| p.exists());
+        let log_ok = log_path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .is_some_and(|p| p.exists());
 
         ReadinessItem {
             id: "diagnostics".to_owned(),
@@ -383,7 +386,14 @@ impl ReadinessScanner {
             } else {
                 ReadinessLevel::NeedsAction
             },
-            summary: format!("DB: {} | Log: {}", db_path.display(), log_path.display()),
+            summary: format!(
+                "DB: {} | CLI log: {}",
+                db_path.display(),
+                log_path.as_deref().map_or_else(
+                    || "stderr (no user log directory)".to_owned(),
+                    |path| path.display().to_string(),
+                ),
+            ),
             fix_label: None,
             fix_hint: None,
         }
