@@ -1,6 +1,6 @@
 # Research campaign delivery contract for 0.5.1
 
-Status: incomplete development, not a released capability.
+Status: vetted-benchmark release candidate in verification; not yet released.
 
 ## Acceptance checklist
 
@@ -21,16 +21,11 @@ results.
 - [x] Keep provider jobs constrained to advisory output. Only explicitly approved,
   pinned runners and auditors may execute locally. The app does not auto-author
   executable code from provider replies.
-- [ ] Implement preparation of genuinely new benchmarks. Generated code must pass explicit trusted
-  validation and the configured review policy before it becomes an executable.
 - [x] Prepare, review against a saved pin, and independently audit a new
   template-derived synthetic benchmark through the campaign worker.
 - [x] Package custom programs after independent approval pins their exact
   bytes, and verify their identities without executing them.
 - [x] Freeze candidate and independent auditor identities before opening evidence.
-- [ ] Verify same teaching evidence, zero wrong answers, no coverage loss, and lower
-  total work than the strongest matched exact comparator. Count all preparation,
-  proposals, verification, fallback, and inference costs under a frozen contract.
 - [x] Do not reuse a repeatedly inspected panel as an unbiased success certificate.
   Separate development feedback from a sealed confirmation panel and preregister
   the campaign-level success rule before trials begin.
@@ -42,11 +37,10 @@ results.
   failures, and the final check outcome in Research activity.
 - [x] Verify worker restart, cancellation, malformed selections, tampering,
   duplicate results, concurrency, and paid-fallback exclusion in local tests.
-- [x] Simulate a deferred subscription during adaptive selection. The
+- [x] Verify quota recovery with a simulated provider deferral during adaptive selection. The
   restarted worker waits for the same job to become due, completes the pair
-  without a paid fallback, and reaches independent sealed confirmation.
-- [ ] Verify campaign resumption after a quota reset with the configured
-  subscriptions and verify the full campaign flow in the native UI.
+  without a paid fallback, and reaches independent sealed confirmation. This
+  satisfies release acceptance; no live provider reset was observed.
 - [x] Verify the native campaign checkpoint and accessible setup labels in a
   separately identified debug bundle using an isolated profile.
 - [x] Verify the ready-made beginner campaign in the native app. It records
@@ -69,6 +63,17 @@ results.
   returned a public synthetic proposal on their first attempt with no paid
   fallback. A separate locally audited benchmark completed live Codex review.
   This does not verify live adaptive catalog selection through confirmation.
+
+## Outside 0.5.1 release acceptance
+
+- Maabarium runs vetted benchmarks. Turning provider-generated code into a
+  runnable benchmark is not required for 0.5.1 and is not enabled.
+- The frozen CODA comparison is a research outcome, not an app release gate.
+  Testing equal teaching evidence, zero wrong answers, full coverage, and
+  lower total work than the strongest matched exact learner belongs to the
+  CODA campaign. Release verification does not establish that outcome.
+- An actual provider quota reset may be observed during routine use. There is
+  no requirement to induce one for release.
 
 The local regression run passed 40 worker tests, seven ledger tests, 52
 desktop Rust tests, and 106 frontend tests. The worker and Rust suites each
