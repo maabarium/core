@@ -8,14 +8,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- Quiet update checks and a clickable sidebar notice that opens Software Update. Downloads and installation still require your approval.
-
-- Supervised campaigns can replenish exhausted menus through a pinned local preparer without resetting their ledger or trial cap.
-
-- A campaign supervisor that asks Codex for fresh candidates, has Antigravity review them, and uses an approved local vetter to admit new benchmark identities under one shared budget.
+- None.
 
 ### Changed
-- Supervised campaigns can constrain discovery to runnable designs and automatically use local rejection reasons to select the next design without sharing evidence.
+
+- None.
 
 ### Fixed
 
@@ -24,6 +21,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Breaking Changes
 
 - None.
+
+## [0.5.3] - 2026-11-25
+
+Maabarium can now find, screen, and run new research trials within the limits of an approved plan, and quietly lets you know when an app update is available.
+
+- **Campaign supervision:** Codex proposes candidates, Antigravity reviews them, and an approved local checker decides which are ready to test.
+- **Automatic continuation:** When the candidate list runs out, campaigns can add distinct candidates without resetting their history or trial limit.
+- **Private evidence:** Rejection reasons can guide the next proposal without sending benchmark evidence to providers.
+- **Software updates:** Click the sidebar notice to see what's new and choose whether to install. The app does not install or restart on its own.
+
+For unattended campaigns, update the companion worker from the same release. See the [campaign setup guide](https://github.com/maabarium/core/blob/desktop-v0.5.3/docs/AUTONOMOUS_CAMPAIGNS.md).
 
 ## [0.5.2] - 2026-11-24
 
