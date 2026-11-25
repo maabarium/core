@@ -71,6 +71,13 @@ Manual distribution is still supported, but a concrete updater path now exists f
 
 ## R2-Backed Updater Flow
 
+Configured desktop builds check for update metadata after 15 seconds and
+then every six hours while the window is visible. A failed check retries
+quietly after 30 minutes. A new version appears as **Update available** in
+the workspace sidebar, respecting the existing reminder for that version.
+The badge opens the same Software Update panel as the app menu. Checking
+never downloads a bundle, installs it or restarts Maabarium.
+
 The updater storage endpoint can be backed by Cloudflare R2.
 
 - `MAABARIUM_UPDATE_BASE_URL` should point to the public release origin, ideally an R2-backed custom domain.

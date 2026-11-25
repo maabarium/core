@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   AlertCircle,
+  ArrowUpCircle,
   ChevronUp,
   CheckCircle2,
   Play,
@@ -56,6 +57,7 @@ import {
   type CollapsibleConsolePanel,
 } from "./lib/consolePanels";
 import { useDesktopConsole } from "./lib/useDesktopConsole";
+import { useUpdateAvailability } from "./lib/useUpdateAvailability";
 import { useBlueprintWizard } from "./lib/useBlueprintWizard";
 import {
   selectPreviousWinnerExperiment,
@@ -273,6 +275,13 @@ export default function App() {
     runGroup,
     stopGroup,
   } = useDesktopConsole();
+  const updateAvailability = useUpdateAvailability(state?.updater, !window.__MAABARIUM_MOCK_CONSOLE_STATE__);
+  const availableUpdate = updateAvailability.availableUpdate;
+  const reminder = state?.desktopSetup;
+  const showUpdateBadge = Boolean(availableUpdate && !(
+    reminder?.remindLaterVersion === availableUpdate.version &&
+    Date.parse(reminder.remindLaterUntil ?? "") > Date.now()
+  ));
   const {
     blueprintQuery,
     setBlueprintQuery,
@@ -1228,7 +1237,9 @@ export default function App() {
         onClose={() => setAboutOpen(false)}
         onOpenLicense={() => void openRepositoryLicense()}
       />
-      {updatesOpen && <UpdateCheckModal onClose={() => setUpdatesOpen(false)} />}
+      {updatesOpen && <UpdateCheckModal onClose={() => setUpdatesOpen(false)}
+        initialUpdate={availableUpdate} checkUpdate={updateAvailability.check}
+        onInstalled={updateAvailability.markInstalled} />}
 
       {successToast ? (
         <div className="fixed right-6 top-6 z-[180] max-w-sm rounded-2xl border border-emerald-400/25 bg-slate-950/95 px-4 py-3 shadow-2xl shadow-emerald-950/40 backdrop-blur-xl">
@@ -1455,6 +1466,15 @@ export default function App() {
               maabarium
             </span>
           </div>
+          <span role="status" className="sr-only">
+            {showUpdateBadge ? `Maabarium ${availableUpdate?.version} update available.` : ""}
+          </span>
+          {showUpdateBadge && <button type="button" className="workspace-update"
+            aria-label={`Update available: Maabarium ${availableUpdate?.version}`}
+            aria-haspopup="dialog" onClick={() => setUpdatesOpen(true)}>
+            <ArrowUpCircle size={16} aria-hidden="true" />
+            <span>Update available</span>
+          </button>}
 
           <div className="console-navigation" role="group" aria-label="Workspace sections">
             <button
@@ -2220,8 +2240,12 @@ export default function App() {
                 if (result) setBranchInspection(null);
                 return result;
               }}
-              onCheckForUpdates={() => void checkForUpdates()}
-              onInstallUpdate={() => void installAvailableUpdate()}
+              onCheckForUpdates={() => void checkForUpdates().then((result) => {
+                if (result) updateAvailability.recordCheck(result);
+              })}
+              onInstallUpdate={() => void installAvailableUpdate().then((installed) => {
+                if (installed) updateAvailability.markInstalled();
+              })}
               onSelectChannel={(channel) =>
                 void handleSelectUpdateChannel(channel)
               }

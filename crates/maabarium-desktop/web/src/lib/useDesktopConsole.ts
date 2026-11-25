@@ -6,6 +6,7 @@ import {
   normalizeExperimentBranchCleanupResult,
 } from "./normalizers";
 import { listOllamaModelNames } from "./ollama";
+import { requestUpdateCheck } from "./useUpdateAvailability";
 import type {
   BlueprintFile,
   BlueprintWizardRequest,
@@ -478,8 +479,10 @@ export function useDesktopConsole({
     if (isMockMode()) {
       setCheckingForUpdates(true);
       try {
-        setUpdateCheck(readMockUpdateCheck());
+        const result = readMockUpdateCheck();
+        setUpdateCheck(result);
         setActionError(null);
+        return result;
       } finally {
         setCheckingForUpdates(false);
       }
@@ -488,9 +491,10 @@ export function useDesktopConsole({
 
     try {
       setCheckingForUpdates(true);
-      const result = await invoke<UpdateCheckResult>("check_for_updates");
+      const result = await requestUpdateCheck(state?.updater);
       setUpdateCheck(result);
       setActionError(null);
+      return result;
     } catch (error) {
       presentDesktopError(
         "Updater Error",
@@ -498,6 +502,7 @@ export function useDesktopConsole({
         "The desktop app could not complete the update check. Review the details below before trying again.",
         error,
       );
+      return null;
     } finally {
       setCheckingForUpdates(false);
     }
@@ -512,16 +517,17 @@ export function useDesktopConsole({
         writeMockUpdateCheck(next);
         setUpdateCheck(next);
         setActionError(null);
+        return current?.available === true;
       } finally {
         setInstallingUpdate(false);
       }
-      return;
     }
 
     try {
       setInstallingUpdate(true);
       const result = await invoke<{ installed: boolean }>(
         "install_available_update",
+        { expectedVersion: updateCheck?.version ?? null },
       );
 
       if (result.installed) {
@@ -535,6 +541,7 @@ export function useDesktopConsole({
             : current,
         );
       }
+      return result.installed;
     } catch (error) {
       presentDesktopError(
         "Updater Error",
@@ -542,6 +549,7 @@ export function useDesktopConsole({
         "The desktop app could not install the available update. Review the details below before retrying.",
         error,
       );
+      return false;
     } finally {
       setInstallingUpdate(false);
     }
