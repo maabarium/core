@@ -56,7 +56,7 @@ export function ResearchReport() {
   const [choices, setChoices] = useState(defaultChoices);
   const [allowPaid, setAllowPaid] = useState(false);
   const [publicBrief, setPublicBrief] = useState("");
-  const [plan, setPlan] = useState<{ name: string; raw: string; brief: string; trials: number; rounds: number }>();
+  const [plan, setPlan] = useState<{ name: string; raw: string; brief: string; trials: number; rounds: number; supervised: boolean; ordered: boolean }>();
   const [readingPlan, setReadingPlan] = useState(false);
   const planRead = useRef(0);
   const planPicker = useRef<HTMLInputElement>(null);
@@ -71,12 +71,18 @@ export function ResearchReport() {
       const raw = await file.text();
       if (read !== planRead.current) return;
       const value = JSON.parse(raw);
-      if (![1, 2].includes(value?.schema) || typeof value?.brief !== "string"
+      if (![1, 2, 3].includes(value?.schema) || typeof value?.brief !== "string"
         || !value.brief.trim() || !Number.isInteger(value.trials) || value.trials < 1 || value.trials > 200
         || !Number.isInteger(value.rounds) || value.rounds < 1 || value.rounds > 200) {
         throw new Error("This file does not have the required Maabarium plan settings.");
       }
-      setPlan({ name: file.name, raw, brief: value.brief, trials: value.trials, rounds: value.rounds });
+      const supervised = value.schema === 3;
+      if (supervised) {
+        setChoices(current => defaultChoices().map(choice => current.find(item => item.lane === choice.lane) ?? choice));
+        setAllowPaid(false);
+      }
+      setPlan({ name: file.name, raw, brief: value.brief, trials: value.trials, rounds: value.rounds,
+        supervised, ordered: supervised && Array.isArray(value.candidate_families) });
     } catch (failure) {
       if (read !== planRead.current) return;
       setError(failure instanceof SyntaxError ? "That file is not a valid JSON research plan." : String(failure));
@@ -282,8 +288,12 @@ export function ResearchReport() {
               {plan && <>
                 <p className="break-all font-semibold">{plan.name}</p>
                 <p>Up to {plan.trials} audited trials and {plan.rounds} rounds of suggestions. The campaign stops if the separate final check passes or a limit is reached.</p>
+                {plan.ordered && <p>After a rejection or a test that misses the target, Maabarium moves to the next approved design in this plan. It keeps the same history and trial limit.</p>}
+                {plan.supervised && <p>Codex proposes, Antigravity checks, and a trusted local program decides what is ready to test.</p>}
                 <p className="whitespace-pre-wrap break-words"><strong>Public brief:</strong> {plan.brief}</p>
-                <p>Only approve a plan you trust: it can run the listed local programs. The selected providers receive the public brief and public experiment settings, not local paths, private evidence, or the final test data.</p>
+                <p>{plan.supervised
+                  ? "Only approve a plan you trust: the local program can prepare and admit benchmarks to run on this computer."
+                  : "Only approve a plan you trust: it can run the listed local programs."} The selected providers receive the public brief and public experiment settings, not local paths, private evidence, or the final test data.</p>
                 <details>
                   <summary className="cursor-pointer font-semibold">View the exact plan and program identities</summary>
                   <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border p-2" tabIndex={0}>{plan.raw}</pre>
@@ -315,7 +325,7 @@ export function ResearchReport() {
                   return <fieldset key={role} className="grid gap-2 rounded border p-3">
                     <legend>{role}</legend>
                     <label className="grid gap-1">{role} provider
-                      <select className="h-10 rounded border px-2" value={choice.lane} onChange={e => {
+                      <select className="h-10 rounded border px-2" value={choice.lane} disabled={plan?.supervised} onChange={e => {
                         setAllowPaid(false);
                         update({ lane: e.target.value as CampaignLane, model: "", effort: "" });
                       }}>

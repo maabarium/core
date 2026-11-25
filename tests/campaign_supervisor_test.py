@@ -18,13 +18,15 @@ def digest(data):
 
 
 class SupervisorTest(unittest.TestCase):
+    families = [{"prefix": "test", "summary": "Exact learner design", "variants": ["1", "2", "3"]}]
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.state = self.root / "state"
         self.provider = self.executable("provider", """
-import json, pathlib, re, sys
+import json, pathlib, sys
 args = sys.argv[1:]
 if "login" in args:
     print("Logged in using ChatGPT")
@@ -33,18 +35,26 @@ elif args == ["models"]:
 elif "-p" in args:
     prompt = args[args.index("-p")+1]
     assert "Public proposal: " in prompt and "vetter_sha256" not in prompt
-    print(json.dumps({"status":"SUCCESS", "response":"APPROVE"}))
+    proposal = json.JSONDecoder().raw_decode(prompt.split("Public proposal: ")[1])[0]
+    review = "REJECT" if "review-declines" in prompt and proposal["id"] == "test-1" else "APPROVE"
+    print(json.dumps({"status":"SUCCESS", "response":review}))
 else:
     prompt = sys.stdin.read()
+    if "provider-fails" in prompt:
+        sys.exit(4)
     assert "Do not repeat these previously vetted IDs: " in prompt
     prior = json.loads(prompt.split("Do not repeat these previously vetted IDs: ")[-1])
-    if "locally supported designs" in prompt and prior:
+    if "test-1" in prior:
         assert "Local vetting feedback" in prompt
         assert "work screen rejected" in prompt
-    number = 1 + max([0] + [int(p.split("-")[-1]) for p in prior])
-    answer = dict(id=f"test-{number}", mechanism="Use exact teaching",
+    menu = "Choose only from these untried, locally supported designs: "
+    candidate = (next(iter(json.JSONDecoder().raw_decode(prompt.split(menu)[1])[0])) if menu in prompt
+                 else f"test-{1 + max([0] + [int(p.split('-')[-1]) for p in prior])}")
+    answer = dict(id=candidate, mechanism="Use exact teaching",
                   hypothesis="Count fewer operations", control="Exact lazy",
                   rejection_test="Compare all answers and count all work")
+    if candidate == "test-1" and "wrong-id" in prompt:
+        answer["id"] = "test-3"
     pathlib.Path(args[args.index("--output-last-message")+1]).write_text(json.dumps(answer))
 """)
 
@@ -66,7 +76,8 @@ else:
     def status(self):
         return json.loads(self.cli("campaign-status", "--id", "test").stdout)
 
-    def launch(self, mode="normal", limit=4, rounds=5, menu=None, replenishments=None):
+    def launch(self, mode="normal", limit=4, rounds=5, menu=None, replenishments=None,
+               families=None, brief="Public exact teaching", check=True):
         vetter = self.executable("vetter", rf"""
 import hashlib, json, pathlib, sys
 proposal = json.load(sys.stdin)
@@ -126,17 +137,22 @@ else:
 template = dict(**stages, timeout=3, bounds={{}}, metrics={{"wrong": wrong_rule}}, panel_sha256=sealed)
 print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, development_panel_sha256=panel)))
 """)
-        policy = dict(schema=3, brief="Public exact teaching", rounds=rounds, trials=limit,
+        policy = dict(schema=3, brief=brief, rounds=rounds, trials=limit,
             lifetime_seconds=300, work_seconds=120, vet_timeout=4, vetter=str(vetter),
             vetter_sha256=digest(vetter.read_bytes()), metrics={"wrong": ["eq", 0]})
         if menu is not None:
             policy["candidates"] = menu
         if replenishments is not None:
             policy["replenishments"] = replenishments
+        if families is not None:
+            policy["candidate_families"] = families
         raw = json.dumps(policy).encode()
         path = self.root / "policy.json"
         path.write_bytes(raw)
-        self.cli("campaign-autostart", "--id", "test", "--policy", str(path), "--policy-sha256", digest(raw))
+        result = self.cli("campaign-autostart", "--id", "test", "--policy", str(path),
+                          "--policy-sha256", digest(raw), check=check)
+        if not check:
+            return result
         return vetter
 
     def converge(self):
@@ -223,6 +239,69 @@ print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, devel
         self.assertEqual(status["last_replenishment"]["candidates"], 1)
         receipt = self.state / "campaign-replenishments" / "test" / "1" / "replenishment.json"
         self.assertEqual(status["last_replenishment"]["report_sha256"], digest(receipt.read_bytes()))
+
+    def test_family_successors_keep_same_ledger_through_vetter_and_sealed_failures(self):
+        self.launch(mode="sealed-fail", families=self.families, limit=200)
+        # Exercise the same pending state written by the desktop approval command.
+        raw = (self.root / "policy.json").read_text()
+        with sqlite3.connect(self.state / "queue.db") as db:
+            db.execute("UPDATE campaigns SET status='policy_pending'")
+            db.execute("UPDATE campaign_autonomy SET phase='checking_plan',policy=?", (raw,))
+        self.cli("tick")
+        status = self.converge()
+        self.assertEqual((status["status"], status["audited_trials"], status["limit"]),
+                         ("target_achieved", 2, 200))
+        self.assertEqual(self.query("SELECT proposal_id,state FROM campaign_admissions ORDER BY round"),
+                         [("test-1", "rejected"), ("test-2", "admitted"), ("test-3", "admitted")])
+        self.assertEqual(self.query("SELECT count(*) FROM campaign_confirmation_failures"), [(1,)])
+        self.assertEqual(self.query("SELECT count(*) FROM campaigns"), [(1,)])
+        self.assertEqual(self.query("SELECT count(*) FROM campaign_replenishments"), [(0,)])
+        self.cli("tick")
+        self.assertEqual(self.status()["discovery_rounds"], 3)
+
+    def test_family_exhaustion_does_not_queue_more_provider_jobs(self):
+        self.launch(families=[dict(self.families[0], variants=["1"])])
+        status = self.converge()
+        self.assertEqual((status["status"], status["audited_trials"], status["discovery_rounds"]),
+                         ("blocked", 0, 1))
+        self.assertIn("approved candidate families", status["reason"])
+        self.cli("tick")
+        self.assertEqual(self.query("SELECT count(*) FROM jobs"), [(2,)])
+
+    def test_family_stops_on_terminal_provider_failure_without_spending_other_designs(self):
+        self.launch(families=self.families, brief="provider-fails")
+        self.cli("tick")
+        # Retryable provider errors leave this exact proposal in the queue.
+        self.assertEqual(self.query("SELECT state FROM jobs"), [("queued",)])
+        self.cli("tick")
+        self.assertEqual(self.status()["discovery_rounds"], 1)
+        # Advance the fixture to terminal failure without waiting for backoff.
+        self.query("UPDATE jobs SET state='failed'")
+        status = self.converge()
+        self.assertEqual((status["status"], status["audited_trials"], status["discovery_rounds"]),
+                         ("blocked", 0, 1))
+        self.assertIn("Codex could not complete", status["reason"])
+        self.assertEqual(self.query("SELECT count(*) FROM jobs"), [(1,)])
+
+    def test_family_successors_do_not_repeat_after_a_decline_or_accept_out_of_order(self):
+        for brief in ("review-declines", "wrong-id"):
+            with self.subTest(brief=brief):
+                self.state = self.root / brief
+                self.launch(families=self.families, brief=brief, limit=1)
+                status = self.converge()
+                self.assertEqual((status["status"], status["audited_trials"], status["discovery_rounds"]),
+                                 ("human_review", 1, 2))
+                self.assertEqual(self.query("SELECT proposal_id FROM campaign_admissions"), [("test-2",)])
+
+    def test_family_policy_rejects_collisions_invalid_ids_and_mixed_modes(self):
+        cases = [dict(families=[*self.families, *self.families]),
+                 dict(families=[dict(prefix="x", summary="Design", variants=["../x"])]),
+                 dict(families=[dict(prefix="x", summary="Design", variants=list(map(str, range(201))))]),
+                 dict(families=self.families, menu={"test-1": "one"})]
+        for number, config in enumerate(cases):
+            with self.subTest(number=number):
+                self.state = self.root / str(number)
+                self.assertNotEqual(self.launch(**config, check=False).returncode, 0)
 
     def test_replenishment_refuses_reuse_or_reports_no_more(self):
         for mode, expected in (("repeat-menu", "blocked"), ("empty-menu", "done")):

@@ -840,7 +840,7 @@ fn queue_autonomous_campaign(
     }
     let plan: PolicyEnvelope = serde_json::from_str(approved_plan)
         .map_err(|_| "This file is not a Maabarium research plan.".to_string())?;
-    if !matches!(plan.schema, 1 | 2)
+    if !matches!(plan.schema, 1..=3)
         || plan.brief.trim().is_empty()
         || plan.brief.len() > 2048
         || !(4..=120_600).contains(&plan.work_seconds)
@@ -850,6 +850,13 @@ fn queue_autonomous_campaign(
     }
     if providers.len() != 2 {
         return Err("Choose a proposer and a different checker.".into());
+    }
+    if plan.schema == 3
+        && (providers[0].fields().0 != "codex" || providers[1].fields().0 != "antigravity")
+    {
+        return Err(
+            "This research plan requires Codex to propose and Antigravity to check.".into(),
+        );
     }
     if !allow_paid && providers.iter().any(|step| step.fields().0 == "deepseek") {
         return Err("Confirm paid DeepSeek API use before starting this campaign.".into());
@@ -2550,6 +2557,30 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
             .unwrap();
         assert_eq!(jobs, 0);
+    }
+
+    #[test]
+    fn desktop_supervisor_plan_requires_codex_then_antigravity() {
+        let mut db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE jobs (id TEXT PRIMARY KEY, state TEXT, detail TEXT, finished_at INTEGER);
+             CREATE TABLE research_loops (id TEXT PRIMARY KEY, status TEXT);",
+        )
+        .unwrap();
+        let plan = r#"{"schema":3,"brief":"Public question","trials":4,"work_seconds":64,"lifetime_seconds":90}"#;
+        let lane = |name: &str| super::ResearchStep::Lane(name.into());
+        let wrong = [lane("antigravity"), lane("codex")];
+        let enabled = [lane("codex"), lane("antigravity")];
+        assert!(
+            super::queue_autonomous_campaign(&mut db, "study", plan, &wrong, false, None)
+                .unwrap_err()
+                .contains("requires Codex")
+        );
+        super::queue_autonomous_campaign(&mut db, "study", plan, &enabled, false, None).unwrap();
+        assert_eq!(
+            super::campaign_report(&db).unwrap()[0].status,
+            "policy_pending"
+        );
     }
 
     #[test]

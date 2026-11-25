@@ -112,8 +112,10 @@ Manual 0.5.1 campaigns and their audit contracts remain supported.
 Use this mode when new candidates need their own benchmark programs. It
 keeps discovery, local vetting, audited trials and sealed confirmation
 within one campaign instead of creating a new campaign for each candidate.
-Start it with the same `campaign-autostart` command and check progress with
-`campaign-status`; the latter includes the latest admission state.
+In the desktop app, open **Create a research campaign**, choose the plan,
+review the public brief, and select **Approve plan and start campaign**. A
+running background worker validates the plan before it sends anything to a
+provider. The `campaign-autostart` and `campaign-status` commands work too.
 
 The policy contains `schema: 3`, `brief`, `rounds`, `trials`,
 `lifetime_seconds`, `work_seconds`, the frozen `metrics` rules, and:
@@ -125,6 +127,28 @@ The policy contains `schema: 3`, `brief`, `rounds`, `trials`,
 | `vet_timeout` | Maximum reserved seconds for each vetting attempt, 1–300. |
 | `candidates` | Optional public menu of up to 24 named, locally supported designs. Names and short descriptions can be shared; no local paths. |
 | `replenishments` | Optional limit (1–200) on preparing a replacement menu. Requires an initial `candidates` menu. |
+| `candidate_families` | Optional ordered list of reviewed recipes. Use this instead of `candidates` and `replenishments` to try one distinct public ID per round, without writing a separate menu generator. |
+
+For example, add the following field to a schema 3 plan:
+
+```json
+{"candidate_families":[
+  {"prefix":"reuse","summary":"Reuse exact work across queries","variants":["persistent","batched"]},
+  {"prefix":"certificate","summary":"Prove a group of answers together","variants":["shared"]}
+]}
+```
+
+The worker offers `reuse-persistent`, `reuse-batched`, then
+`certificate-shared`, one at a time. Each must be supported by the pinned
+vetter. A provider decline, an invalid selection, a vetter rejection, or a
+valid test failure advances to the next design if budget remains. A provider
+cannot skip ahead or repeat a design. A terminal provider fault stops for
+review instead of burning through the list; a queued quota retry waits in
+the same round. Only human-approved public identifiers
+are generated; the worker doesn't invent experiments or grant access to new
+data. Recipes expand to at most 200 distinct IDs (48 characters each). The
+same campaign tracks all rounds, audited trials, time and work across worker
+restarts. Review checkpoints still pause the campaign when configured.
 
 Codex proposes a public mechanism, hypothesis, exact control and rejection
 test. Antigravity checks the proposal. Their agreement only allows the
