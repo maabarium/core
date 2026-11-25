@@ -3364,9 +3364,11 @@ async fn check_for_updates(
     }
 
     let (updater, config) = configured_updater(&app, &setup)?;
-    let update = updater
-        .check()
+    // Bound discovery without applying a short request timeout to the
+    // separate, user-initiated download and install.
+    let update = tokio::time::timeout(std::time::Duration::from_secs(20), updater.check())
         .await
+        .map_err(|_| "The update check timed out. Try again later.".to_owned())?
         .map_err(|error| format!("Failed to check for updates: {error}"))?;
 
     Ok(UpdateCheckResult {

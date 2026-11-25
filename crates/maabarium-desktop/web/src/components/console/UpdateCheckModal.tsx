@@ -1,20 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useRef, useState } from "react";
 import type { UpdateCheckResult } from "../../types/console";
+import { requestUpdateCheck } from "../../lib/useUpdateAvailability";
 
 type Phase = "checking" | "result" | "installing" | "installed" | "error";
 
-export function UpdateCheckModal({ onClose }: { onClose: () => void }) {
+export function UpdateCheckModal({ onClose, onInstalled, initialUpdate, checkUpdate = requestUpdateCheck }: {
+  onClose: () => void;
+  onInstalled?: () => void;
+  initialUpdate?: UpdateCheckResult;
+  checkUpdate?: () => Promise<UpdateCheckResult>;
+}) {
   const title = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [phase, setPhase] = useState<Phase>("checking");
-  const [update, setUpdate] = useState<UpdateCheckResult>();
+  const [phase, setPhase] = useState<Phase>(initialUpdate ? "result" : "checking");
+  const [update, setUpdate] = useState<UpdateCheckResult | undefined>(initialUpdate);
   const [message, setMessage] = useState("");
   const check = async () => {
     setPhase("checking");
     setMessage("");
     try {
-      setUpdate(await invoke<UpdateCheckResult>("check_for_updates"));
+      setUpdate(await checkUpdate());
       setPhase("result");
     } catch (error) {
       setMessage(String(error));
@@ -26,7 +32,7 @@ export function UpdateCheckModal({ onClose }: { onClose: () => void }) {
     const dialog = dialogRef.current;
     if (!dialog) return;
     dialog.showModal();
-    void check();
+    if (!initialUpdate) void check();
     return () => { dialog.close(); };
   }, []);
 
@@ -34,6 +40,7 @@ export function UpdateCheckModal({ onClose }: { onClose: () => void }) {
     setPhase("installing");
     try {
       const result = await invoke<{ installed: boolean; shouldRestart: boolean }>("install_available_update", { expectedVersion });
+      if (result.installed) onInstalled?.();
       setMessage(!result.installed ? "The update is no longer available. Check again to refresh."
         : result.shouldRestart ? "Quit and reopen Maabarium to use the new version." : "The update was installed.");
       setPhase(result.installed ? "installed" : "error");
