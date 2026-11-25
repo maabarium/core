@@ -238,7 +238,6 @@ export type CliLinkState = {
 export type InstallUpdateResult = {
   installed: boolean;
   version: string | null;
-  shouldRestart: boolean;
 };
 
 export type RuntimeStrategy = "local" | "remote" | "mixed";

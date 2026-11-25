@@ -15,6 +15,7 @@ import type {
   ExperimentBranchCleanupResult,
   ExperimentBranchInventory,
   FixOutcome,
+  InstallUpdateResult,
   ProfileConfig,
   ProviderValidationResult,
   ReadinessReport,
@@ -525,7 +526,7 @@ export function useDesktopConsole({
 
     try {
       setInstallingUpdate(true);
-      const result = await invoke<{ installed: boolean }>(
+      const result = await invoke<InstallUpdateResult>(
         "install_available_update",
         { expectedVersion: updateCheck?.version ?? null },
       );
