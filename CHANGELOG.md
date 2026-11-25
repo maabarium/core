@@ -8,7 +8,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- None.
+- Approve supervised research plans in the desktop app. An approved list of candidate families lets the background worker move to the next design on its own while keeping one campaign history and trial limit.
 
 ### Changed
 

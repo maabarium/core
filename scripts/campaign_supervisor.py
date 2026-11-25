@@ -40,10 +40,32 @@ def validate_menu(candidates, *, empty=False):
     return candidates
 
 
+def family_menu(families):
+    """Expand reviewed public recipes in policy order, without running a generator."""
+    if not isinstance(families, list) or not 1 <= len(families) <= 200:
+        raise ValueError("provide between 1 and 200 candidate families")
+    menu = {}
+    for family in families:
+        fields(family, "prefix summary variants")
+        prefix, summary, variants = family["prefix"], family["summary"], family["variants"]
+        if (not valid(prefix, IDENTITY) or not valid(summary, r"[ -~]{1,96}") or not summary.strip()
+                or not isinstance(variants, list) or not 1 <= len(variants) <= 200 - len(menu)):
+            raise ValueError("invalid candidate family or more than 200 generated candidates")
+        for variant in variants:
+            if not valid(variant, IDENTITY):
+                raise ValueError("invalid candidate variant")
+            name = f"{prefix}-{variant}"
+            if not valid(name, IDENTITY) or name in menu:
+                raise ValueError("generated candidate IDs must be unique and at most 48 characters")
+            menu[name] = summary
+    return tuple(menu.items())
+
+
 def validate_policy(policy, pin_program):
     fields(policy, "schema brief rounds trials lifetime_seconds work_seconds metrics vetter "
                    "vetter_sha256 vet_timeout" + (" candidates" if "candidates" in policy else "")
-                   + (" replenishments" if "replenishments" in policy else ""))
+                   + (" replenishments" if "replenishments" in policy else "")
+                   + (" candidate_families" if "candidate_families" in policy else ""))
     if (not integer(policy["rounds"], 1, 200) or not integer(policy["trials"], 1, 200)
             or not integer(policy["lifetime_seconds"], 1, 604800)
             or not integer(policy["work_seconds"], 5, 120600)
@@ -59,6 +81,10 @@ def validate_policy(policy, pin_program):
         validate_menu(policy["candidates"])
     if "replenishments" in policy and ("candidates" not in policy or not integer(policy["replenishments"], 1, 200)):
         raise ValueError("menu replenishment requires an initial menu and a bounded attempt count")
+    if "candidate_families" in policy:
+        if "candidates" in policy or "replenishments" in policy:
+            raise ValueError("use candidate families or a replenishable menu, not both")
+        family_menu(policy["candidate_families"])
     policy["vetter"] = pin_program(Path(policy["vetter"]), policy["vetter_sha256"])
     return policy
 
@@ -88,6 +114,9 @@ def advance(db, campaign, policy, round_no, queue, providers, details, unique_fi
         return
     replenishment = None
     menu = policy.get("candidates")
+    portfolio = family_menu(policy["candidate_families"]) if "candidate_families" in policy else None
+    if portfolio is not None:
+        menu = dict(portfolio[round_no - 1:round_no]) if round_no else {}
     if "replenishments" in policy:
         replenishment = db.execute("""SELECT ordinal,state,menu FROM campaign_replenishments
             WHERE campaign=? ORDER BY ordinal DESC LIMIT 1""", (campaign,)).fetchone()
@@ -143,8 +172,14 @@ def advance(db, campaign, policy, round_no, queue, providers, details, unique_fi
     tried = {name for name, _ in history}
     brief = policy["brief"]
     if menu is not None:
-        available = {name: title for name, title in menu.items() if name not in tried}
+        # In family mode the persisted round is the cursor. Even if a provider
+        # declines or returns an invalid proposal, the next round is distinct.
+        next_menu = dict(portfolio[round_no:round_no + 1]) if portfolio is not None else menu
+        available = {name: title for name, title in next_menu.items() if name not in tried}
         if not available:
+            if portfolio is not None:
+                halt(db, campaign, "All designs in the approved candidate families have been considered")
+                return
             used = replenishment[0] if replenishment else 0
             if menu and used < policy.get("replenishments", 0):
                 db.execute("""INSERT INTO campaign_replenishments(campaign,ordinal,state)

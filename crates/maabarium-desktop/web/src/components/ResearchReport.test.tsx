@@ -76,7 +76,7 @@ it("creates a campaign without queuing a benchmark", async () => {
   });
 });
 
-it("shows an imported plan before approving it and saves the exact reviewed text", async () => {
+it.each([2, 3])("previews a schema %i plan before handing the exact text to the worker", async (schema) => {
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockResolvedValueOnce({ experiments: 0, lanes: [] })
     .mockResolvedValueOnce(undefined)
@@ -86,13 +86,19 @@ it("shows an imported plan before approving it and saves the exact reviewed text
   render(<ResearchReport />);
   fireEvent.click(screen.getByRole("button", { name: "Load report" }));
   fireEvent.click(await screen.findByText("Create a research campaign"));
-  const raw = JSON.stringify({ schema: 2, brief: "Compare two search methods.", trials: 2, rounds: 4 }, null, 2);
+  const raw = JSON.stringify({ schema, brief: "Compare two search methods.", trials: 2, rounds: 4,
+    ...(schema === 3 ? { candidate_families: [{ prefix: "search", summary: "Exact search", variants: ["lazy"] }] } : {}),
+  }, null, 2);
   expect(screen.getByRole("button", { name: "Choose a research plan…" })).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Research plan file"), {
     target: { files: [{ name: "plan.json", size: raw.length, text: async () => raw }] },
   });
   expect(await screen.findByText("plan.json")).toBeTruthy();
   expect(screen.getByText("Compare two search methods.", { exact: false, selector: "p" })).toBeTruthy();
+  if (schema === 3) {
+    expect(screen.getByText(/moves to the next approved design/)).toBeTruthy();
+    expect((screen.getByLabelText("Proposer provider") as HTMLSelectElement).disabled).toBe(true);
+  }
   expect(vi.mocked(invoke)).toHaveBeenCalledTimes(1);
   fireEvent.change(screen.getByLabelText("Campaign ID"), { target: { value: "demo" } });
   fireEvent.click(screen.getByRole("button", { name: "Approve plan and start campaign" }));
