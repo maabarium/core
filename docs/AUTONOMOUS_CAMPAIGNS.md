@@ -142,7 +142,9 @@ The worker offers `reuse-persistent`, `reuse-batched`, then
 `certificate-shared`, one at a time. Each must be supported by the pinned
 vetter. A provider decline, an invalid selection, a vetter rejection, or a
 valid test failure advances to the next design if budget remains. A provider
-cannot skip ahead or repeat a design. Only human-approved public identifiers
+cannot skip ahead or repeat a design. A terminal provider fault stops for
+review instead of burning through the list; a queued quota retry waits in
+the same round. Only human-approved public identifiers
 are generated; the worker doesn't invent experiments or grant access to new
 data. Recipes expand to at most 200 distinct IDs (48 characters each). The
 same campaign tracks all rounds, audited trials, time and work across worker

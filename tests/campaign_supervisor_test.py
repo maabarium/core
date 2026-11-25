@@ -40,6 +40,8 @@ elif "-p" in args:
     print(json.dumps({"status":"SUCCESS", "response":review}))
 else:
     prompt = sys.stdin.read()
+    if "provider-fails" in prompt:
+        sys.exit(4)
     assert "Do not repeat these previously vetted IDs: " in prompt
     prior = json.loads(prompt.split("Do not repeat these previously vetted IDs: ")[-1])
     if "test-1" in prior:
@@ -265,6 +267,21 @@ print(json.dumps(dict(outcome="admit", template=template, parameters={{}}, devel
         self.assertIn("approved candidate families", status["reason"])
         self.cli("tick")
         self.assertEqual(self.query("SELECT count(*) FROM jobs"), [(2,)])
+
+    def test_family_stops_on_terminal_provider_failure_without_spending_other_designs(self):
+        self.launch(families=self.families, brief="provider-fails")
+        self.cli("tick")
+        # Retryable provider errors leave this exact proposal in the queue.
+        self.assertEqual(self.query("SELECT state FROM jobs"), [("queued",)])
+        self.cli("tick")
+        self.assertEqual(self.status()["discovery_rounds"], 1)
+        # Advance the fixture to terminal failure without waiting for backoff.
+        self.query("UPDATE jobs SET state='failed'")
+        status = self.converge()
+        self.assertEqual((status["status"], status["audited_trials"], status["discovery_rounds"]),
+                         ("blocked", 0, 1))
+        self.assertIn("Codex could not complete", status["reason"])
+        self.assertEqual(self.query("SELECT count(*) FROM jobs"), [(1,)])
 
     def test_family_successors_do_not_repeat_after_a_decline_or_accept_out_of_order(self):
         for brief in ("review-declines", "wrong-id"):
