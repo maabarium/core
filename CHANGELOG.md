@@ -16,11 +16,20 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- Maabarium reopens automatically after an approved software update. Finish or stop running desktop workflows before installing.
+- None.
 
 ### Breaking Changes
 
 - None.
+
+## [0.5.4] - 2026-11-25
+
+Maabarium now reopens automatically after installing an update you approve.
+
+- **Install and reopen:** One click starts the install and brings Maabarium back when it finishes.
+- **Protect running work:** Finish or stop active desktop workflows before installing an update.
+
+When upgrading from 0.5.3, quit and reopen once manually. Automatic reopening applies to updates started from 0.5.4 onward.
 
 ## [0.5.3] - 2026-11-25
 
