@@ -85,6 +85,7 @@ struct AppState {
     group_cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
     engine_running: Arc<AtomicBool>,
     run_state: Arc<Mutex<MutableRunState>>,
+    workflow_admission: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,7 +240,6 @@ struct UpdateCheckResult {
 struct InstallUpdateResult {
     installed: bool,
     version: Option<String>,
-    should_restart: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -553,6 +553,7 @@ fn main() {
             let state = initialize_app_state(app.handle(), &runtime_paths)?;
             let db_path = state.db_path.display().to_string();
             let group_cancels = state.group_cancels.clone();
+            let workflow_admission = state.workflow_admission.clone();
             app.manage(state);
             // Runs left active by a crash or quit can never finish; close them
             // so their groups can be run or deleted again.
@@ -568,7 +569,7 @@ fn main() {
                     );
                 }
             }
-            start_group_scheduler(db_path, group_cancels);
+            start_group_scheduler(db_path, group_cancels, workflow_admission);
             #[cfg(target_os = "macos")]
             if let Err(error) = install_menu_bar_item(app.handle()) {
                 warn!(%error, "Could not create the Maabarium menu bar item");
@@ -701,6 +702,20 @@ fn active_work(state: &AppState) -> Option<ActiveWork> {
         .unwrap_or_default();
     groups.sort();
     (flow.is_some() || !groups.is_empty()).then_some(ActiveWork { flow, groups })
+}
+
+fn begin_update(state: &AppState) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+    let permit = state.workflow_admission.try_acquire().map_err(|_| {
+        "Maabarium is already updating or starting a workflow. Try again shortly.".to_owned()
+    })?;
+    let groups = state
+        .group_cancels
+        .lock()
+        .map_err(|_| "Could not verify that desktop workflows are idle.".to_owned())?;
+    if state.engine_running.load(Ordering::SeqCst) || !groups.is_empty() {
+        return Err("Finish or stop running workflows before installing the update.".to_owned());
+    }
+    Ok(permit)
 }
 
 /// The user chose to stop running work and quit. Record the interrupted flow
@@ -882,6 +897,7 @@ fn initialize_app_state(
         group_cancels: Arc::new(Mutex::new(HashMap::new())),
         engine_running: Arc::new(AtomicBool::new(false)),
         run_state: Arc::new(Mutex::new(MutableRunState::default())),
+        workflow_admission: Arc::new(tokio::sync::Semaphore::new(1)),
     })
 }
 
@@ -2387,6 +2403,9 @@ fn run_group_command(
     group_name: String,
     mode: Option<String>,
 ) -> Result<(), String> {
+    let _admission = state.workflow_admission.try_acquire().map_err(|_| {
+        "Maabarium is updating or starting another workflow. Try again shortly.".to_owned()
+    })?;
     spawn_group_run(
         state.db_path.display().to_string(),
         group_name,
@@ -2431,7 +2450,14 @@ fn reconcile_group_runs(db_path: &str, group_cancels: &GroupCancels) {
 
 /// Start every enabled group whose schedule is due. One group's failure is
 /// logged and does not stop the others.
-fn start_due_groups(db_path: &str, group_cancels: &GroupCancels) -> Vec<String> {
+fn start_due_groups(
+    db_path: &str,
+    group_cancels: &GroupCancels,
+    workflow_admission: &tokio::sync::Semaphore,
+) -> Vec<String> {
+    let Ok(_admission) = workflow_admission.try_acquire() else {
+        return Vec::new();
+    };
     let groups = match Persistence::open(db_path).and_then(|p| p.list_groups()) {
         Ok(groups) => groups,
         Err(error) => {
@@ -2472,11 +2498,15 @@ fn start_due_groups(db_path: &str, group_cancels: &GroupCancels) -> Vec<String> 
 
 /// Check schedules from a background thread so they run while the window is
 /// hidden or its timers are throttled.
-fn start_group_scheduler(db_path: String, group_cancels: GroupCancels) {
+fn start_group_scheduler(
+    db_path: String,
+    group_cancels: GroupCancels,
+    workflow_admission: Arc<tokio::sync::Semaphore>,
+) {
     std::thread::Builder::new()
         .name("group-scheduler".to_owned())
         .spawn(move || loop {
-            let started = start_due_groups(&db_path, &group_cancels);
+            let started = start_due_groups(&db_path, &group_cancels, &workflow_admission);
             if !started.is_empty() {
                 info!(?started, "Started scheduled workflow groups");
             }
@@ -2491,6 +2521,7 @@ fn run_due_groups_command(state: tauri::State<'_, AppState>) -> Result<Vec<Strin
     Ok(start_due_groups(
         &state.db_path.display().to_string(),
         &state.group_cancels,
+        &state.workflow_admission,
     ))
 }
 
@@ -3391,18 +3422,18 @@ async fn install_available_update(
     state: tauri::State<'_, AppState>,
     expected_version: Option<String>,
 ) -> Result<InstallUpdateResult, String> {
+    let admission = begin_update(&state)?;
     let setup = hydrated_desktop_setup(&state);
     let (updater, _) = configured_updater(&app, &setup)?;
-    let update = updater
-        .check()
+    let update = tokio::time::timeout(std::time::Duration::from_secs(20), updater.check())
         .await
+        .map_err(|_| "The update check timed out. Try again later.".to_owned())?
         .map_err(|error| format!("Failed to check for installable update: {error}"))?;
 
     let Some(update) = update else {
         return Ok(InstallUpdateResult {
             installed: false,
             version: None,
-            should_restart: false,
         });
     };
 
@@ -3415,15 +3446,27 @@ async fn install_available_update(
             "The available version changed. Check for updates again before installing.".into(),
         );
     }
-    update
-        .download_and_install(|_, _| {}, || {})
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(15 * 60),
+        update.download(|_, _| {}, || {}),
+    )
+    .await
+    .map_err(|_| "The update download timed out. Try again later.".to_owned())?
+    .map_err(|error| format!("Failed to download update: {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || update.install(bytes))
         .await
-        .map_err(|error| format!("Failed to download and install update: {error}"))?;
+        .map_err(|error| format!("The update installer did not finish: {error}"))?
+        .map_err(|error| format!("Failed to install update: {error}"))?;
+
+    // On Windows a successful updater handoff exits this process itself.
+    // Elsewhere keep new work blocked until Tauri completes the relaunch.
+    admission.forget();
+    #[cfg(not(target_os = "windows"))]
+    app.request_restart();
 
     Ok(InstallUpdateResult {
         installed: true,
         version: Some(version),
-        should_restart: !cfg!(windows),
     })
 }
 
@@ -3521,6 +3564,9 @@ fn start_engine(
     state: tauri::State<'_, AppState>,
     request: StartEngineRequest,
 ) -> Result<ConsoleState, String> {
+    let _admission = state.workflow_admission.try_acquire().map_err(|_| {
+        "Maabarium is updating or starting another workflow. Try again shortly.".to_owned()
+    })?;
     if state.engine_running.load(Ordering::SeqCst) {
         return Err("The engine is already running".to_owned());
     }
@@ -4095,6 +4141,7 @@ mod tests {
             group_cancels: Arc::new(Mutex::new(HashMap::new())),
             engine_running: Arc::new(AtomicBool::new(false)),
             run_state: Arc::new(Mutex::new(MutableRunState::default())),
+            workflow_admission: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -4102,6 +4149,28 @@ mod tests {
     fn idle_app_has_no_active_work_so_close_proceeds() {
         let state = test_app_state();
         assert_eq!(active_work(&state), None);
+    }
+
+    #[test]
+    fn update_requires_idle_work_and_excludes_other_transitions() {
+        let state = test_app_state();
+        state.engine_running.store(true, Ordering::SeqCst);
+        assert!(begin_update(&state).is_err());
+        state.engine_running.store(false, Ordering::SeqCst);
+        let group = "Nightly".to_owned();
+        state
+            .group_cancels
+            .lock()
+            .unwrap()
+            .insert(group.clone(), CancellationToken::new());
+        assert!(begin_update(&state).is_err());
+        state.group_cancels.lock().unwrap().remove(&group);
+
+        let permit = begin_update(&state).unwrap();
+        assert!(begin_update(&state).is_err());
+        assert!(state.workflow_admission.try_acquire().is_err());
+        drop(permit);
+        assert!(begin_update(&state).is_ok());
     }
 
     #[test]

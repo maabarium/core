@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useRef, useState } from "react";
-import type { UpdateCheckResult } from "../../types/console";
+import type { InstallUpdateResult, UpdateCheckResult } from "../../types/console";
 import { requestUpdateCheck } from "../../lib/useUpdateAvailability";
 
 type Phase = "checking" | "result" | "installing" | "installed" | "error";
@@ -39,10 +39,10 @@ export function UpdateCheckModal({ onClose, onInstalled, initialUpdate, checkUpd
   const install = async (expectedVersion: string) => {
     setPhase("installing");
     try {
-      const result = await invoke<{ installed: boolean; shouldRestart: boolean }>("install_available_update", { expectedVersion });
+      const result = await invoke<InstallUpdateResult>("install_available_update", { expectedVersion });
       if (result.installed) onInstalled?.();
       setMessage(!result.installed ? "The update is no longer available. Check again to refresh."
-        : result.shouldRestart ? "Quit and reopen Maabarium to use the new version." : "The update was installed.");
+        : "Reopening Maabarium…");
       setPhase(result.installed ? "installed" : "error");
     } catch (error) {
       setMessage(String(error));
@@ -76,7 +76,7 @@ export function UpdateCheckModal({ onClose, onInstalled, initialUpdate, checkUpd
         className="min-h-10 rounded-md bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--on-accent)]">Check again</button>}
       {phase === "result" && update?.configured && update.available && update.version && <button type="button"
         onClick={() => void install(update.version!)}
-        className="min-h-10 rounded-md bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--on-accent)]">Install {update.version}</button>}
+        className="min-h-10 rounded-md bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--on-accent)]">Install {update.version} and reopen</button>}
     </div>
   </dialog>;
 }

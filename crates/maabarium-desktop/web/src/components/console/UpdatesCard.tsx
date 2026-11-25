@@ -151,7 +151,7 @@ export function UpdatesCard({
                 <Download size={14} />
                 {installingUpdate
                   ? "Installing..."
-                  : `Install ${updateCheck.version}`}
+                  : `Install ${updateCheck.version} and reopen`}
               </div>
             </button>
 

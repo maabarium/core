@@ -16,7 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
-- None.
+- Maabarium reopens automatically after an approved software update. Finish or stop running desktop workflows before installing.
 
 ### Breaking Changes
 
